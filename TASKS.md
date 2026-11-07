@@ -94,3 +94,4 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-042 | Include the project data folder in fresh checkouts while excluding private contents | Done | 2026-11-07 | 2026-11-07 |
 | SCR-043 | Select report tabs including Transcript and always generate standalone HTML | Done | 2026-11-07 | 2026-11-07 |
 | SCR-044 | Add a persistent dark-mode switch to standalone HTML reports | Done | 2026-11-07 | 2026-11-07 |
+| SCR-045 | Exclude JetBrains IDE project files from Git | Done | 2026-11-07 | 2026-11-07 |

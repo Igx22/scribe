@@ -4,6 +4,11 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+# JetBrains IDE project files
+.idea/
+*.iml
+*.ipr
+*.iws
 *.log.md
 *.summary.md
 *.summary.html
