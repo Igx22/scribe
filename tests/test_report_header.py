@@ -92,6 +92,29 @@ class ReportHeaderTests(unittest.TestCase):
         self.assertEqual(header["participants"], [])
         self.assertEqual(app.report_turns(transcript)[0]["speaker"], "UNKNOWN SPEAKER")
 
+    def test_filename_dates_allow_descriptive_prefixes_and_suffixes(self):
+        for filename, expected in [
+            ('2026-11-07 14-37-07 (1speaker).mkv', '7 November 2026 · 14:37'),
+            ('meeting_2026-11-07_14-37-07_review.mkv', '7 November 2026 · 14:37'),
+            ('OBS 2026-11-07T14:37:07 demo.mkv', '7 November 2026 · 14:37'),
+            ('meeting-2026-11-07-review.mkv', '7 November 2026'),
+            ('2026-11-07 2 speakers.mkv', '7 November 2026'),
+            ('meeting 2024-02-29 (reviewed).mkv', '29 February 2024')]:
+            with self.subTest(filename=filename):
+                # The original Source file metadata takes precedence over a renamed input.
+                log = f'DETAILED TRANSCRIPT\nSource file: {filename}\nDuration: 01:34\n\n'
+                header = app.report_header(Path('renamed.mkv'), log, {})
+                self.assertEqual(header['date'], expected)
+                self.assertEqual(header['date_note'], 'Date from recording filename')
+                self.assertEqual(app.report_header(Path(filename), '', {})['date'], expected)
+
+    def test_filename_dates_reject_invalid_partial_and_ambiguous_timestamps(self):
+        for name in ['meeting 2026-02-30 review.mkv', '2026-11-07 24-01-00 (demo).mkv',
+                     '2026-11-07 14-37-99 (demo).mkv', '2026-11-07 14-3 demo.mkv',
+                     '12026-11-07 demo.mkv', 'meeting 2026-11-07 to 2026-11-08.mkv']:
+            with self.subTest(name=name):
+                self.assertEqual(app.report_header(Path(name), '', {})['date'], 'Not recorded')
+
     def test_cached_metadata_is_revalidated_and_force_bypasses_it(self):
         calls = []
         def call(*args, **kwargs):

@@ -23,6 +23,11 @@ def wav(path, seconds=4):
 
 
 class NemotronTests(unittest.TestCase):
+    def setUp(self):
+        final = patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, []))
+        final.start()
+        self.addCleanup(final.stop)
+
     def runtime_fixture(self, root, link="libfake.1.dylib", member_data=b"binary fixture"):
         resources = root / "resources"
         archive_path = root / "runtime.tar.gz"

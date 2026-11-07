@@ -19,6 +19,9 @@ import scribe as app
 
 class AppTests(unittest.TestCase):
     def setUp(self):
+        final = patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, []))
+        final.start()
+        self.addCleanup(final.stop)
         metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
         metadata.start()
         self.addCleanup(metadata.stop)
@@ -296,7 +299,9 @@ class AppTests(unittest.TestCase):
             settings = app.recognition_settings(source, args)
             cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
             app.save_json(app.output_state_path(args.cache_dir / cache_id, log),
-                          {"settings": settings, "selection": {"transcription_model": "mlx"},
+                          {"settings": settings, "selection": {"transcription_model": "mlx", "fusion": {
+                              "model": app.DEFAULT_MODEL, "effort": app.DEFAULT_EFFORT, "version": 2,
+                              "prompt": hashlib.sha256((app.FUSION_PROMPT + app.SINGLE_SOURCE_PROMPT).encode()).hexdigest()}},
                            "pipeline_complete": True})
             with patch.object(app, "summarize", side_effect=app.AppError("network")), patch.object(app, "extract_audio") as extract:
                 with self.assertRaises(app.AppError):

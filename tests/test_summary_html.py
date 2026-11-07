@@ -66,6 +66,9 @@ class DetailDots(HTMLParser):
 
 class SummaryHtmlTests(unittest.TestCase):
     def setUp(self):
+        final = patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, []))
+        final.start()
+        self.addCleanup(final.stop)
         metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
         metadata.start()
         self.addCleanup(metadata.stop)

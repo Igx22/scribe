@@ -1,4 +1,4 @@
-"""Three independent recognizers, one diarizer, isolated caches and no fusion."""
+"""Three independent recognizers, one diarizer, isolated caches and final GPT reconciliation."""
 import hashlib
 import io
 import copy
@@ -43,7 +43,7 @@ class AllModeTests(unittest.TestCase):
                           return_value={'text': 'GPT_ORIGINAL words.'}) as cloud, \
              patch.object(app, 'recognize', side_effect=recognize) as asr, \
              patch.object(app, 'diarize', return_value=voices) as diarize, \
-             patch.object(app, 'fuse_transcripts', side_effect=AssertionError('All must not reconcile')) as fuse, \
+             patch.object(app, 'fuse_transcripts', side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
              patch.object(app, 'summarize', side_effect=lambda *a, detail: f'Summary {detail}') as summarize, \
              patch.object(app, 'extract_report_metadata', return_value={'topic': 'Recognition comparison', 'roles': {}}):
             app.process_file(source, args, 'fixture-key')
@@ -53,7 +53,7 @@ class AllModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, cache = self.setup_case(Path(tmp))
             extract, cloud, asr, diarize, fuse, summarize = self.run_pipeline(source, args)
-            extract.assert_called_once(); cloud.assert_called_once(); diarize.assert_called_once(); fuse.assert_not_called()
+            extract.assert_called_once(); cloud.assert_called_once(); diarize.assert_called_once(); fuse.assert_called_once()
             self.assertEqual([call.args[-1] for call in asr.call_args_list], ['whisperx', 'mlx'])
             self.assertEqual(summarize.call_count, 4)
             self.assertTrue(all('WHISPERX_ORIGINAL' in c.args[0] and 'MLX_ORIGINAL' not in c.args[0]
@@ -79,7 +79,7 @@ class AllModeTests(unittest.TestCase):
             self.run_pipeline(source, args)
             args.force = True
             _, cloud, asr, diarize, fuse, _ = self.run_pipeline(source, args)
-            cloud.assert_called_once(); diarize.assert_called_once(); fuse.assert_not_called()
+            cloud.assert_called_once(); diarize.assert_called_once(); fuse.assert_called_once()
             self.assertEqual([c.args[-1] for c in asr.call_args_list], ['whisperx', 'mlx'])
 
     def test_summary_only_keeps_all_sources_without_running_any_recognizer(self):
@@ -142,7 +142,7 @@ class AllModeTests(unittest.TestCase):
             state_path = app.output_state_path(cache, log)
             state = app.read_json(state_path)
             self.assertFalse(state['pipeline_complete'])
-            self.assertEqual(state['source_mode'], 'all-local-fallback')
+            self.assertEqual(state['source_mode'], 'gpt-reconciled')
             self.assertEqual([r['id'] for r in app.saved_source_reports(state, log.read_text())],
                              ['whisperx', 'mlx', 'diarization'])
             _, cloud, asr, diarize, *_ = self.run_pipeline(source, args)

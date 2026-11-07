@@ -14,6 +14,9 @@ import scribe as app
 
 class ModeTests(unittest.TestCase):
     def setUp(self):
+        final = patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, []))
+        final.start()
+        self.addCleanup(final.stop)
         metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
         metadata.start()
         self.addCleanup(metadata.stop)
@@ -44,7 +47,7 @@ class ModeTests(unittest.TestCase):
                 "--transcription-model", "gpt-transcribe+whisperx", "--summarize-model", "gpt-6-luna:high")
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")), \
-                    patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts") as fuse, \
+                    patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
                     patch.object(app, "summarize") as summary:
                 app.process_file(source, args, "configured-key")
             self.assertEqual(args.transcription_model, "whisperx")
@@ -54,15 +57,16 @@ class ModeTests(unittest.TestCase):
             self.assertIn("Recognized locally.", log.read_text())
             self.assertFalse(summary_path.exists())
 
-    def test_api_only_never_invokes_local_recognition_or_fusion(self):
+    def test_api_only_reconciles_text_without_local_recognition(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, _, chunks = self.setup_case(Path(tmp),
                 "--transcription-model", "gpt-transcribe-online", "--summarize-model", "none")
             with patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks), \
-                    patch.object(app, "local_recognition") as local, patch.object(app, "fuse_transcripts") as fuse, \
+                    patch.object(app, "local_recognition") as local, patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
                     patch.object(app, "summarize") as summary:
                 app.process_file(source, args, "key")
-            local.assert_not_called(); fuse.assert_not_called(); summary.assert_not_called()
+            local.assert_not_called(); fuse.assert_called_once(); summary.assert_not_called()
+            self.assertTrue(fuse.call_args.kwargs["single_source"])
             log, summary_path = app.output_paths(source, args.output_dir)
             self.assertIn("Recognized via API.", log.read_text())
             self.assertIn("Speaker labels and word-level timing are unavailable", log.read_text())

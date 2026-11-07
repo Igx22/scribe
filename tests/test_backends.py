@@ -31,15 +31,16 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(app.build_parser().parse_args(["--transcription-model", "mlx"]).transcription_model,
                          "mlx")
 
-    def test_gpt_failure_skips_fusion_and_summarizes_local_only(self):
+    def test_gpt_audio_failure_still_reconciles_local_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, local = self.make_pipeline(Path(tmp))
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", side_effect=app.AppError("credits exhausted")), \
-                    patch.object(app, "fuse_transcripts") as fuse, \
+                    patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
                     patch.object(app, "summarize", return_value="Local-only summary") as summarize:
                 app.process_file(source, args, "unit-test-key")
-                fuse.assert_not_called()
+                fuse.assert_called_once()
+                self.assertTrue(fuse.call_args.kwargs["single_source"])
                 self.assertIn("Local source text.", summarize.call_args.args[0])
                 self.assertNotIn("GPT-Transcribe text +", summarize.call_args.args[0])
             log, summary = app.output_paths(source, args.output_dir)
@@ -65,6 +66,7 @@ class BackendTests(unittest.TestCase):
             source, args, local = self.make_pipeline(Path(tmp))
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", side_effect=app.AppError("network")), \
+                    patch.object(app, "fuse_transcripts", side_effect=app.AppError("quota")), \
                     patch.object(app, "summarize", side_effect=app.AppError("quota")):
                 with self.assertRaises(app.AppError):
                     app.process_file(source, args, "unit-test-key")
@@ -115,16 +117,17 @@ class BackendTests(unittest.TestCase):
                 self.assertIn("Local source text.", summarize.call_args.args[0])
             self.assertTrue(any(args.cache_dir.glob("*/sources/gpt-transcribe.txt")))
 
-    def test_local_recognizers_never_call_gpt_or_fusion(self):
+    def test_local_recognizers_reconcile_text_without_uploading_audio(self):
         for model in ["whisperx", "mlx"]:
             with self.subTest(model=model), tempfile.TemporaryDirectory() as tmp:
                 source, args, local = self.make_pipeline(Path(tmp))
                 args.transcription_model, args.transcribe_only = model, True
                 with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
-                        patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts") as fuse, \
+                        patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
                         patch.object(app, "summarize") as summarize:
                     app.process_file(source, args, "")
-                    gpt.assert_not_called(); fuse.assert_not_called(); summarize.assert_not_called()
+                    gpt.assert_not_called(); fuse.assert_called_once(); summarize.assert_not_called()
+                    self.assertTrue(fuse.call_args.kwargs["single_source"])
 
     def test_fusion_preserves_anchors_and_caches(self):
         turns = [{"start": 1, "end": 2, "speaker": 2, "uncertain": False, "text": "misheard"}]

@@ -30,6 +30,11 @@ def mkv_fixture(*, unknown=False, duration=1.0, audio=True, cluster=True, paddin
 
 
 class MonitorTests(unittest.TestCase):
+    def setUp(self):
+        final = patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, []))
+        final.start()
+        self.addCleanup(final.stop)
+
     def drive(self, args, events, *, steps=12):
         clock = {"now": 0, "step": 0}
         def sleep(seconds):

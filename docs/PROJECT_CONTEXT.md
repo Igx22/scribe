@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.17.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.18.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -27,8 +27,9 @@ cannot be placed confidently must remain unassigned. Thus clearer recognition
 does not establish more accurate speaker attribution.
 
 The five recognition choices are API-only, default local WhisperX Turbo,
-local MLX Turbo, API + WhisperX reconciliation, and independent three-source
-comparison through `all`. Diarization is independently
+local MLX Turbo, API + WhisperX, and three-source comparison through `all`.
+SCR-072 makes final GPT text reconciliation common to all ordinary modes;
+explicit `--offline` remains strictly local. Diarization is independently
 selectable between default Nemotron and optional Community-1. A failed cloud
 stage in combined mode must still leave a usable local
 log; API-only mode must not silently load or substitute local models. See
@@ -186,8 +187,9 @@ Automatic language detection is per recording; MLX retains per-chunk detection.
 Other alignment languages are not prepared; unsupported detection fails clearly.
 Alignment scores are retained separately from ASR segment confidence. Untimed
 words are retained with approximate neighboring bounds and uncertain voice markers.
-The default recognizer supplies anonymous labels, without text reconciliation or
-name discovery; ordinary summaries still send text unless disabled/offline.
+Local recognizers supply anonymous voice IDs. Final GPT reconciliation now
+proposes supported display names in every ordinary mode with local anchors;
+explicit offline runs retain anonymous labels and make no text API requests.
 
 Setup prepares only the selected assets, including local NLTK tokenizers for
 WhisperX. Public pinned default assets need no HF account. Optional Community-1
@@ -196,19 +198,28 @@ locally after download. Python support is 3.12–3.13 because this WhisperX rele
 excludes 3.14. The shared environment keeps both recognizers; unused weights and
 all existing private outputs are preserved. README owns migration commands.
 
-SCR-064 reintroduces `all` with a new meaning: run GPT-Transcribe, WhisperX Turbo
-and MLX Turbo independently, sharing one diarization pass. WhisperX remains the
-final log/summary source; all successful raw texts and one shared diarization
-are snapshotted into report source tabs. There is no implicit combined-mode,
-fusion or name-identification call. Setup prepares both local recognizers and
-the selected diarizer. Per-backend word/result checkpoints preserve both local
-outputs; compatible shared single-model checkpoints still work in either direction.
-The extra MLX identity is part of final-output ownership, but excluded from WhisperX
-word/voice cache identity. Force reruns each recognizer and one shared diarization.
-Cloud failure leaves local comparison sources; local ASR failure reports an error
-and retry reuses completed stages. Offline still forces only WhisperX unless MLX
-was explicitly selected. The historical combined `all` is not reused as this new
-comparison mode; completed-pair protection and summary-only behavior are unchanged.
+SCR-064 introduced independent GPT-Transcribe, WhisperX Turbo and MLX recognition
+with one diarization pass and separate word checkpoints. SCR-072 adds final GPT
+reconciliation: cloud and WhisperX text plus MLX comparison evidence, retaining
+fixed WhisperX voice/time anchors. Raw source views remain frozen and unchanged.
+WhisperX/MLX-only modes send text, never audio, for one-source review and name
+claims. One-source review retains uncertainty and cannot invent unassigned speech
+or erase an anchor. API-only review keeps unknown speakers and chunk timing.
+
+The configured report model/effort also controls reconciliation; disabling reports
+still uses the default Sol medium for final text. Only explicit `--offline` skips
+all GPT stages. The final-stage signature includes the model, effort and prompts
+in every ordinary mode, while recognition cache identities stay independent.
+Failure preserves the raw log with an explicit warning and incomplete final stage;
+completed-pair protection and summary-only preservation remain unchanged. Setup
+still prepares selected assets without making paid calls.
+
+SCR-070 traced the supplied monologue's original anonymous Final transcript to an
+`all` output state without fusion errors: its utterance body exactly matched
+WhisperX. This was the former mode contract, not a failed name substitution.
+The output was concurrently regenerated in combined mode during investigation;
+subsequent verification must preserve the newer files rather than restore them.
+Private evidence is under `data/comparison/reconciliation-audit/`.
 
 ### Honest uncertainty and language preservation
 
@@ -337,7 +348,9 @@ context, then their supported topics are combined. Independent validated checkpo
 avoid repeating successful header extraction on unchanged inputs.
 
 Duration is parsed from log metadata. Date is parsed from explicit log metadata
-or a recognized recording filename, with provenance visible in the report. Neither
+or a recording filename containing one ISO date and optional time, with provenance
+visible in the report. SCR-071 permits descriptive prefixes/suffixes such as
+`(1speaker)` while rejecting invalid dates/times and ambiguous multiple dates. Neither
 is guessed by a text model or taken from filesystem timestamps. Missing facts stay
 unestablished. Header extraction now applies to every selection, including one
 summary level or transcript alone; README owns the exact formats and request/resume details.
@@ -553,6 +566,21 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.18.0 passed 175 mocked tests, including final GPT processing in every
+  ordinary mode, global supported names from later introductions, immutable raw
+  snapshots, API-only unknown speakers, text-only local modes, offline isolation,
+  final-stage retry/resume, and dates in filenames with descriptive text. Launcher
+  syntax/version and diff checks passed. A live all-source text-only verification
+  reused frozen GPT/WhisperX/MLX/Nemotron sources on the supplied monologue, with
+  `gpt-6.1-sol:medium`: one reconciliation, four summaries and one header response
+  returned 9,102 input / 1,537 output tokens (101 reported reasoning tokens).
+  Validation passed; all three final turns were labeled Игорь, and the date was
+  `7 November 2026 · 14:37`. A separate report was saved; the newer concurrently
+  generated baseline: all six checked output/cache files kept hashes/mtimes.
+  One initial network failure returned no usage. No audio processing or audio API
+  requests ran. This is one integration observation, not an accuracy benchmark.
+  Evidence: [verification](../data/comparison/reconciliation-audit/verification.json),
+  [returned usage](../data/comparison/reconciliation-audit/returned-usage.json).
 - Version 2.17.0 passed 168 mocked tests, including actual inline-script checks of
   dropdown selection, stable item order, keyboard navigation, focus return,
   dismissal, theme/storage handling, transcript-first and summary-only layouts,

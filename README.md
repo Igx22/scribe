@@ -9,8 +9,9 @@ words, and Nemotron automatically determines the voices and their speech interva
 Both stages run locally after setup. Their options, `--transcription-model whisperx`
 and `--diarization-model nemotron`, can be omitted when using these defaults. Summaries and report
 headers are then generated from the resulting text through the OpenAI API.
-Cloud audio recognition and text reconciliation are available through explicitly
-selected transcription modes.
+Every ordinary mode then uses GPT text reconciliation before summaries and the
+report header. Only `--offline` skips GPT entirely. Cloud audio recognition is
+available through explicitly selected transcription modes.
 
 For run commands, jump to [4. Transcribe recordings](#4-transcribe-recordings).
 If this is your first installation, follow the setup steps below.
@@ -277,7 +278,7 @@ Reports always use HTML, including when only one tab is selected. New Markdown
 summaries are no longer generated; legacy `.summary.md` results remain protected.
 The `.log.md` files contain plain text despite their extension. There are no Markdown
 headings, tables, emphasis, or code fences. Speaker labels and approximate times
-are available in local and combined modes. Combined mode can replace anonymous
+are available in local and combined modes. Final GPT reconciliation can replace anonymous
 display labels with names supported by the conversation; see below. API-only logs
 have chunk time ranges and no invented A/B speaker labels.
 
@@ -313,22 +314,29 @@ The default combination is `--transcription-model whisperx --diarization-model n
 
 | Value | Internet during recognition | Recognition and final log | Local voice labels | Audio uploaded |
 | --- | --- | --- | --- | --- |
-| `gpt-transcribe-online` | Online | OpenAI GPT-Transcribe only | No | Yes, extracted audio |
-| `whisperx` (default) | Offline | Local WhisperX large-v3-turbo with word alignment | A, B, C, etc. | No |
-| `mlx` | Offline | Local MLX Whisper large-v3-turbo | A, B, C, etc. | No |
+| `gpt-transcribe-online` | Online | OpenAI GPT-Transcribe, then GPT text reconciliation | No | Yes, extracted audio |
+| `whisperx` (default) | Offline | Local WhisperX words/voices, then GPT text reconciliation | Supported names or A, B, C, etc. | No |
+| `mlx` | Offline | Local MLX words/voices, then GPT text reconciliation | Supported names or A, B, C, etc. | No |
 | `gpt-transcribe+whisperx` | Online | GPT-Transcribe + WhisperX/voices + GPT text reconciliation | A, B, C, etc.; supported names when available | Yes, extracted audio |
-| `all` | Online | Independent GPT-Transcribe, WhisperX and MLX; final log uses WhisperX | A, B, C, etc. | Yes, extracted audio |
+| `all` | Online | GPT-Transcribe, WhisperX and MLX; GPT reconciles the final log | Supported names or A, B, C, etc. | Yes, extracted audio |
 
 Online/Offline describes recognition after model setup. Initial model downloads
 need internet access; summaries and report headers also use the text API unless
 report generation is disabled. Use `--offline` for a run without network requests.
 
-`all` is a comparison mode. It runs GPT-Transcribe Online, WhisperX Turbo and
-MLX Turbo once each, sequentially, with one shared diarization pass. It does not
-invoke `gpt-transcribe+whisperx`, text reconciliation, or name discovery. Final
-transcript and summaries use WhisperX word/voice text; all three original texts
-and the shared diarization are embedded in separate report source tabs when
-`transcript` is selected. Ordinary summary/header text requests still apply.
+`all` runs GPT-Transcribe Online, WhisperX Turbo and MLX Turbo once each,
+sequentially, with one shared diarization pass. GPT then reconciles the cloud and
+WhisperX text, with MLX as additional comparison evidence, while preserving fixed
+WhisperX voice/time anchors. The final reconciled log supplies summaries. All
+three original texts and the shared diarization remain available as source views.
+
+Every non-offline mode runs final GPT text reconciliation, including when reports
+are disabled with `--summarize-model none` or `--transcribe-only`. WhisperX/MLX-only
+recognition sends only text to GPT, never audio; one-source review preserves
+uncertain speech instead of treating duplicated text as independent evidence.
+API-only mode reviews GPT-Transcribe text but keeps chunk timing and unknown
+speakers; it does not load local models or invent voice labels. `--offline` is the
+explicit exception: no GPT calls, reconciliation or automatic name discovery.
 
 WhisperX and MLX have independent word checkpoints in `all`, so repeated runs
 or new output folders can reuse both without alternating one shared cache.
@@ -353,15 +361,19 @@ retained with approximate neighboring bounds and speaker-uncertainty markers.
 In combined mode, GPT-Transcribe runs first and WhisperX supplies local word/time
 anchors, using the selected diarizer's fixed voice IDs. Text reconciliation combines
 these sources; the MKV container/video itself is never uploaded. The summary is
-made from the final log. A failed cloud audio stage leaves local text and skips
-reconciliation; failed reconciliation retains local text. An API-only failure
+made from the final log. If cloud audio recognition fails, GPT text reconciliation
+is still attempted using the local text. Failed reconciliation retains the raw
+source log, reports the failure and leaves its stage incomplete for a later retry. An API-only failure
 is reported without falling back to local recognition.
 
-**Local recognition does not disable API summaries.** The default still uses
-`--summarize-model gpt-6.1-sol:medium` on the resulting text. Use `--offline` or
-`--summarize-model none` for a local-only log. Combined mode still needs text API
-reconciliation when summaries are disabled. A fallback log plus successful report
-counts as a completed pair on the next run; explicit regeneration can repeat calls.
+**Local recognition does not mean a fully offline run.** Ordinary runs use
+`--summarize-model gpt-6.1-sol:medium` for final text reconciliation and reports.
+`none` disables reports but leaves final reconciliation on `gpt-6.1-sol:medium`.
+Use `--offline` to disable every cloud request. A fallback log plus a successful
+report still counts as a completed pair on the next run; it is not silently
+replaced. Existing completed reports retain their previous final text until
+explicitly reprocessed. `--summary-only` keeps the saved log and does not add
+reconciliation to it.
 
 ## Diarization models
 
@@ -380,7 +392,7 @@ recognition/voice models.
 
 ## Speaker names from the conversation
 
-In combined `gpt-transcribe+whisperx` mode, the existing GPT reconciliation request also proposes names
+In every non-offline mode with local voice anchors, final GPT reconciliation also proposes names
 for fixed local voice IDs. No separate name-recognition request is made. Evidence
 can be a direct self-introduction, an unambiguous named address and response, or
 an introduction confirmed by subsequent interaction. For example, "I'm Alice,
@@ -429,8 +441,8 @@ boundary-spanning exchanges. Validated claims are resolved across all chunks
 before rendering the final log. Claims remain in fusion checkpoints for inspection
 and are revalidated on cache reuse.
 
-Local-only, offline, API-only, and failed-fusion fallback logs do not run this
-name-recognition step. Existing completed output pairs still skip processing;
+Offline and failed-reconciliation fallback logs keep anonymous voice labels.
+API-only mode has no voice anchors and cannot assign names to speakers. Existing completed output pairs still skip processing;
 upgrading does not rename them automatically. `--summary-only` preserves the log
 and therefore does not discover new names. Full regeneration with `--force` can
 repeat recognition and paid calls, as described above.
@@ -449,11 +461,9 @@ Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported eff
 values are `low`, `medium`, `high`, `xhigh`, and `max`; the chosen API model must
 support the requested effort. The default is `gpt-6.1-sol:medium`.
 
-This selection controls final summaries and, in `gpt-transcribe+whisperx`, the text reconciliation.
-`none` disables the summary only: `gpt-transcribe+whisperx` still needs GPT reconciliation and uses
-`gpt-6.1-sol:medium` for it. To avoid all text-model calls while using cloud audio
-recognition, choose `gpt-transcribe-online --summarize-model none`. To avoid every cloud
-call, use `--offline`.
+This selection controls final summaries and final text reconciliation in every
+ordinary mode. `none` disables reports only: reconciliation still uses
+`gpt-6.1-sol:medium`. Use `--offline` to avoid all text-model and cloud-audio calls.
 
 The summary follows the predominant language of the conversation: mostly English
 speech produces an English summary; mostly Russian speech produces a Russian one.
@@ -607,7 +617,9 @@ checks do not independently prove that the model interpreted a role correctly.
 Duration comes from the log's `Duration` metadata, never the model. New API-only
 logs also record the audio-chunk duration. Older logs without it show `Not recorded`.
 Date uses explicit ISO `Date` or `Recorded at` log metadata when present; otherwise
-it uses a recognized recording filename such as `2026-09-25 16-55-39.mkv`. The
+it finds an ISO date and optional time within the recording filename, including
+descriptive prefixes or suffixes such as `2026-11-07 14-37-07 (1speaker).mkv`.
+Multiple date candidates, invalid dates and malformed times stay unestablished. The
 report states when the filename supplied the date. File creation/modification
 times are never substituted for the meeting date, and a timezone is not guessed.
 Missing topics or participants show `Not established`; missing dates show
@@ -898,9 +910,9 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
 | `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
 | `--monitor-dir [DIR]` | Off | Watch growing MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
-| `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers independently. |
+| `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers; every ordinary mode then runs GPT text reconciliation. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
-| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls combined-mode fusion. |
+| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Report and final GPT reconciliation model/effort; none disables reports, not reconciliation. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
 | `--output-dir DIR` | Monitor folder in monitor mode; otherwise working directory's `data` | Destination for logs and summaries; an explicit value overrides either default. |
@@ -923,8 +935,8 @@ be written in full. The removed `--model`, `--reasoning`, and transcription valu
 option is also rejected: local diarizers determine the count automatically. The old
 `gpt-transcribe` and `whisper-local` CLI values are removed; use
 `gpt-transcribe-online` and `mlx`. Historical `all` meant combined reconciliation;
-that behavior is now `gpt-transcribe+whisperx`. The new `all` instead compares three
-independent recognizers without reconciliation. Old partial outputs are protected
+that behavior is now `gpt-transcribe+whisperx`. The current `all` runs three
+independent recognizers and reconciles their final text with GPT. Old partial outputs are protected
 against this meaning change; completed pairs continue to skip. The default remains
 local WhisperX recognition.
 
@@ -992,7 +1004,7 @@ input/configuration errors, and `130` for interruption.
 ## Examples
 
 ```bash
-# Default: WhisperX Turbo + Nemotron voices, followed by a Sol medium summary
+# Default: WhisperX Turbo + Nemotron voices, Sol reconciliation and summaries
 ./scribe.sh
 
 # API transcription and summary, without local voice models
@@ -1001,7 +1013,7 @@ input/configuration errors, and `130` for interruption.
 # MLX alternative, followed by an API summary
 ./scribe.sh --transcription-model mlx
 
-# Cloud audio recognition only; no text-model calls
+# Cloud audio recognition and final GPT reconciliation, without reports
 ./scribe.sh --transcription-model gpt-transcribe-online --summarize-model none
 
 # Strictly local log; no network calls or summary
@@ -1052,7 +1064,7 @@ output protection in either format, interrupted-level reuse, invalidation, and
 preservation of existing results on failure. Transcript checks cover exact embedded text,
 per-output source snapshots, raw inputs after fusion/fallback, mode-specific source
 tabs, edited/legacy-log isolation, and source-tab keyboard/theme interactions,
-three-recognizer comparison without fusion, independent local word checkpoints,
+three-recognizer comparison with final GPT reconciliation, independent local word checkpoints,
 one shared forced diarization, retry of missing stages and historical-all protection,
 long-log completeness, escaped markup, the inline icon, and copying the HTML
 without its source log. Header checks cover role citations,
