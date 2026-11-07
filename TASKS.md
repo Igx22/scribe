@@ -122,3 +122,20 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-070 | Investigate missing reconciliation and speaker names in the supplied single-speaker report | Done | 2026-11-07 | 2026-11-07 |
 | SCR-071 | Parse recording dates from filenames with descriptive text and suffixes | Done | 2026-11-07 | 2026-11-07 |
 | SCR-072 | Make GPT reconciliation a common final stage across transcription modes | Done | 2026-11-07 | 2026-11-07 |
+| SCR-073 | Evaluate a compact local text model for offline summaries and reconciliation | Planned | 2026-11-07 | — |
+
+### SCR-073
+
+Evaluate compact quantized instruction models for English/Russian summaries on a
+MacBook, CPU-only machine or small GPU. Start with Qwen3.5-4B; compare a larger
+candidate only if available memory permits. Measure working memory, prompt/output
+latency, factual coverage, uncertainty preservation and structured reconciliation
+validation on existing cached transcripts against the GPT baseline. Test bounded
+context and hierarchical notes rather than assuming the advertised context fits.
+Also consider the text-only Qwen3-4B-Instruct-2507 as a non-thinking baseline.
+Model selection and implementation are deferred; this ticket authorizes neither
+downloads nor integration. Keep strict offline guarantees and original sources.
+Candidate references checked on 2026-11-07:
+[Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B),
+[Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507),
+[llama.cpp](https://github.com/ggml-org/llama.cpp).
