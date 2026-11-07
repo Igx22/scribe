@@ -233,10 +233,21 @@ API-key validation, audio extraction, or API calls. File contents and modificati
 times are preserved. This also applies to files selected with `-f` and results in
 an explicit `--output-dir`.
 
-To deliberately replace a completed result, use `--force`. This bypasses caches
-and can repeat paid requests. To replace only its summary, use `--summary-only`;
-that preserves the log and does not repeat recognition or fusion. A lone log file
-does not count as a completed pair, but can be resumed if its cache proves ownership.
+To deliberately replace a completed result, use `--force`. It repeats recognition
+and, when reports are enabled, regenerates every selected summary level and replaces
+the existing `.summary.html` for that recording. Previous logs and summaries are
+backed up in the application cache. This bypasses caches and can repeat paid
+requests. To replace only its summary, use `--summary-only`; that preserves the
+log and does not repeat recognition or fusion. Add `--force` to that option to
+also bypass summary/header checkpoints:
+
+```bash
+./scribe.sh -f "recording.mkv" --force
+./scribe.sh -f "recording.mkv" --summary-only --force
+```
+
+A lone log file does not count as a completed pair, but can be resumed if its cache
+proves ownership.
 With summaries disabled, only the log is created; repeated runs reuse it when its
 source/settings match.
 

@@ -246,6 +246,14 @@ regeneration is the economical way to compare summarizers; force regeneration ca
 repeat recognition charges. This is a deliberate tradeoff, including when the
 saved log came from a fallback. Consult README before changing resume semantics.
 
+SCR-065 confirmed the existing force behavior without production-code changes:
+normal forced processing regenerates the selected summaries and replaces the
+existing HTML, backing up previous logs/HTML/legacy Markdown. Summary-only plus
+force regenerates the report while preserving the log and skipping recognition
+and fusion. Dedicated mocked CLI/success-path checks cover both cases; all 158
+tests passed without model inference or paid API requests. The existing failure
+checks continue to cover backups and preservation during interrupted generation.
+
 The public shell launcher is `scribe.sh`; source invocation through `src/scribe.py`
 delegates to it when environment preparation is needed. Launcher naming does not
 change working-directory handling, model locations, or resume behavior.

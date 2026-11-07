@@ -272,6 +272,56 @@ class SummaryHtmlTests(unittest.TestCase):
                 self.assertFalse(args.cache_dir.exists())
                 self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in (log, existing)])
 
+    def test_force_regenerates_completed_report_through_cli_and_preserves_previous_results(self):
+        for also_legacy in (False, True):
+            with self.subTest(also_legacy=also_legacy), tempfile.TemporaryDirectory() as tmp:
+                source, args, log, summary = self.setup_case(Path(tmp))
+                app.atomic_write(summary, 'PREVIOUS_SUMMARY')
+                previous = {summary.suffix: summary.read_bytes()}
+                if also_legacy:
+                    legacy = summary.with_suffix('.md')
+                    app.atomic_write(legacy, 'PREVIOUS_LEGACY_SUMMARY')
+                    previous[legacy.suffix] = legacy.read_bytes()
+                old_log = log.read_bytes()
+                options = ['-f', str(source), '--force', '--transcription-model', app.ONLINE_MODE,
+                           '--output-dir', str(args.output_dir), '--cache-dir', str(args.cache_dir),
+                           '--report-tabs', '1,5,10,transcript']
+                chunks = [{'index': 0, 'start': 0, 'end': 4, 'text': 'Newly recognized conversation.'}]
+                with patch.object(app, 'load_env'), patch.dict(app.os.environ, {'OPENAI_API_KEY': 'fixture-key'}), \
+                     patch.object(app, 'extract_audio') as extract, \
+                     patch.object(app, 'transcribe_gpt', return_value=chunks) as cloud, \
+                     patch.object(app, 'summarize', side_effect=lambda *a, detail: f'REGENERATED_SUMMARY_{detail}') as summarize:
+                    self.assertEqual(app.main(options), 0)
+                extract.assert_called_once(); cloud.assert_called_once()
+                self.assertTrue(cloud.call_args.args[-1])
+                self.assertEqual([c.kwargs['detail'] for c in summarize.call_args_list], [1, 5, 10])
+                for level in (1, 5, 10):
+                    self.assertIn(f'REGENERATED_SUMMARY_{level}', summary.read_text())
+                self.assertNotIn('PREVIOUS_SUMMARY', summary.read_text())
+                self.assertIn('Newly recognized conversation.', log.read_text())
+                self.assertNotEqual(log.read_bytes(), old_log)
+                for suffix, content in previous.items():
+                    backups = list(args.cache_dir.glob(f'*/outputs/*/previous-*.summary{suffix}'))
+                    self.assertTrue(any(p.read_bytes() == content for p in backups))
+                if also_legacy:
+                    self.assertFalse(legacy.exists())
+
+    def test_force_summary_only_replaces_existing_html_without_recognizing_audio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, log, summary = self.setup_case(Path(tmp), '--summary-only', '--force')
+            app.atomic_write(summary, 'PREVIOUS_SUMMARY')
+            before = log.read_bytes(), log.stat().st_mtime_ns
+            with patch.object(app, 'extract_audio') as extract, patch.object(app, 'transcribe_gpt') as cloud, \
+                 patch.object(app, 'local_recognition') as local, patch.object(app, 'fuse_transcripts') as fusion, \
+                 patch.object(app, 'summarize', return_value='REGENERATED_SUMMARY') as summarize:
+                app.process_file(source, args, 'fixture-key')
+            for stage in (extract, cloud, local, fusion):
+                stage.assert_not_called()
+            self.assertEqual(summarize.call_count, 3)
+            self.assertEqual((log.read_bytes(), log.stat().st_mtime_ns), before)
+            self.assertIn('REGENERATED_SUMMARY', summary.read_text())
+            self.assertNotIn('PREVIOUS_SUMMARY', summary.read_text())
+
     def test_unowned_html_without_a_log_is_protected(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, log, summary = self.setup_case(Path(tmp))
