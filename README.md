@@ -15,6 +15,53 @@ selected transcription modes.
 For run commands, jump to [4. Transcribe recordings](#4-transcribe-recordings).
 If this is your first installation, follow the setup steps below.
 
+## Quick Example
+
+Process all MKV recordings in `./data` and save logs and `.summary.html` reports
+to the same folder:
+
+```bash
+./scribe.sh
+```
+
+Process all MKV recordings in `~/my-recordings` and save results to `~/my-summaries`:
+
+```bash
+./scribe.sh --input-dir ~/my-recordings --output-dir ~/my-summaries
+```
+
+Process one recording by filename. Scribe searches `./data` and `~/Movies`;
+results are saved to `./data`:
+
+```bash
+./scribe.sh -f "recording.mkv"
+```
+
+Process two recordings and save results to `./data`:
+
+```bash
+./scribe.sh -f "first.mkv" -f "second.mkv"
+```
+
+Monitor growing OBS Studio MKV recordings in `~/my-meetings`. Once a recording
+stops growing and passes the finalization checks, process it and save results
+to the same folder:
+
+```bash
+./scribe.sh --monitor-dir ~/my-meetings
+```
+
+Monitor the OS-specific default video folder and save results there:
+
+```bash
+./scribe.sh --monitor-dir
+```
+
+## Report example
+
+TBD
+
+
 ## Setup from GitHub: start here
 
 Scribe requires macOS 14+ on Apple Silicon (M1 or newer) and an installed ARM64
@@ -594,7 +641,7 @@ at every level. Higher levels retain more reasoning, alternatives, dependencies,
 relevant examples, and technical nuance; they do not fill pages with quotations.
 
 ```bash
-# Use configured tabs (1, 3, 5, 10, transcript by default)
+# Use configured tabs (1, 3, 5, 10, transcript by default, batch process all MKV in ./data to .summary.html)
 ./scribe.sh
 
 # Select a single summary tab for unfinished recordings (still HTML)
