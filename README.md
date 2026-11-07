@@ -141,10 +141,12 @@ Repeated references or symlinks to the same resolved file are processed once.
 Start Scribe before or during the OBS recording:
 
 ```bash
-./scribe.sh --monitor-dir ~/Movies --output-dir ~/Movies
+./scribe.sh --monitor-dir
+./scribe.sh --monitor-dir ~/Movies
+./scribe.sh --monitor-dir ~/Movies --output-dir ./reports
 ```
 
-`--monitor-dir DIR` keeps Scribe running in the foreground and polls that folder
+`--monitor-dir [DIR]` keeps Scribe running in the foreground and polls that folder
 every five seconds, without subfolders. Only `.mkv` files (case-insensitive) are
 considered. Scribe tracks file sizes and selects a recording only after observing
 its size increase between polls. This includes files already present and still
@@ -154,7 +156,23 @@ does not qualify unless size growth is observed. Very short recordings completed
 between polls can be missed; process them with `-f` or a batch scan.
 `--input-dir` remains a one-time batch scan and cannot be combined with
 `--monitor-dir`. `-f` also cannot be combined with either directory selection.
-`--output-dir` is independent and still defaults to `./data`.
+In monitor mode, omitted `--output-dir` defaults to the monitored folder, so logs
+and HTML reports are written beside the recordings. An explicit `--output-dir`
+overrides this. Ordinary `-f` and batch scans retain the `./data` output default.
+
+Omit the path after `--monitor-dir` to select a fixed OS-specific preset:
+
+| OS | Monitor-folder preset |
+| --- | --- |
+| macOS | `~/Movies` |
+| Linux | `~/Videos` ([XDG defaults](https://cgit.freedesktop.org/xdg/xdg-user-dirs/tree/user-dirs.defaults)) |
+| Windows | `%USERPROFILE%\Videos` ([Microsoft Videos folder](https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid#folderid_videos)) |
+
+These are conventional paths under the user's home directory; localized or
+redirected video-folder settings are not queried. Supply an explicit path for
+custom locations. The folder must already exist; Scribe reports a missing folder
+instead of creating or watching a different one. The Linux/Windows path presets
+do not change the application's current macOS/Apple Silicon runtime requirement.
 
 For each growing file, the console reports its path, old/new sizes in bytes/MiB,
 and readiness status. After growth, Scribe waits for at least 30 seconds of observed stability in file identity,
@@ -189,11 +207,13 @@ local logs. Monitoring itself makes no API calls.
 
 ## Outputs and completed recordings
 
-For `meeting.mkv`, the default outputs are:
+For `meeting.mkv`, ordinary batch/`-f` default outputs are:
 
 - `./data/meeting.log.md`: detailed conversation log.
 - `./data/meeting.summary.html`: one standalone report with the selected tabs
-  (by default, Detail 1, Detail 3, Detail 5, Detail 10, and Transcript).
+  (by default, Detail 1, Detail 3, Detail 5, Detail 10, Final transcript, and available source views).
+
+Monitor mode defaults to these filenames in its monitored folder instead.
 
 Reports always use HTML, including when only one tab is selected. New Markdown
 summaries are no longer generated; legacy `.summary.md` results remain protected.
@@ -649,7 +669,8 @@ the source file's location. Tests add `src` to their import path through
 `tests/__init__.py`, so testing the portable application requires no package
 installation or additional dependencies.
 
-The input/output `./data` directory is relative to the Terminal working directory.
+The ordinary input/output `./data` directory is relative to the Terminal working
+directory; monitor mode instead defaults its outputs to the monitored folder.
 Persistent resources use the application directory so that the launcher can find
 its environment even when launched from elsewhere. In the usual case these are the
 same `data` directory. `--output-dir`, `--models-dir`, and `--cache-dir` explicitly
@@ -738,13 +759,13 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-h`, `--help` | — | Show English help. |
 | `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
 | `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
-| `--monitor-dir DIR` | Off | Watch MKVs for observed size growth, including existing recordings, then wait for 30 seconds of stability plus OBS-style finalization checks. Stationary files are ignored. Alternative to `-f` and `--input-dir`. |
+| `--monitor-dir [DIR]` | Off | Watch growing MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
 | `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, or GPT + WhisperX with reconciliation. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls combined-mode fusion. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
-| `--output-dir DIR` | Working directory's `data` | Destination for logs and summaries. |
+| `--output-dir DIR` | Monitor folder in monitor mode; otherwise working directory's `data` | Destination for logs and summaries; an explicit value overrides either default. |
 | `--language CODE` | `auto` | WhisperX detects per recording; MLX per chunk. GPT receives English/Russian hints. An explicit code guides recognition; WhisperX alignment supports `en` and `ru`. |
 | `--vocabulary TEXT` | Empty | Domain terms/names for local Whisper and GPT keyword hints. |
 | `--models-dir DIR` | Application's `data/models` | Explicit local model directory. |
@@ -903,9 +924,11 @@ report script for theme restoration/toggling, cookie fallback, blocked storage,
 and tab navigation; it is skipped otherwise. Node.js is not required to run Scribe.
 Input-directory checks cover relative and home paths, uppercase extensions,
 non-recursive scanning, symlink deduplication, invalid folders, exclusive `-f`
-selection, independent output defaults, and same-folder HTML generation with
+selection, independent batch output defaults, and same-folder HTML generation with
 completed-result preservation.
-Monitor checks cover growth selection among stationary files, existing active recordings, empty folders, new recordings,
+Monitor checks cover monitor-folder output defaults, OS-specific bare monitor
+presets, explicit output precedence, growth selection among stationary files,
+existing active recordings, empty folders, new recordings,
 pause-like stability with unknown Segment size, metadata-only changes, malformed
 or truncated containers, missing audio, source-change guards, failure isolation,
 output collisions, and the normal processing path. They use simulated time and

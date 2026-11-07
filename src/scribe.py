@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1819,6 +1819,16 @@ def obs_mkv_readiness(source, stable_seconds, expected_snapshot):
                   f"and first audio track ({details['audio_codec']}) checked")
 
 
+def default_monitor_directory():
+    """Conventional video-folder presets, not redirected/localized folder discovery."""
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Movies"
+    if system in ("Linux", "Windows"):
+        return Path.home() / "Videos"
+    raise AppError(f"No video-folder preset for {system}. Specify --monitor-dir DIR explicitly.")
+
+
 def monitor_directory(args):
     """Watch size growth, then process a stable finalized candidate once per version."""
     directory = args.monitor_dir.expanduser().resolve()
@@ -2260,22 +2270,22 @@ def build_parser():
         description="scribe: MKV to a speaker-labeled transcript and an OpenAI summary. "
                     "Scan --input-dir (default: ./data), select -f files, or watch growing MKVs with --monitor-dir. "
                     "Bare -f names search ./data and ~/Movies. "
-                    "Outputs default to ./data relative to the launch directory.",
+                    "Outputs default to the monitored folder in monitor mode, otherwise ./data relative to the launch directory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     inputs = p.add_mutually_exclusive_group()
     inputs.add_argument("-f", "--file", action="append", default=[],
                         help="MKV filename or explicit path; repeat -f to process multiple files")
     inputs.add_argument("--input-dir", type=Path, metavar="DIR",
                         help="Scan MKV files in this directory without subfolders; defaults to ./data; cannot combine with -f")
-    inputs.add_argument("--monitor-dir", type=Path, metavar="DIR",
-                        help="Monitor MKVs whose size grows in this folder, including existing files; wait for OBS finalization and 30s stability")
+    inputs.add_argument("--monitor-dir", type=Path, metavar="DIR", nargs="?", const=True,
+                        help="Monitor growing MKVs; omit DIR for ~/Movies on macOS or ~/Videos on Linux/Windows; wait for OBS finalization and 30s stability")
     p.add_argument("--transcription-model", choices=(ONLINE_MODE, "whisperx", "mlx", COMBINED_MODE),
                    default=DEFAULT_TRANSCRIPTION_MODEL,
                    help="gpt-transcribe-online: API words only; whisperx: local WhisperX Turbo; "
                         "mlx: local MLX Turbo; gpt-transcribe+whisperx: both sources + GPT reconciliation")
     p.add_argument("--diarization-model", choices=("nemotron", "community-1"), default="nemotron",
                    help="Local automatic voice model; Community-1 needs gated HF access for download. Ignored for API-only recognition")
-    p.add_argument("--output-dir", type=Path, help="Output directory; defaults to ./data in the launch directory")
+    p.add_argument("--output-dir", type=Path, help="Output directory; defaults to the monitor folder in monitor mode, otherwise ./data in the launch directory")
     p.add_argument("--language", default="auto", help="Language code; auto detects per recording with WhisperX or per chunk with MLX; GPT receives en/ru hints")
     p.add_argument("--vocabulary", default="", help="Optional domain-specific terms/names for Whisper")
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
@@ -2322,7 +2332,12 @@ def main(argv=None):
                        "Use --language auto/en/ru, or select mlx or gpt-transcribe-online.")
     args.models_dir = args.models_dir.expanduser().resolve()
     args.cache_dir = args.cache_dir.expanduser().resolve()
-    args.output_dir = (args.output_dir if args.output_dir is not None else Path.cwd() / "data").expanduser().resolve()
+    if args.monitor_dir is True:
+        args.monitor_dir = default_monitor_directory()
+    if args.monitor_dir is not None:
+        args.monitor_dir = args.monitor_dir.expanduser().resolve()
+    default_output = args.monitor_dir if args.monitor_dir is not None else Path.cwd() / "data"
+    args.output_dir = (args.output_dir if args.output_dir is not None else default_output).expanduser().resolve()
     if args.summary_only and args.summarize_model is None:
         say("Report generation is disabled; nothing to do.")
         return 0

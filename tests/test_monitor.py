@@ -50,6 +50,72 @@ class MonitorTests(unittest.TestCase):
         return ["--monitor-dir", str(root), "--output-dir", str(root),
                 "--cache-dir", str(root / "cache"), *extra]
 
+    def test_bare_monitor_flag_selects_os_video_folder_and_same_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            for system, folder in [("Darwin", "Movies"), ("Linux", "Videos"), ("Windows", "Videos")]:
+                for extra in ([], ["--offline"]):
+                    with self.subTest(system=system, extra=extra), patch.object(app, "load_env"), \
+                            patch.object(app.platform, "system", return_value=system), \
+                            patch.object(app.Path, "home", return_value=home), \
+                            patch.object(app, "monitor_directory", return_value=0) as monitor, \
+                            patch.object(app, "process_files") as batch:
+                        self.assertEqual(app.main(["--monitor-dir", *extra]), 0)
+                        args = monitor.call_args.args[0]
+                        self.assertEqual(args.monitor_dir, (home / folder).resolve())
+                        self.assertEqual(args.output_dir, args.monitor_dir)
+                        batch.assert_not_called()
+
+    def test_monitor_paths_resolve_and_explicit_output_overrides_both_default_forms(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "load_env"), \
+                patch.object(app.Path, "home", return_value=Path(tmp)), \
+                patch.object(app.platform, "system", return_value="Darwin"):
+            for value in ([], ["relative-recordings"], [str(Path(tmp) / "recordings")]):
+                for output in ([], ["--output-dir", "relative-results"]):
+                    with self.subTest(value=value, output=output), \
+                            patch.object(app, "monitor_directory", return_value=0) as monitor:
+                        self.assertEqual(app.main(["--monitor-dir", *value, *output]), 0)
+                        args = monitor.call_args.args[0]
+                        expected_monitor = (Path(value[0]) if value else Path(tmp) / "Movies").resolve()
+                        self.assertEqual(args.monitor_dir, expected_monitor)
+                        self.assertEqual(args.output_dir, Path("relative-results").resolve() if output else expected_monitor)
+
+    def test_presets_are_lazy_and_unknown_os_allows_explicit_monitor_path(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "load_env"), \
+                patch.object(app.platform, "system", return_value="Unknown"), \
+                patch.object(app, "monitor_directory", return_value=0) as monitor, \
+                patch.object(app, "process_files", return_value=0) as batch, \
+                patch.object(app, "collect_files", return_value=[]):
+            with self.assertRaisesRegex(app.AppError, "Specify --monitor-dir DIR"):
+                app.main(["--monitor-dir"])
+            self.assertEqual(app.main(["--monitor-dir", tmp]), 0)
+            self.assertEqual(app.main([]), 0)
+            self.assertEqual(batch.call_args.args[1].output_dir, Path.cwd() / "data")
+            self.assertIsNone(batch.call_args.args[1].monitor_dir)
+            monitor.assert_called_once()
+
+    def test_missing_default_monitor_folder_is_reported_without_creating_it(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "load_env"), \
+                patch.object(app.Path, "home", return_value=Path(tmp)), \
+                patch.object(app.platform, "system", return_value="Darwin"), \
+                patch.object(app, "process_files") as process:
+            with self.assertRaisesRegex(app.AppError, "Input directory not found"):
+                app.main(["--monitor-dir"])
+            self.assertFalse((Path(tmp) / "Movies").exists())
+            process.assert_not_called()
+
+    def test_growing_recording_uses_monitor_output_when_output_option_is_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "load_env"), \
+                patch.object(app, "process_files", return_value=0) as process:
+            root = Path(tmp)
+            source = root / "recording.mkv"
+            source.write_bytes(mkv_fixture()[:20])
+            text = self.drive(["--monitor-dir", str(root)], {1: lambda: source.write_bytes(mkv_fixture())})
+            process.assert_called_once()
+            args = process.call_args.args[1]
+            self.assertEqual(args.output_dir, root.resolve())
+            self.assertIn(f"Output directory: {root.resolve()}", text)
+
     def test_readiness_requires_observed_stability_and_reports_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "meeting.mkv"
@@ -298,11 +364,12 @@ class MonitorTests(unittest.TestCase):
             self.assertFalse(report.exists())
 
     def test_monitor_rejects_conflicting_options_and_missing_folder(self):
-        for options in (["-f", "file.mkv"], ["--input-dir", "folder"], ["--force"],
-                        ["--summary-only"], ["--setup"], ["--show-prompt"]):
-            with self.subTest(options=options), patch.object(app, "load_env"), \
-                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises((SystemExit, app.AppError)):
-                app.main(["--monitor-dir", "folder", *options])
+        for monitor in (["--monitor-dir"], ["--monitor-dir", "folder"]):
+            for options in (["-f", "file.mkv"], ["--input-dir", "folder"], ["--force"],
+                            ["--summary-only"], ["--setup"], ["--show-prompt"]):
+                with self.subTest(monitor=monitor, options=options), patch.object(app, "load_env"), \
+                        contextlib.redirect_stderr(io.StringIO()), self.assertRaises((SystemExit, app.AppError)):
+                    app.main([*monitor, *options])
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "load_env"), \
                 self.assertRaisesRegex(app.AppError, "not a directory"):
             app.main(["--monitor-dir", str(Path(tmp) / "missing")])

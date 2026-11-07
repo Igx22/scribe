@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Keep the caller's cwd: recordings and result files use its ./data directory.
+# Keep the caller's cwd: relative input/output paths are resolved from there.
 APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$APP_DIR/data"
 VENV_DIR="$DATA_DIR/.venv"

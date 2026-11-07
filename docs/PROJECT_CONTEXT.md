@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.13.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.14.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -350,6 +350,15 @@ persistent queue, automatic browser opening, or automatic retry of unchanged fai
 files. Manual `-f` processing remains the recovery path; restarting the monitor
 requires fresh observed growth. README owns exact options and timing.
 
+SCR-063 makes monitor-mode outputs default to the monitored folder; explicit
+output paths still take precedence and ordinary batch/`-f` defaults stay `./data`.
+The monitor flag now accepts an optional path. A bare flag lazily selects fixed
+home-directory presets: Movies on macOS, Videos on Linux/Windows. These are simple
+conventional paths, not localized XDG/Windows Known Folder resolution; custom or
+redirected folders require an explicit path. Missing folders still fail rather
+than being created silently. Presets do not extend the current macOS ARM64 runtime
+support or change growth/stability/readiness criteria.
+
 OBS supports [launch parameters](https://obsproject.com/kb/launch-parameters),
 [Lua/Python scripts](https://docs.obsproject.com/scripting), and a
 [built-in WebSocket interface](https://obsproject.com/kb/remote-control-guide).
@@ -487,6 +496,13 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.14.0 passed 145 mocked tests and launcher syntax/help/version checks.
+  New checks cover bare/explicit monitor paths, macOS/Linux/Windows home-folder
+  presets, explicit output precedence, resolved relative paths, unchanged batch
+  defaults, missing folders without creation, unsupported-platform preset errors,
+  bare-flag conflicts and dispatch of a growing finalized MKV into the monitored
+  output folder. Linux/Windows selection was mocked on macOS, not native runtime
+  validation. No downloads, model inference or paid API calls were needed.
 - Version 2.13.0 passed 140 mocked tests, including all recognition modes,
   fusion/cloud fallback, exact raw/final separation, escaped long source text,
   per-output snapshots, legacy/edited-log isolation, and actual inline-script
