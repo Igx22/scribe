@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.16.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.17.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -352,12 +352,21 @@ adds no model call. Markdown summary generation has been removed; existing legac
 Markdown files remain recognized for completion skipping, protection, and backups.
 The separate `.log.md` output and offline/disabled-report boundaries are preserved.
 
-SCR-062 adds smaller gray source views after the main tabs: original GPT audio
+SCR-062 adds source views: original GPT audio
 text, pre-reconciliation WhisperX/MLX voice/word text, and the selected diarizer's
 anonymous intervals/count. Only sources actually produced in that run are shown;
 failed fusion retains both successful inputs alongside the local final fallback.
 The final label does not claim successful reconciliation or greater accuracy.
 The existing `transcript` selection controls final and source views together.
+
+SCR-069 groups final/source transcripts and voice intervals in a single dropdown.
+The button reflects the selected view; menu entries remain in place. Source
+transcripts and speaker segmentation have separate headings, with Online/Offline
+badges. The final-result model badge comes only from the known provenance slot in
+the saved log, never the current summary model or dialogue. Local/fallback results
+must not acquire a GPT badge. Unknown provenance omits it. The change affects only
+HTML rendering, preserves full escaped text and source snapshots, and adds no API
+calls. Existing reports require explicit regeneration to gain the new navigation.
 
 Each output ownership state freezes its source texts before reconciliation and
 binds them to the source signature and final-log hash. Summary-only regeneration
@@ -544,6 +553,16 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.17.0 passed 168 mocked tests, including actual inline-script checks of
+  dropdown selection, stable item order, keyboard navigation, focus return,
+  dismissal, theme/storage handling, transcript-first and summary-only layouts,
+  and saved-log model badges. Launcher syntax/version and diff checks passed.
+  A generated synthetic report was inspected in Brave: source selection updated
+  the button/content, reopening retained all choices, and the selected outline,
+  section headings and badges were visible. No model inference or paid API calls
+  ran; the four original/source view texts and existing output protection remain
+  covered by the mocked suite. Narrow-width and print rendering were not visually
+  inspected. The preview is under ignored `data/comparison/transcript-menu-preview/`.
 - Version 2.16.0 passed 163 mocked tests and launcher syntax/version checks.
   Timestamp checks execute the actual inline script with fixed clocks/timezones:
   time-only today, full date/year on older days, midnight while open, UTC/local

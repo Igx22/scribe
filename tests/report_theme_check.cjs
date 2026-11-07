@@ -25,10 +25,23 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   const root = {dataset: {}};
   const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(m => element(m[0]));
   const panels = [...html.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map(m => element(m[0]));
+  const transcriptTabs = tabs.filter(tab => tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'));
+  const extra = new Map(['transcript-picker', 'transcript-toggle', 'transcript-options',
+    'transcript-choice-title', 'transcript-choice-description'].map(id => {
+      const tag = html.match(new RegExp('<[^>]+id="' + id + '"[^>]*>'));
+      return [id, tag ? element(tag[0]) : null];
+    }));
+  const picker = extra.get('transcript-picker'), choice = extra.get('transcript-toggle'), options = extra.get('transcript-options');
+  if (picker) {
+    picker.contains = item => item === choice || transcriptTabs.includes(item);
+    options.contains = item => transcriptTabs.includes(item);
+  }
+  const documentListeners = {};
   const document = {
     documentElement: root,
-    getElementById(id) { return id === 'theme-toggle' ? toggle : id === 'theme-state' ? state : id === 'generated-at' ? stamp : null; },
-    addEventListener(type, handler) { assert.equal(type, 'DOMContentLoaded'); ready = handler; },
+    getElementById(id) { return id === 'theme-toggle' ? toggle : id === 'theme-state' ? state : id === 'generated-at' ? stamp : extra.get(id) ?? null; },
+    addEventListener(type, handler) { if (type === 'DOMContentLoaded') ready = handler; else documentListeners[type] = handler; },
+    get activeElement() { return focused; },
     querySelectorAll(selector) { return selector === '[role="tab"]' ? tabs : panels; },
     get cookie() { if (blockCookie) throw Error('Cookie access denied'); return cookie; },
     set cookie(value) {
@@ -41,7 +54,8 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   }
   const context = {document, Date: ReportDate, location: {protocol}, window: {
     matchMedia: () => ({matches: systemDark}),
-    setInterval(callback, delay) { intervals.push({callback, delay}); }
+    setInterval(callback, delay) { intervals.push({callback, delay}); },
+    clearTimeout() {}, setTimeout() { return 1; }
   }};
   Object.defineProperty(context, 'localStorage', {get() {
     if (blockRead) throw Error('SecurityError');
@@ -67,7 +81,7 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   function active(index) {
     tabs.forEach((tab, i) => {
       assert.equal(tab.attrs['aria-selected'], String(i === index));
-      assert.equal(tab.tabIndex, i === index ? 0 : -1);
+      assert.equal(tab.tabIndex, i === index && !(options?.hidden && transcriptTabs.includes(tab)) ? 0 : -1);
     });
     panels.forEach(panel => assert.equal(panel.hidden, panel.id !== tabs[index].attrs['aria-controls']));
   }
@@ -79,6 +93,34 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       let prevented = false;
       tabs[start].listeners.keydown({key, preventDefault() { prevented = true; }});
       assert.ok(prevented); active(expected); assert.equal(focused, tabs[expected]);
+    }
+    if (choice) {
+      const ids = transcriptTabs.map(tab => tab.id);
+      choice.listeners.click();
+      assert.equal(options.hidden, false);
+      assert.equal(choice.attrs['aria-expanded'], 'true');
+      const last = transcriptTabs[transcriptTabs.length - 1];
+      last.listeners.click();
+      assert.equal(options.hidden, true);
+      assert.equal(focused, choice);
+      assert.equal(extra.get('transcript-choice-title').textContent, last.attrs['data-title']);
+      choice.listeners.click();
+      assert.deepEqual(transcriptTabs.map(tab => tab.id), ids, 'Menu items must stay in place');
+      assert.equal(last.attrs['data-current'], 'true');
+      picker.listeners.keydown({key: 'Escape', preventDefault() {}});
+      assert.equal(options.hidden, true);
+      picker.listeners.keydown({key: 'ArrowDown', target: choice, preventDefault() {}});
+      assert.equal(options.hidden, false); assert.equal(focused, last);
+      last.listeners.keydown({key: 'ArrowDown', preventDefault() {}});
+      assert.equal(focused, transcriptTabs[0]);
+      transcriptTabs[0].listeners.click();
+      assert.equal(extra.get('transcript-choice-title').textContent, 'Final transcript');
+      choice.listeners.click();
+      documentListeners.pointerdown({target: toggle});
+      assert.equal(options.hidden, true);
+      choice.listeners.click();
+      picker.listeners.focusout({relatedTarget: toggle});
+      assert.equal(options.hidden, true);
     }
   }
   return {theme, beforeReady, toggle, storage, cookieWrites, checkNavigation, stamp, intervals,

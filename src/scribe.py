@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1218,18 +1218,43 @@ def report_header(source, transcript, metadata):
             "duration": duration, "date": date, "date_note": date_note}
 
 
+def final_transcript_badge(transcript):
+    """Read only the known saved-log provenance slot, never dialogue or current CLI choices."""
+    lines = transcript.splitlines()[:6]
+    if not lines or lines[0] != "DETAILED TRANSCRIPT":
+        return ""
+    provenance = lines[3] if len(lines) > 3 else ""
+    if not provenance and len(lines) > 4:
+        provenance = lines[4]
+    if provenance == "Sources: GPT-Transcribe only":
+        return "GPT-Transcribe"
+    match = re.fullmatch(r"Sources: GPT-Transcribe text \+ WhisperX / (?:nemotron|community-1) "
+                         r"voice/time anchors; reconciled by ([A-Za-z0-9_.-]+)", provenance)
+    if match:
+        return re.sub(r"^gpt-", "GPT-", match[1])
+    match = re.fullmatch(r"Sources: (WhisperX|MLX) large-v3-turbo \+ "
+                         r"(?:nemotron|community-1) voice/time anchors", provenance)
+    return match[1] + " Turbo" if match else ""
+
+
 def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None):
     """Render model text as escaped data in a self-contained, offline report."""
     selection = tabs if tabs is not None else [*summaries, "transcript"]
-    buttons, panels = [], []
+    buttons, panels, transcript_items = [], [], []
+    transcript_index = None
     for index, detail in enumerate(selection):
         active = index == 0
         if detail == "transcript":
-            buttons.append('<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
+            transcript_index = len(buttons)
+            buttons.append("")
+            badge = final_transcript_badge(transcript)
+            badge = f'<span class="processing-badge">{html.escape(badge)}</span>' if badge else ""
+            transcript_items.append('<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
+                        'data-title="Final transcript" data-description="Selected pipeline result" '
                         f'aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}">'
                         '<span class="tab-title"><span class="icon-slot">'
                         '<i class="transcript-icon" aria-hidden="true"></i></span>Final transcript</span>'
-                        '<span class="tab-description">Selected pipeline result</span></button>')
+                        f'<span class="option-meta"><span class="tab-description">Selected pipeline result</span>{badge}</span></button>')
             panels.append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
                           f'tabindex="0"{"" if active else " hidden"}>'
                           '<div class="panel-heading"><h2>Final transcript</h2>'
@@ -1261,17 +1286,32 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
             raise AppError("Unknown report source identifier.")
         title = "Diarization" if identifier == "diarization" else "Transcript"
         label, description, text = (html.escape(report[key]) for key in ("label", "description", "text"))
-        buttons.append(f'<button class="source-tab" type="button" role="tab" id="tab-source-{identifier}" '
+        if identifier == "diarization":
+            transcript_items.append('<div class="menu-heading">Speaker segmentation</div>')
+        elif not any('Source transcripts</div>' in item for item in transcript_items):
+            transcript_items.append('<div class="menu-heading">Source transcripts</div>')
+        badge = "Online" if identifier == "gpt" else "Offline"
+        transcript_items.append(f'<button class="source-tab" type="button" role="tab" id="tab-source-{identifier}" '
+                       f'data-title="{title} · {label}" data-description="{description}" '
                        f'aria-controls="panel-source-{identifier}" aria-selected="false" tabindex="-1">'
                        '<span class="tab-title"><span class="icon-slot">'
                        '<i class="transcript-icon" aria-hidden="true"></i></span>'
-                       f'{title} <small class="model-name">{label}</small></span>'
-                       f'<span class="tab-description">{description}</span></button>')
+                       f'{title} · <small class="model-name">{label}</small></span>'
+                       f'<span class="option-meta"><span class="tab-description">{description}</span>'
+                       f'<span class="processing-badge">{badge}</span></span></button>')
         panels.append(f'<section role="tabpanel" id="panel-source-{identifier}" '
                       f'aria-labelledby="tab-source-{identifier}" tabindex="0" hidden>'
                       f'<div class="panel-heading"><h2>{title} · {label}</h2>'
                       f'<span>{description}</span></div>'
                       f'<div class="transcript-content" dir="auto">{text}</div></section>')
+    if transcript_index is not None:
+        buttons[transcript_index] = ('<div class="transcript-picker" id="transcript-picker">'
+            '<button type="button" id="transcript-toggle" aria-expanded="false" '
+            'aria-controls="transcript-options" hidden><span class="picker-copy">'
+            '<span id="transcript-choice-title">Final transcript</span>'
+            '<span id="transcript-choice-description">Selected pipeline result</span></span>'
+            '<span class="picker-arrow" aria-hidden="true">⌄</span></button>'
+            '<div id="transcript-options">' + "\n".join(transcript_items) + '</div></div>')
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
     metadata = metadata or report_header(source, "", {})

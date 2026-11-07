@@ -60,6 +60,30 @@
         });
         const tabs = [...document.querySelectorAll('[role="tab"]')];
         const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+        const picker = document.getElementById('transcript-picker');
+        const choice = document.getElementById('transcript-toggle');
+        const options = document.getElementById('transcript-options');
+        const choiceTitle = document.getElementById('transcript-choice-title');
+        const choiceDescription = document.getElementById('transcript-choice-description');
+        const transcriptTabs = tabs.filter(tab => tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'));
+        let currentTranscript = transcriptTabs[0], pinned = false, closeTimer;
+        function openOptions(open) {
+          if (!options) return;
+          window.clearTimeout(closeTimer);
+          if (!open) pinned = false;
+          options.hidden = !open;
+          choice.setAttribute('aria-expanded', String(open));
+          transcriptTabs.forEach(tab => { tab.tabIndex = open && tab === currentTranscript ? 0 : -1; });
+        }
+        function updateChoice(tab) {
+          if (!choice) return;
+          const isTranscript = transcriptTabs.includes(tab);
+          if (isTranscript) currentTranscript = tab;
+          choiceTitle.textContent = currentTranscript.getAttribute('data-title');
+          choiceDescription.textContent = currentTranscript.getAttribute('data-description');
+          choice.setAttribute('data-active', String(isTranscript));
+          transcriptTabs.forEach(item => item.setAttribute('data-current', String(item === currentTranscript)));
+        }
         function select(tab) {
           tabs.forEach(item => {
             const active = item === tab;
@@ -67,18 +91,59 @@
             item.tabIndex = active ? 0 : -1;
           });
           panels.forEach(panel => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
+          updateChoice(tab);
+          openOptions(false);
+        }
+        if (choice) {
+          picker.setAttribute('data-enhanced', 'true');
+          choice.hidden = false;
+          updateChoice(tabs.find(tab => tab.getAttribute('aria-selected') === 'true'));
+          openOptions(false);
+          choice.addEventListener('click', () => {
+            if (pinned) openOptions(false);
+            else { pinned = true; openOptions(true); }
+          });
+          choice.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') openOptions(true); });
+          picker.addEventListener('pointerenter', () => window.clearTimeout(closeTimer));
+          picker.addEventListener('pointerleave', () => {
+            closeTimer = window.setTimeout(() => {
+              if (!pinned && !options.contains(document.activeElement)) openOptions(false);
+            }, 160);
+          });
+          picker.addEventListener('focusout', event => {
+            if (!picker.contains(event.relatedTarget)) openOptions(false);
+          });
+          picker.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+              event.preventDefault(); openOptions(false); choice.focus();
+            } else if (event.target === choice && ['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+              event.preventDefault(); openOptions(true);
+              (event.key === 'ArrowUp' ? transcriptTabs[transcriptTabs.length - 1] : currentTranscript).focus();
+            }
+          });
+          document.addEventListener('pointerdown', event => {
+            if (!picker.contains(event.target)) openOptions(false);
+          });
         }
         tabs.forEach((tab, index) => {
-          tab.addEventListener('click', () => select(tab));
+          tab.addEventListener('click', () => {
+            select(tab);
+            if (transcriptTabs.includes(tab)) choice.focus();
+          });
           tab.addEventListener('keydown', event => {
             let next;
             if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
             else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
             else if (event.key === 'Home') next = 0;
             else if (event.key === 'End') next = tabs.length - 1;
+            else if (transcriptTabs.includes(tab) && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+              const offset = event.key === 'ArrowDown' ? 1 : -1;
+              next = tabs.indexOf(transcriptTabs[(transcriptTabs.indexOf(tab) + offset + transcriptTabs.length) % transcriptTabs.length]);
+            }
             else return;
             event.preventDefault();
             select(tabs[next]);
+            openOptions(transcriptTabs.includes(tabs[next]));
             tabs[next].focus();
           });
         });
@@ -114,7 +179,7 @@
     .source { margin: 26px 0 0; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
     .source strong { color: var(--secondary); font-weight: 500; }
     .tabs-wrap { position: sticky; top: 0; z-index: 1; padding: 0 40px; background: var(--surface); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line); }
-    [role="tablist"] { display: flex; gap: 20px; overflow-x: auto; }
+    [role="tablist"] { display: flex; flex-wrap: wrap; gap: 0 20px; overflow: visible; }
     [role="tab"] { flex: 0 0 auto; min-height: 76px; padding: 14px 2px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
     .tab-title { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
     .tab-description { display: block; margin-top: 6px; padding-left: 35px; font-size: 11px; font-weight: 400; }
@@ -128,12 +193,34 @@
     .detail-dots .dot { display: block; width: 3.5px; height: 3.5px; border-radius: 50%; background: currentColor; }
     [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
     [role="tab"]:hover { color: var(--ink); }
-    [role="tab"].source-tab { margin: 8px 0; padding: 8px 12px; min-height: 60px; border-radius: 6px 6px 0 0; background: var(--line-soft); color: var(--secondary); font-size: 13px; }
-    [role="tab"].source-tab[aria-selected="true"] { border-bottom-color: var(--secondary); color: var(--strong); }
     .model-name { font-size: 11px; font-weight: 500; }
     .icon-slot { display: inline-grid; place-items: center; width: 28px; height: 18px; }
     .transcript-icon { display: block; position: relative; width: 14px; height: 16px; border: 1.4px solid currentColor; border-radius: 2px; }
     .transcript-icon::after { content: ""; position: absolute; top: 4px; left: 3px; width: 6px; height: 1px; background: currentColor; box-shadow: 0 3px currentColor, 0 6px currentColor; }
+    :root { --selected-line: #b5763d; --selected-fill: #fbf4ec; }
+    :root[data-theme="dark"] { --selected-line: #c99765; --selected-fill: #302820; }
+    .transcript-picker { position: relative; display: flex; align-items: center; width: 270px; max-width: 100%; }
+    #transcript-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 60px; margin: 7px 0; padding: 10px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+    #transcript-toggle[data-active="true"] { border-color: var(--selected-line); background: var(--selected-fill); }
+    #transcript-toggle:hover { background: var(--line-soft); }
+    .picker-copy { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+    #transcript-choice-title { font-weight: 600; }
+    #transcript-choice-description { color: var(--muted); font-size: 11px; }
+    .picker-arrow { flex-shrink: 0; color: var(--muted); }
+    [aria-expanded="true"] .picker-arrow { transform: rotate(180deg); }
+    #transcript-options { width: 100%; padding: 6px; background: var(--surface); }
+    [data-enhanced="true"] #transcript-options { position: absolute; top: 100%; right: 0; z-index: 2; width: 300px; max-width: calc(100vw - 48px); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px var(--shadow); }
+    #transcript-options [role="tab"] { position: relative; display: block; width: 100%; min-height: 64px; margin: 0; padding: 10px 27px 10px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); font-size: 13px; white-space: normal; }
+    #transcript-options .tab-title { display: block; white-space: normal; overflow-wrap: anywhere; }
+    #transcript-options .icon-slot { display: none; }
+    #transcript-options .model-name { font: inherit; }
+    #transcript-options .tab-description { margin: 0; padding: 0; }
+    #transcript-options [role="tab"]:hover { background: var(--line-soft); }
+    #transcript-options [data-current="true"] { border-color: var(--selected-line); background: var(--selected-fill); }
+    #transcript-options [data-current="true"]::after { content: "✓"; position: absolute; right: 9px; top: 11px; color: var(--selected-line); }
+    .option-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
+    .processing-badge { flex-shrink: 0; max-width: 48%; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--line-soft); color: var(--secondary); font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+    .menu-heading { margin: 6px 4px 0; padding: 12px 6px 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
     :focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: 3px; }
     [role="tab"]:focus-visible { outline-offset: -5px; }
     [role="tabpanel"] { padding: 26px 40px 36px; }

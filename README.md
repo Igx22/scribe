@@ -443,8 +443,12 @@ replaced by `--report-tabs` and `SCRIBE_REPORT_TABS`; migrate existing commands 
 `.env` files. The old CLI option is rejected and the old environment key is unused.
 
 The HTML report has inline CSS and JavaScript, needs no server or external assets,
-and opens directly in a browser. Tabs support clicks and Left/Right/Home/End keys;
-printing includes the selected tab. Without JavaScript, the first tab is readable.
+and opens directly in a browser. Summary tabs support clicks and Left/Right/Home/End
+keys; printing includes the selected view. The transcript picker opens by clicking
+its name or arrow, hovering with a mouse, or pressing Enter, Space, Up or Down
+while focused. Up/Down cycles through its choices; Escape, an outside click or
+leaving the picker with keyboard focus closes it. Without JavaScript, the transcript
+choices remain visible and the first selected view is readable.
 
 The bottom-right **Generated** timestamp records when this HTML was rendered,
 separately from the meeting's Date. In the viewer's local timezone, a report
@@ -480,8 +484,16 @@ Detail 1, three for Detail 3, five for Detail 5, and two rows of five for Detail
 The same count rule applies to intermediate levels. These decorative icons are
 drawn with inline HTML/CSS and require no image files.
 
-The **Final transcript** tab follows Detail 10 with the default selection. It contains a
-complete copy of the final `.log.md` text,
+The **transcript picker** follows Detail 10 with the default selection. Its button
+shows the current transcript or diarization choice. The dropdown always starts
+with **Final transcript**, followed by available **Source transcripts** and
+**Speaker segmentation** sections. Selecting a view changes the button title and
+description; it does not remove, rename or reorder menu items. A muted orange
+border, soft fill and checkmark mark the chosen transcript view. Summary tabs
+retain their own selection, and the picker remembers the last transcript choice
+while a summary is displayed. On narrow screens, the controls wrap into more rows.
+
+The **Final transcript** choice contains a complete copy of the final `.log.md` text,
 including its metadata, speaker labels, times, uncertainty markers, and whitespace.
 Long transcripts are not truncated. The document icon is drawn with inline CSS;
 transcript content is escaped plain text, so markup or URLs in speech do not become HTML or
@@ -492,7 +504,19 @@ server. Embedding the transcript makes no additional API requests. "Final" means
 the selected pipeline's saved result: local-only and fallback results are not
 described as successfully reconciled.
 
-Smaller gray source tabs follow the selected main tabs automatically:
+Menu badges describe how each view was produced: GPT-Transcribe is **Online**;
+WhisperX, MLX and diarization are **Offline**. Final transcript uses the model
+recorded in the saved log: for example, **GPT-6.1-sol** after successful
+reconciliation, **WhisperX Turbo** or **MLX Turbo** for local/fallback results,
+or **GPT-Transcribe** for API-only recognition. Unknown/legacy provenance has no
+model badge. Changing the current CLI model during summary-only regeneration does
+not relabel an older final log. These badges describe transcript processing,
+independently of the text API used for summaries and the report header.
+
+Existing HTML files keep their layout until regenerated with `--summary-only`;
+ordinary completed-pair skipping still protects them.
+
+Source views appear inside the dropdown instead of taking space in the main row:
 
 - **Transcript · GPT-Transcribe** shows the original API text with audio-chunk
   time ranges and without invented speaker labels.
