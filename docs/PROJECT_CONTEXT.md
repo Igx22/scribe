@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.19.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.19.1 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -387,6 +387,10 @@ reconciliation model. Each menu keeps its own last selection; only one popup is
 open at a time. Configured detail levels retain their order inside the menu,
 while menus follow their first appearance in the selection. No summary text,
 prompt or API behavior changes; unknown model provenance omits the badge.
+Version 2.19.1 separates dot icons from their labels by 14 px and retains the
+selected level's dot count and color on the closed Detail button. All 178 mocked
+tests passed, including icon updates during navigation; Chrome visual checks
+covered all four menu entries and the closed button after choosing Detail 10.
 
 Each output ownership state freezes its source texts before reconciliation and
 binds them to the source signature and final-log hash. Summary-only regeneration

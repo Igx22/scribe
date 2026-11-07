@@ -74,6 +74,9 @@ class ReportDropdownTests(unittest.TestCase):
         self.assertNotIn('GPT-6-luna', menu)
         self.assertIn('aria-controls="detail-options" hidden', content)
         self.assertEqual(content.count('id="detail-toggle"'), 1)
+        trigger = content.split('id="detail-toggle"')[1].split('id="detail-options"')[0]
+        self.assertIn('id="detail-choice-icon" data-count="10" aria-hidden="true"', trigger)
+        self.assertEqual(trigger.count('class="dot"'), 10)
 
     def test_detail_badges_do_not_guess_unknown_provenance_and_escape_model_labels(self):
         for model, expected in [(None, None), ('<img src=x>', '&lt;img src=x&gt;')]:

@@ -4,16 +4,19 @@ macOS command-line tool for detailed conversation logs and summaries with select
 detail in standalone HTML reports. It accepts MKV recordings, extracts the first audio track, and supports
 English, Russian, and mixed conversations. Input recordings are never modified.
 
-The default pipeline is **WhisperX Turbo + Nemotron 3**: WhisperX recognizes the
-words, and Nemotron automatically determines the voices and their speech intervals.
-Both stages run locally after setup. Their options, `--transcription-model whisperx`
-and `--diarization-model nemotron`, can be omitted when using these defaults. Summaries and report
-headers are then generated from the resulting text through the OpenAI API.
-Every ordinary mode then uses GPT text reconciliation before summaries and the
-report header. Only `--offline` skips GPT entirely. Cloud audio recognition is
-available through explicitly selected transcription modes.
+## Requirements
+Mac OS
+OpenAI API Key
 
-For run commands, jump to [4. Transcribe recordings](#4-transcribe-recordings).
+## Pipeline
+
+capture MKV data ⇒
+extract 1st audio track ⇒
+transcribe and detect speakers (multiple formats)  ⇒
+aggregate using GPT 6 API ⇒ clean transcription with speakers
+⇒ summarize using GPT6 API (multiple formats)
+
+
 If this is your first installation, follow the setup steps below.
 
 ## Quick Example
@@ -59,14 +62,11 @@ Monitor the OS-specific default video folder and save results there:
 ```
 
 Normal quality is achieved by using WhisperX Turbo + Nemotron 3 (local model, default option).
-Optional: use and additional GPT Transcribe API : 
-A higher quality can be achieved with GPT transcribe api.
+A bit higher quality can be achieved with paid GPT transcribe api.
+```bash
+./scribe.sh --monitor-dir --transcription-model gpt-transcribe+whisperx
+```
 
-WhisperX Turbo + Nemotron 3
-
-## Report example
-
-TBD
 
 
 ## Setup from GitHub: start here
@@ -491,10 +491,8 @@ defaults; an explicit `--report-tabs` replaces the whole configured selection.
 
 Use summary levels from 1 to 10 and/or `transcript`, separated by spaces or commas,
 for example `--report-tabs 1 5 10 transcript` or `--report-tabs 1,5,10,transcript`.
-Duplicates are removed, detail levels follow the requested order within their
-menu, and at least one view is required. The Detail and Transcript menus follow
-the order of their first appearance in the selection. `--report-tabs 5` creates
-HTML with one summary choice; add `transcript` to
+Duplicates are removed, tabs follow the requested order, and at least one tab is
+required. `--report-tabs 5` creates HTML with one summary tab; add `transcript` to
 include the source conversation. `--report-tabs transcript` creates a transcript-only
 HTML report, without summary requests; the common header still uses text API
 requests. The final transcript and its source views are included only when
@@ -508,12 +506,11 @@ replaced by `--report-tabs` and `SCRIBE_REPORT_TABS`; migrate existing commands 
 `.env` files. The old CLI option is rejected and the old environment key is unused.
 
 The HTML report has inline CSS and JavaScript, needs no server or external assets,
-and opens directly in a browser. View choices support clicks and Left/Right/Home/End
-keys; printing includes the selected view. Both pickers open by clicking
-their name or arrow, hovering with a mouse, or pressing Enter, Space, Up or Down
-while focused. Up/Down cycles through the open menu; Escape, an outside click or
-leaving the picker with keyboard focus closes it. Opening either menu closes the
-other. Without JavaScript, the summary and transcript
+and opens directly in a browser. Summary tabs support clicks and Left/Right/Home/End
+keys; printing includes the selected view. The transcript picker opens by clicking
+its name or arrow, hovering with a mouse, or pressing Enter, Space, Up or Down
+while focused. Up/Down cycles through its choices; Escape, an outside click or
+leaving the picker with keyboard focus closes it. Without JavaScript, the transcript
 choices remain visible and the first selected view is readable.
 
 The bottom-right **Generated** timestamp records when this HTML was rendered,
@@ -548,18 +545,11 @@ The interface is in English; summaries retain their conversation-driven language
 Each Detail menu choice has a small muted-color dot icon matching its level: one dot for
 Detail 1, three for Detail 3, five for Detail 5, and two rows of five for Detail 10.
 The same count rule applies to intermediate levels. These decorative icons are
-drawn with inline HTML/CSS and require no image files.
+drawn with inline HTML/CSS and require no image files. A 14 px gap separates the
+icon from its label. The closed Detail button also retains the selected level's
+icon, updating its dot count and color whenever the selection changes.
 
-The **Detail picker** groups the selected summary levels into one vertical menu.
-Its button shows the last chosen level and description, for example **Detail 1** /
-**Brief**. Only configured levels appear (1, 3, 5 and 10 by default). Each entry has
-a badge naming the model that generated those summaries, such as **GPT-6.1-sol**.
-This model is supplied by the summary stage, independently of the model recorded
-in Final transcript; unknown provenance is not guessed. The menu preserves its
-order and last choice while reading a transcript. Both pickers use the same
-selected outline, fill, checkmark and keyboard interactions.
-
-The **transcript picker** follows the Detail picker with the default selection. Its button
+The **transcript picker** follows Detail 10 with the default selection. Its button
 shows the current transcript or diarization choice. The dropdown always starts
 with **Final transcript**, followed by available **Source transcripts** and
 **Speaker segmentation** sections. Selecting a view changes the button title and

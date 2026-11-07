@@ -194,7 +194,7 @@ class SummaryHtmlTests(unittest.TestCase):
         rendered = app.summary_html(Path("meeting.mkv"), summaries, transcript="Full log.")
         dots = DetailDots(rendered)
         self.assertEqual(dots.counts, {level: level for level in range(1, 11)})
-        self.assertEqual(dots.hidden, ["true"] * 10)
+        self.assertEqual(dots.hidden, ["true"] * 11)  # Initial picker icon plus ten menu icons.
         tabs = [attrs["id"] for tag, attrs in Elements(rendered).elements if attrs.get("role") == "tab"]
         self.assertEqual(tabs, [f"tab-{level}" for level in range(1, 11)] + ["tab-transcript"])
 

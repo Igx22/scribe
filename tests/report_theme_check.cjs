@@ -26,7 +26,7 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(m => element(m[0]));
   const panels = [...html.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map(m => element(m[0]));
   const extra = new Map(['detail', 'transcript'].flatMap(name =>
-    ['picker', 'toggle', 'options', 'choice-title', 'choice-description'].map(suffix => {
+    ['picker', 'toggle', 'options', 'choice-title', 'choice-description', 'choice-icon'].map(suffix => {
       const id = name + '-' + suffix;
       const tag = html.match(new RegExp('<[^>]+id="' + id + '"[^>]*>'));
       return [id, tag ? element(tag[0]) : null];
@@ -90,6 +90,14 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       assert.equal(tab.tabIndex, i === index && !group.options.hidden ? 0 : -1);
     });
     panels.forEach(panel => assert.equal(panel.hidden, panel.id !== tabs[index].attrs['aria-controls']));
+    const detail = groupFixtures.find(group => group.name === 'detail');
+    if (detail) {
+      const selected = detail.tabs.find(tab => tab.attrs['data-current'] === 'true');
+      const icon = extra.get('detail-choice-icon');
+      const level = Number(selected.id.slice(4));
+      assert.equal(icon.attrs['data-count'], String(level));
+      assert.equal((icon.innerHTML.match(/class="dot"/g) || []).length, level);
+    }
   }
   function checkNavigation() {
     active(0);

@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.19.0"
+VERSION = "2.19.1"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1341,11 +1341,11 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                       f'<div class="panel-heading"><h2>{title} · {label}</h2>'
                       f'<span>{description}</span></div>'
                       f'<div class="transcript-content" dir="auto">{text}</div></section>')
-    def picker(identifier, title, description, items):
+    def picker(identifier, title, description, items, icon=""):
         return (f'<div class="report-picker" id="{identifier}-picker">'
             f'<button class="picker-toggle" type="button" id="{identifier}-toggle" aria-expanded="false" '
             f'aria-controls="{identifier}-options" hidden><span class="picker-copy">'
-            f'<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span>'
+            f'<span class="picker-title-row">{icon}<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span></span>'
             f'<span class="picker-choice-description" id="{identifier}-choice-description">{description}</span></span>'
             '<span class="picker-arrow" aria-hidden="true">⌄</span></button>'
             f'<div class="picker-options" id="{identifier}-options">' + "\n".join(items) + '</div></div>')
@@ -1354,7 +1354,9 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
     if detail_index is not None:
         first = next(level for level in selection if level != "transcript")
         description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(first, "Summary")
-        buttons[detail_index] = picker("detail", f"Detail {first}", description, detail_items)
+        icon = (f'<span class="detail-dots" id="detail-choice-icon" data-count="{first}" aria-hidden="true">'
+                + '<i class="dot"></i>' * first + '</span>')
+        buttons[detail_index] = picker("detail", f"Detail {first}", description, detail_items, icon)
     panels = [panel for group in group_order for panel in panel_groups[group]]
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
