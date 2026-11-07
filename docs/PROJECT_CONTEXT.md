@@ -103,6 +103,21 @@ No audio was uploaded, no new API usage or fusion validation occurred, and all
 checks: [comparison](../data/comparison/whisperx-comparison/comparison.html),
 [evidence](../data/comparison/whisperx-comparison/REPORT.txt).
 
+SCR-067 later reviewed the three source panes in the two supplied current HTML
+reports, without listening/reprocessing or new API calls. Literal normalized token
+edit distance against the embedded GPT text was MLX/WhisperX 18/11 of 151 tokens
+(11.9%/7.3%, monologue) and 240/165 of 830 (28.9%/19.9%, discussion): 39%/31%
+fewer disagreements with WhisperX. This is not human-reference WER; spelling and
+number-format differences count too. WhisperX retains more technical terms and
+important phrases, but managed/manageable/self-hosted remains unreliable and
+GPT itself varies project-name spelling. These samples support considering local
+WhisperX for routine notes, not claiming universal equivalence or removing the
+optional reconciliation mode. Nemotron still assigns A/B independently; automatic
+name discovery currently depends on fusion. Both original reports retained their
+hashes/mtimes; no production change was requested. The exact HTML inputs and
+normalization differ from SCR-055. Private evidence:
+[review](../data/comparison/html-transcript-review-20261107/REPORT.txt).
+
 SCR-057 clarified that local inference and gated weight distribution are separate:
 WhisperX ASR needs no HF account with its public weights; default Community-1
 diarization needs account acceptance/token for download, then runs locally.
