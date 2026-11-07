@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.4.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.5.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -41,7 +41,7 @@ See `assign_speakers()`, `fuse_transcripts()`, and
 The tool must support English, Russian, and mixed speech without forcing the
 summary into a fixed language. Summary detail controls retained information,
 independently of reasoning effort; page counts are guidance, never padding quotas.
-The three prompt constants and their renderers in `src/scribe.py` are canonical.
+The prompt constants and their renderers in `src/scribe.py` are canonical.
 `PART_NOTES_PROMPT` is for covering every part of long input, not reconciling the
 two recognizers. `FUSION_PROMPT` owns reconciliation.
 
@@ -109,6 +109,22 @@ results are invalidated by changed inputs or settings. Forced transcript changes
 archive both summary formats to avoid leaving stale results beside a new log.
 After successful summary-only generation for an edited log, a known stale summary
 in the other format is also archived. Failed generation preserves existing reports.
+
+The approved header adds a common topic, participants with supported roles,
+duration, and date. Names are reused from the final log's turn labels rather than
+rediscovered during summary generation. Structured role claims require quoted
+reliable evidence, including the participant's own turn and the role phrase;
+conflicting or unsupported roles are omitted. Semantic attribution still depends
+on the model. This avoids inferring a person's job from technical expertise or a
+reference to an absent administrator. Long logs are covered in parts with boundary
+context, then their supported topics are combined. Independent validated checkpoints
+avoid repeating successful header extraction on unchanged inputs.
+
+Duration is parsed from log metadata. Date is parsed from explicit log metadata
+or a recognized recording filename, with provenance visible in the report. Neither
+is guessed by a text model or taken from filesystem timestamps. Missing facts stay
+unestablished. The HTML-only metadata calls leave single-level Markdown behavior
+unchanged; README owns the exact formats and request/resume details.
 
 ## Important observed results
 
@@ -188,6 +204,24 @@ under `data/comparison/summary-tabs-preview/`. The HTML contains all three popul
 tabs and no external assets. Structural and offline interaction checks passed;
 browser visual verification was unavailable because the browser tool rejected
 local-file navigation. The actual result was selected in Finder for user review.
+
+### Header on the saved real log
+
+Version 2.5.0 passed 83 mocked unit tests, including citation rejection, cross-part
+role evidence, conflicting roles, date/duration provenance, and retry preservation.
+A separate user-authorized example regenerated levels 1, 3, 5, and 10 plus the
+header with `gpt-6.1-sol:medium`. It reused the final log without audio, diarization,
+fusion, or intermediate notes. All five requests completed without validation
+failures in 51.4 seconds; returned usage totaled 13,990 input and 2,802 output
+tokens, including 217 reasoning tokens. The log establishes only A/B labels and
+no participant roles, so the header retains A and B. Duration is 7 min 5 sec;
+the displayed date comes from the recording filename and is marked accordingly.
+
+The actual HTML and usage/preservation evidence are local-only under
+`data/comparison/report-header-preview/`. Original log and summary bytes and
+modification times were unchanged. The file was selected in Finder; header
+structure was checked, while browser visual verification remains unavailable.
+This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 

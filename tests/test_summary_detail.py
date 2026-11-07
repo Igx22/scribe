@@ -121,6 +121,7 @@ class SummaryConfigurationTests(unittest.TestCase):
                 before = (log.read_bytes(), log.stat().st_mtime_ns)
                 with patch.object(app, "load_env", side_effect=lambda: load_env(env)), \
                         patch.object(app, "summarize", side_effect=lambda *a, detail: f"Summary at level {detail}.") as summarize, \
+                        patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}}), \
                         patch.object(app, "extract_audio") as extract, patch.object(app, "ensure_models") as models:
                     self.assertEqual(app.main(["-f", str(source), "--summary-only", "--output-dir", str(output),
                                                "--cache-dir", str(root / "cache"), *options]), 0)

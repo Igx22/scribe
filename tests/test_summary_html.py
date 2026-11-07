@@ -21,6 +21,11 @@ class Elements(HTMLParser):
 
 
 class SummaryHtmlTests(unittest.TestCase):
+    def setUp(self):
+        metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
     def setup_case(self, root, *extra):
         source = root / "meeting.mkv"
         source.write_bytes(b"input")

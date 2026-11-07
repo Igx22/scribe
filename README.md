@@ -264,6 +264,35 @@ printing includes the selected tab. Without JavaScript, the first tab is readabl
 Model text and filenames are escaped as text, never rendered as HTML instructions.
 The interface is in English; summaries retain their conversation-driven language.
 
+The common report header shows Topic, Participants, Duration, and Date in that
+order. A separate structured text request derives one short topic sentence and
+supported roles from the saved log, independently of the selected summary levels.
+Participant names are the log's existing turn labels; this step never identifies
+speakers anew. Unnamed voices keep A/B labels, and unassigned speech is not invented
+as another participant. Roles are included only with reliable quoted evidence that
+includes the participant's own turn; each role phrase must occur in that evidence.
+The prompt accepts explicit self-descriptions or confirmed introductions, and
+rejects guesses based on technical knowledge, discussion topics, task ownership,
+or roles of absent people. Unsupported or conflicting roles are omitted. Citation
+checks do not independently prove that the model interpreted a role correctly.
+
+Duration comes from the log's `Duration` metadata, never the model. New API-only
+logs also record the audio-chunk duration. Older logs without it show `Not recorded`.
+Date uses explicit ISO `Date` or `Recorded at` log metadata when present; otherwise
+it uses a recognized recording filename such as `2026-09-25 16-55-39.mkv`. The
+report states when the filename supplied the date. File creation/modification
+times are never substituted for the meeting date, and a timezone is not guessed.
+Missing topics or participants show `Not established`; missing dates show
+`Not recorded`.
+
+Header extraction covers every part of long logs, with neighboring context for
+role evidence across boundaries and a topic-combination step when needed. This
+adds text API requests to HTML generation. Validated header responses are cached
+separately by their input, roster, model/effort, prompt, and schema, and revalidated
+on reuse. `--force` bypasses them. A header error during summary-only regeneration preserves the existing report;
+retrying the same request reuses already completed summaries. Single-level
+Markdown generation makes no header-extraction request.
+
 | Level | Approximate length for long, information-dense discussions | Word guide |
 | --- | --- | --- |
 | `1` | Half a page to one page: main points, outcome, decisions, and actions | 200–450 |
@@ -390,6 +419,7 @@ scribe/
     test_modes.py
     test_summary_detail.py
     test_summary_html.py
+    test_report_header.py
     test_setup.py
     test_speaker_names.py
   docs/
@@ -448,7 +478,7 @@ override their respective defaults; they do not relocate `data/.venv`.
 
 `data/.cache` includes GPT audio responses, voice intervals, Whisper words, source
 transcripts, fusion responses, output ownership, locks, previous generated results,
-library caches, and temporary extracted/chunk audio. Temporary audio directories
+report-header responses, library caches, and temporary extracted/chunk audio. Temporary audio directories
 are removed normally; forced process termination can leave temporary files there.
 The two raw sources are `<source-cache>/sources/gpt-transcribe.txt` and
 `<source-cache>/sources/local.log.md`. Output filenames keep the recording's stem.
@@ -537,6 +567,8 @@ The actual instructions are constants near the top of `src/scribe.py`:
 - `FUSION_PROMPT`: combine clear GPT words with fixed local voice/time anchors.
 - `SUMMARIZATION_PROMPT`: final summary template, including language and detail rules.
 - `PART_NOTES_PROMPT`: detail-aware factual notes template for long transcripts.
+- `REPORT_HEADER_PROMPT`: grounded topic and role extraction for the HTML header.
+- `REPORT_TOPIC_PROMPT`: combine supported topics from every part of a long log.
 
 `summary_prompt()` fills `{summary_detail}`, `{summary_min_words}`, and
 `{summary_max_words}` in the final template. `notes_prompt()` fills
@@ -636,7 +668,10 @@ notes. Configuration checks cover the four default tabs, `.env` lists, environme
 and CLI precedence, single-level Markdown overrides, and invalid defaults. HTML
 checks cover multi-level parsing, escaping, tab associations, completed
 output protection in either format, interrupted-level reuse, invalidation, and
-preservation of existing results on failure. Name checks cover introductions, cross-chunk address/response evidence,
+preservation of existing results on failure. Header checks cover role citations,
+unknown participants, date/duration provenance, long-log coverage, conflicting
+roles, escaped metadata, checkpoint revalidation, and preservation after header
+failures. Name checks cover introductions, cross-chunk address/response evidence,
 conflicts and corrections, invalid citations, shared names, checkpoint reuse, and
 two-/three-person address evidence, human-name preference over nicknames, and names
 reaching the final log and summary. Setup checks cover a ready virtual

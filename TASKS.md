@@ -87,5 +87,5 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-035 | Rename the task register to TASKS.md and commit agent/task guidance | Done | 2026-11-07 | 2026-11-07 |
 | SCR-036 | Recognize transcript-supported speaker names during fusion | Done | 2026-11-07 | 2026-11-07 |
 | SCR-037 | Put English before Russian and use English example names throughout project documentation | Done | 2026-11-07 | 2026-11-07 |
-| SCR-038 | Generate multiple summary detail levels in a standalone tabbed HTML file | Done | 2026-11-07 | 2026-11-07 |
+| SCR-038 | Generate tabbed HTML summaries with grounded meeting metadata | Done | 2026-11-07 | 2026-11-07 |
 | SCR-039 | Default to summary levels 1, 3, 5, 10 and configure levels through .env | Done | 2026-11-07 | 2026-11-07 |
