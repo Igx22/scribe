@@ -4,6 +4,14 @@ macOS command-line tool for detailed conversation logs and summaries with select
 detail in standalone HTML reports. It accepts MKV recordings, extracts the first audio track, and supports
 English, Russian, and mixed conversations. Input recordings are never modified.
 
+The default pipeline is **WhisperX Turbo + Nemotron 3**: WhisperX recognizes the
+words, and Nemotron automatically determines the voices and their speech intervals.
+Both stages run locally after setup. Their options, `--transcription-model whisperx`
+and `--diarization-model nemotron`, can be omitted when using these defaults. Summaries and report
+headers are then generated from the resulting text through the OpenAI API.
+Cloud audio recognition and text reconciliation are available through explicitly
+selected transcription modes.
+
 For run commands, jump to [4. Transcribe recordings](#4-transcribe-recordings).
 If this is your first installation, follow the setup steps below.
 
@@ -253,6 +261,7 @@ source/settings match.
 
 ## Transcription modes
 
+The default combination is `--transcription-model whisperx --diarization-model nemotron`.
 `--transcription-model` accepts five values:
 
 | Value | Internet during recognition | Recognition and final log | Local voice labels | Audio uploaded |
