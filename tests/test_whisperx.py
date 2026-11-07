@@ -69,7 +69,8 @@ class WhisperXTests(unittest.TestCase):
             source = root / 'meeting.mkv'
             source.write_bytes(b'recording')
             args = app.build_parser().parse_args(['--offline', '--transcription-model', 'mlx',
-                '--cache-dir', str(root / 'cache'), '--output-dir', str(root / 'out')])
+                '--output-dir', str(root / 'out')])
+            args.cache_dir = root / 'cache'
             app.configure_mode(args)
             log, _ = app.output_paths(source, args.output_dir)
             app.atomic_write(log, 'Preserved MLX transcript')
@@ -87,13 +88,6 @@ class WhisperXTests(unittest.TestCase):
                     app.process_file(source, args, '')
                 extract.assert_not_called()
             self.assertEqual((log.read_bytes(), log.stat().st_mtime_ns), before)
-
-    def test_unsupported_whisperx_language_fails_before_models_or_api_calls(self):
-        with patch.object(app,'load_env'),patch.object(app,'ensure_models') as models, \
-                patch.object(app,'transcribe_gpt') as cloud:
-            with self.assertRaisesRegex(app.AppError,'English and Russian'):
-                app.main(['--language','de','--transcription-model',app.COMBINED_MODE])
-            models.assert_not_called();cloud.assert_not_called()
 
     def test_community_is_local_and_does_not_receive_count_hints(self):
         with tempfile.TemporaryDirectory() as tmp:

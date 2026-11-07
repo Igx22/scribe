@@ -17,8 +17,9 @@ class AllModeTests(unittest.TestCase):
     def setup_case(self, root, *extra):
         source = root / 'meeting.mkv'
         source.write_bytes(b'recording')
-        args = app.build_parser().parse_args(['--transcription-model', 'all', '--cache-dir', str(root / 'cache'),
+        args = app.build_parser().parse_args(['--transcription-model', 'all',
             '--output-dir', str(root / 'out'), '--report-tabs', '1,3,5,10,transcript', *extra])
+        args.cache_dir = root / 'cache'
         cache = args.cache_dir / hashlib.sha256(str(source).encode()).hexdigest()[:16]
         return source, args, cache
 
@@ -186,9 +187,3 @@ class AllModeTests(unittest.TestCase):
                  patch.object(app.urllib.request, 'urlopen', side_effect=download):
                 app.ensure_models(root, transcription_model='all')
             self.assertEqual(set(downloaded), {'whisperx', 'mlx', 'nemotron'})
-
-    def test_all_rejects_unsupported_whisperx_language_before_any_recognition(self):
-        with patch.object(app, 'load_env'), patch.object(app, 'ensure_models') as models:
-            with self.assertRaisesRegex(app.AppError, 'English and Russian'):
-                app.main(['--transcription-model', 'all', '--language', 'de'])
-            models.assert_not_called()

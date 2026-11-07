@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.19.1"
+VERSION = "2.20.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -522,7 +522,7 @@ def ensure_models(models_dir, offline=False, verify=False, *,
             continue
         if offline:
             raise AppError(f"Model is missing or damaged: {target}. "
-                           "Run --download-models without --offline.")
+                           "Run --setup without --offline.")
         say(f"Downloading model: {item['path']} ({item['size'] / 1024**2:.0f} MiB)")
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".download")
@@ -710,7 +710,7 @@ def recognize_whisperx(audio, models_dir, language, vocabulary):
     detected = result["language"]
     if detected not in spec["alignment"]:
         raise AppError(f"WhisperX word alignment is prepared for English and Russian, not '{detected}'. "
-                       "Use --language en/ru, --transcription-model mlx, or gpt-transcribe-online.")
+                       "Use --transcription-model mlx or gpt-transcribe-online.")
     try:
         nltk.data.find("tokenizers/punkt_tab/" + ("english" if detected == "en" else "russian") + "/")
     except LookupError:
@@ -2456,8 +2456,9 @@ def build_parser():
     p.add_argument("--diarization-model", choices=("nemotron", "community-1"), default="nemotron",
                    help="Local automatic voice model; Community-1 needs gated HF access for download. Ignored for API-only recognition")
     p.add_argument("--output-dir", type=Path, help="Output directory; defaults to the monitor folder in monitor mode, otherwise ./data in the launch directory")
-    p.add_argument("--language", default="auto", help="Language code; auto detects per recording with WhisperX or per chunk with MLX; GPT receives en/ru hints")
-    p.add_argument("--vocabulary", default="", help="Optional domain-specific terms/names for Whisper")
+    # Keep backend/cache settings stable; isolated callers may override the namespace.
+    p.set_defaults(language="auto", vocabulary="", models_dir=APP_DATA / "models",
+                   cache_dir=APP_DATA / ".cache")
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
                    default=os.getenv("SCRIBE_SUMMARIZE_MODEL", f"{DEFAULT_MODEL}:{DEFAULT_EFFORT}"),
                    help="Report and final GPT reconciliation model/effort. none disables reports; reconciliation then uses Sol medium unless --offline")
@@ -2465,16 +2466,14 @@ def build_parser():
                    nargs="+", metavar="TAB[,TAB]",
                    default=os.getenv("SCRIBE_REPORT_TABS", DEFAULT_REPORT_TABS),
                    help="HTML report tabs: summary levels 1–10 and/or transcript, e.g. 1,5,10,transcript. "
-                        "Overrides SCRIBE_REPORT_TABS from .env; order is preserved. "
+                        "Overrides SCRIBE_REPORT_TABS from .env; levels keep their order within menus. "
                         "1 brief, 5 expanded, 10 detailed; short sources stay short")
-    p.add_argument("--models-dir", type=Path, default=APP_DATA / "models", help="Local model directory")
-    p.add_argument("--cache-dir", type=Path, default=APP_DATA / ".cache", help="Intermediate results and state directory")
     p.add_argument("--force", action="store_true", help="Process completed pairs again; bypass recognition/API caches")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--transcribe-only", action="store_true", help="Alias for --summarize-model none; final GPT reconciliation still uses the API unless --offline")
     group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from existing .log.md files in the output directory")
     p.add_argument("--offline", action="store_true", help="Force local recognition and no summary; retain explicit mlx, otherwise use whisperx; no API calls/downloads")
-    p.add_argument("--setup", "--download-models", dest="download_models", action="store_true",
+    p.add_argument("--setup", action="store_true",
                    help="Prepare local models and exit; scribe.sh also prepares data/.venv. No MKV files or API key required")
     p.add_argument("--verify-models", action="store_true", help="Verify model SHA-256 hashes as well as sizes")
     p.add_argument("--show-prompt", action="store_true", help="Print the summary prompt and exit")
@@ -2485,7 +2484,7 @@ def build_parser():
 def main(argv=None):
     load_env()
     args = build_parser().parse_args(argv)
-    if args.monitor_dir is not None and (args.summary_only or args.force or args.download_models or args.show_prompt):
+    if args.monitor_dir is not None and (args.summary_only or args.force or args.setup or args.show_prompt):
         raise AppError("--monitor-dir cannot be combined with --summary-only, --force, --setup, or --show-prompt.")
     if args.show_prompt:
         levels = summary_levels(args.report_tabs)
@@ -2495,11 +2494,6 @@ def main(argv=None):
             say("No summary tabs selected; the transcript is embedded without summarization.")
         return 0
     configure_mode(args)
-    if (not args.summary_only and not args.download_models
-            and args.transcription_model in ("whisperx", COMBINED_MODE, ALL_MODE)
-            and args.language not in ("auto", "en", "ru")):
-        raise AppError("WhisperX alignment is prepared for English and Russian. "
-                       "Use --language auto/en/ru, or select mlx or gpt-transcribe-online.")
     args.models_dir = args.models_dir.expanduser().resolve()
     args.cache_dir = args.cache_dir.expanduser().resolve()
     if args.monitor_dir is True:
@@ -2511,7 +2505,7 @@ def main(argv=None):
     if args.summary_only and args.summarize_model is None:
         say("Report generation is disabled; nothing to do.")
         return 0
-    if args.download_models:
+    if args.setup:
         ensure_models(args.models_dir, args.offline, args.verify_models,
                       transcription_model=args.transcription_model, diarization_model=args.diarization_model)
         say("API-only mode needs no local models." if args.transcription_model == ONLINE_MODE else "Selected models are ready.")

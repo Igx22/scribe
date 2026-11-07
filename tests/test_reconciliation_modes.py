@@ -19,8 +19,9 @@ class ReconciliationModeTests(unittest.TestCase):
         source = root / '2026-11-07 14-37-07 (1speaker).mkv'
         source.write_bytes(b'fixture')
         args = app.build_parser().parse_args(['--transcription-model', mode,
-            '--cache-dir', str(root / 'cache'), '--output-dir', str(root / 'out'),
+             '--output-dir', str(root / 'out'),
             '--summarize-model', 'none', *(['--offline'] if offline else [])])
+        args.cache_dir = root / 'cache'
         chunks = [{'index': 0, 'start': 0, 'end': 4, 'text': 'Hello. My name is Alice.'}]
         payloads = []
         def call(key, model, effort, prompt, text, **kwargs):

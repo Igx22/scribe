@@ -91,8 +91,8 @@ class ReportDropdownTests(unittest.TestCase):
             root = Path(tmp)
             source = root / 'meeting.mkv'; source.write_bytes(b'fixture')
             args = app.build_parser().parse_args(['--summary-only', '--report-tabs', '10,transcript,1',
-                '--summarize-model', 'gpt-6-luna:low', '--output-dir', str(root / 'out'),
-                '--cache-dir', str(root / 'cache')])
+                '--summarize-model', 'gpt-6-luna:low', '--output-dir', str(root / 'out')])
+            args.cache_dir = root / 'cache'
             log, report = app.output_paths(source, args.output_dir)
             app.atomic_write(log, 'Saved final log.')
             with patch.object(app, 'summarize', return_value='Summary.'), \

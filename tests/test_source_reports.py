@@ -53,8 +53,9 @@ class SourceReportTests(unittest.TestCase):
         source = root / 'meeting.mkv'
         source.write_bytes(b'recording')
         args = app.build_parser().parse_args(['--transcription-model', mode,
-            '--output-dir', str(root / 'out'), '--cache-dir', str(root / 'cache'),
+            '--output-dir', str(root / 'out'),
             '--report-tabs', '1,3,5,10,transcript'])
+        args.cache_dir = root / 'cache'
         return source, args
 
     def run_pipeline(self, source, args, *, cloud_failure=False, fusion_failure=False):

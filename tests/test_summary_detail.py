@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import runtime_paths
 
 
 class SummaryDetailTests(unittest.TestCase):
@@ -123,12 +124,13 @@ class SummaryConfigurationTests(unittest.TestCase):
                 log, _ = app.output_paths(source, output)
                 app.atomic_write(log, "Reviewed conversation.")
                 before = (log.read_bytes(), log.stat().st_mtime_ns)
-                with patch.object(app, "load_env", side_effect=lambda: load_env(env)), \
+                with runtime_paths(cache_dir=root / "cache"), \
+                        patch.object(app, "load_env", side_effect=lambda: load_env(env)), \
                         patch.object(app, "summarize", side_effect=lambda *a, detail: f"Summary at level {detail}.") as summarize, \
                         patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}}), \
                         patch.object(app, "extract_audio") as extract, patch.object(app, "ensure_models") as models:
                     self.assertEqual(app.main(["-f", str(source), "--summary-only", "--output-dir", str(output),
-                                               "--cache-dir", str(root / "cache"), *options]), 0)
+                                               *options]), 0)
                 self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], app.summary_levels(tabs))
                 extract.assert_not_called(); models.assert_not_called()
                 self.assertEqual(before, (log.read_bytes(), log.stat().st_mtime_ns))

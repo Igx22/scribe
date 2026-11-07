@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import runtime_paths
 
 
 class ModeTests(unittest.TestCase):
@@ -34,8 +35,9 @@ class ModeTests(unittest.TestCase):
         source = root / "recording.mkv"
         source.write_bytes(b"fixture")
         args = app.build_parser().parse_args([
-            "-f", str(source), "--cache-dir", str(root / "data/.cache"),
+            "-f", str(source),
             "--output-dir", str(root / "data"), "--report-tabs", "1", *options])
+        args.cache_dir = root / "data/.cache"
         local = {"duration": 2, "words": [], "voices": [], "turns": [
             {"start": 0, "end": 2, "speaker": 1, "text": "Recognized locally."}]}
         chunks = [{"index": 0, "start": 0, "end": 2, "text": "Recognized via API."}]
@@ -148,12 +150,12 @@ class ModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source, args, _, chunks = self.setup_case(root)
-            with patch.object(app, "load_env"), patch.object(app, "ensure_models") as models, \
+            with runtime_paths(cache_dir=args.cache_dir), \
+                    patch.object(app, "load_env"), patch.object(app, "ensure_models") as models, \
                     patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "local_recognition") as local:
                 self.assertEqual(app.main(["-f", str(source), "--transcription-model", "gpt-transcribe-online",
-                    "--summarize-model", "none", "--output-dir", str(args.output_dir),
-                    "--cache-dir", str(args.cache_dir)]), 0)
+                    "--summarize-model", "none", "--output-dir", str(args.output_dir)]), 0)
             models.assert_not_called(); local.assert_not_called()
 
 

@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import runtime_paths
 
 
 class Elements(HTMLParser):
@@ -77,8 +78,9 @@ class SummaryHtmlTests(unittest.TestCase):
         source = root / "meeting.mkv"
         source.write_bytes(b"input")
         args = app.build_parser().parse_args([
-            "--output-dir", str(root / "data"), "--cache-dir", str(root / "cache"),
+            "--output-dir", str(root / "data"),
             "--report-tabs", "1", "5", "10", "transcript", *extra])
+        args.cache_dir = root / "cache"
         log, summary = app.output_paths(source, args.output_dir)
         app.atomic_write(log, "Reviewed conversation.\n")
         return source, args, log, summary
@@ -287,10 +289,11 @@ class SummaryHtmlTests(unittest.TestCase):
                     previous[legacy.suffix] = legacy.read_bytes()
                 old_log = log.read_bytes()
                 options = ['-f', str(source), '--force', '--transcription-model', app.ONLINE_MODE,
-                           '--output-dir', str(args.output_dir), '--cache-dir', str(args.cache_dir),
+                           '--output-dir', str(args.output_dir),
                            '--report-tabs', '1,5,10,transcript']
                 chunks = [{'index': 0, 'start': 0, 'end': 4, 'text': 'Newly recognized conversation.'}]
-                with patch.object(app, 'load_env'), patch.dict(app.os.environ, {'OPENAI_API_KEY': 'fixture-key'}), \
+                with runtime_paths(cache_dir=args.cache_dir), \
+                     patch.object(app, 'load_env'), patch.dict(app.os.environ, {'OPENAI_API_KEY': 'fixture-key'}), \
                      patch.object(app, 'extract_audio') as extract, \
                      patch.object(app, 'transcribe_gpt', return_value=chunks) as cloud, \
                      patch.object(app, 'summarize', side_effect=lambda *a, detail: f'REGENERATED_SUMMARY_{detail}') as summarize:

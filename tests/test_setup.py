@@ -10,19 +10,21 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import runtime_paths
 
 
 class SetupTests(unittest.TestCase):
     def test_setup_prepares_models_without_recordings_or_an_api_key(self):
         with tempfile.TemporaryDirectory() as temporary:
             models = Path(temporary) / "models"
-            for option, offline in (("--setup", False), ("--setup", True), ("--download-models", False)):
+            for option, offline in (("--setup", False), ("--setup", True)):
                 with self.subTest(option=option, offline=offline), \
+                        runtime_paths(models_dir=models), \
                         patch.object(app, "load_env"), patch.dict(os.environ, {}, clear=True), \
                         patch.object(app, "ensure_models") as prepare, \
                         patch.object(app, "process_file") as process, \
                         patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")):
-                    arguments = [option, "--models-dir", str(models)]
+                    arguments = [option]
                     if offline:
                         arguments.append("--offline")
                     self.assertEqual(app.main(arguments), 0)

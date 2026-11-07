@@ -15,6 +15,7 @@ import urllib.error
 import wave
 
 import scribe as app
+from tests import runtime_paths
 
 
 class AppTests(unittest.TestCase):
@@ -143,10 +144,11 @@ class AppTests(unittest.TestCase):
             for source in sources:
                 source.write_bytes(b"original recording")
             options = ["--input-dir", str(recordings), "--output-dir", str(recordings),
-                       "--cache-dir", str(root / "cache"), "--transcription-model", "gpt-transcribe-online",
+                       "--transcription-model", "gpt-transcribe-online",
                        "--report-tabs", "1", "transcript"]
             chunks = [{"index": 0, "start": 0, "end": 2, "text": "Meeting words."}]
-            with patch.object(app, "load_env"), patch.dict(os.environ, {"OPENAI_API_KEY": "unit-test-key"}), \
+            with runtime_paths(cache_dir=root / "cache"), \
+                    patch.object(app, "load_env"), patch.dict(os.environ, {"OPENAI_API_KEY": "unit-test-key"}), \
                     patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks) as gpt, \
                     patch.object(app, "summarize", return_value="Meeting summary.") as summary, \
                     patch.object(app, "ensure_models") as models:
@@ -290,9 +292,10 @@ class AppTests(unittest.TestCase):
     def test_resume_api_failure_uses_existing_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"input")
-            args = app.build_parser().parse_args(["-f", str(source), "--cache-dir", str(root / "cache"),
+            args = app.build_parser().parse_args(["-f", str(source),
                                                  "--output-dir", str(root / "data"),
                                                  "--transcription-model", "mlx", "--report-tabs", "1"])
+            args.cache_dir = root / "cache"
             log, summary = app.output_paths(source, args.output_dir)
             log.parent.mkdir()
             log.write_text("Reviewed transcript", encoding="utf-8")

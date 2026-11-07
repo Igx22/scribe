@@ -2,9 +2,9 @@
 
 ## Start here
 
-- Read [README.md](README.md) for setup, CLI behavior, and the test command.
+- Read [README.md](README.md) for setup and CLI behavior.
 - Read [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) for design rationale,
-  experiment findings, and unresolved limitations before changing the pipeline.
+  experiment findings, the test command, and unresolved limitations before changing the pipeline.
 - Read [TASKS.md](TASKS.md) for numbered requests, their status, and the task-register
   rules. A listed task is not authorization to start unrelated work.
 - Inspect the current code and working tree. A previous chat is historical
@@ -42,7 +42,7 @@
 
 ## Verification
 
-- Use the mocked unit suite documented in README for pipeline changes; it needs
+- Use the mocked unit suite documented in `docs/PROJECT_CONTEXT.md` for pipeline changes; it needs
   no paid API calls. Choose checks appropriate to the change. Documentation-only
   work does not require model downloads or a transcription run.
 - For summary/model experiments, reuse an existing log or cached sources whenever

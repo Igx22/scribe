@@ -199,7 +199,8 @@ class ReportHeaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
             args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "1,5",
-                "--output-dir", str(root / "output"), "--cache-dir", str(root / "cache")])
+                "--output-dir", str(root / "output")])
+            args.cache_dir = root / "cache"
             log, report = app.output_paths(source, args.output_dir)
             app.atomic_write(log, self.log()); app.atomic_write(report, "Reviewed report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)
@@ -220,7 +221,8 @@ class ReportHeaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
             args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "1",
-                "--output-dir", str(root / "output"), "--cache-dir", str(root / "cache")])
+                "--output-dir", str(root / "output")])
+            args.cache_dir = root / "cache"
             log, summary = app.output_paths(source, args.output_dir)
             app.atomic_write(log, self.log())
             with patch.object(app, "summarize", return_value="Plain summary."), \
@@ -235,7 +237,8 @@ class ReportHeaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
             args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "5",
-                "--output-dir", str(root / "output"), "--cache-dir", str(root / "cache")])
+                "--output-dir", str(root / "output")])
+            args.cache_dir = root / "cache"
             log, report = app.output_paths(source, args.output_dir)
             app.atomic_write(log, self.log()); app.atomic_write(report, "Previous report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)

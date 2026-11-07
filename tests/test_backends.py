@@ -20,8 +20,9 @@ class BackendTests(unittest.TestCase):
         source = root / "meeting.mkv"
         source.write_bytes(b"input")
         args = app.build_parser().parse_args([
-            "-f", str(source), "--cache-dir", str(root / "cache"),
+            "-f", str(source),
             "--output-dir", str(root / "data"), "--report-tabs", "1", "--transcription-model", app.COMBINED_MODE])
+        args.cache_dir = root / "cache"
         local = {"duration": 2, "words": [], "voices": [], "turns": [
             {"start": 0, "end": 2, "speaker": 1, "uncertain": False, "text": "Local source text."}]}
         return source, args, local

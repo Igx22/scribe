@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import runtime_paths
 
 
 def element(element_id, payload):
@@ -45,15 +46,16 @@ class MonitorTests(unittest.TestCase):
             if clock["step"] >= steps:
                 raise KeyboardInterrupt
         output = io.StringIO()
-        with patch.object(app.time, "monotonic", side_effect=lambda: clock["now"]), \
+        root = Path(args[args.index("--monitor-dir") + 1])
+        with runtime_paths(cache_dir=root / "cache"), \
+                patch.object(app.time, "monotonic", side_effect=lambda: clock["now"]), \
                 patch.object(app.time, "sleep", side_effect=sleep), contextlib.redirect_stdout(output), \
                 self.assertRaises(KeyboardInterrupt):
             app.main(args)
         return output.getvalue()
 
     def options(self, root, *extra):
-        return ["--monitor-dir", str(root), "--output-dir", str(root),
-                "--cache-dir", str(root / "cache"), *extra]
+        return ["--monitor-dir", str(root), "--output-dir", str(root), *extra]
 
     def test_bare_monitor_flag_selects_os_video_folder_and_same_output(self):
         with tempfile.TemporaryDirectory() as tmp:

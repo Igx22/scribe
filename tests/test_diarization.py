@@ -214,7 +214,8 @@ class NemotronTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"source")
             args = app.build_parser().parse_args(["--transcription-model", "gpt-transcribe-online", "--summarize-model", "none",
-                "--cache-dir", str(root/"cache"), "--output-dir", str(root/"out")])
+                 "--output-dir", str(root/"out")])
+            args.cache_dir = root/"cache"
             chunks=[{"index":0,"start":0,"end":4,"text":"Saved cloud words"}]
             with patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks):
                 app.process_file(source,args,"key")
@@ -234,8 +235,9 @@ class NemotronTests(unittest.TestCase):
     def test_old_partial_local_log_is_protected_after_backend_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"source")
-            args = app.build_parser().parse_args(["--offline", "--cache-dir", str(root/"cache"),
+            args = app.build_parser().parse_args(["--offline",
                                                  "--output-dir", str(root/"out")])
+            args.cache_dir = root/"cache"
             app.configure_mode(args)
             log,_ = app.output_paths(source,args.output_dir)
             app.atomic_write(log,"Previously generated or reviewed log")
