@@ -73,10 +73,13 @@ Choose other local assets explicitly:
 
 ```bash
 ./scribe.sh --setup --transcription-model mlx
+./scribe.sh --setup --transcription-model all
 ./scribe.sh --setup --diarization-model community-1
 ```
 
-The MLX + Nemotron selection downloads about 1.73 GB. Community-1 is optional
+The MLX + Nemotron selection downloads about 1.73 GB. `all` prepares both local
+recognizers plus the selected diarizer (about 4.99 GB with Nemotron), reusing
+existing files. Community-1 is optional
 and requires accepting its [model conditions](https://huggingface.co/pyannote/speaker-diarization-community-1)
 and setting `HF_TOKEN` in the ignored `.env` for the initial download. Once
 prepared, it runs locally without a token or network access. Tokens are not
@@ -239,7 +242,7 @@ source/settings match.
 
 ## Transcription modes
 
-`--transcription-model` accepts exactly four values:
+`--transcription-model` accepts five values:
 
 | Value | Recognition and final log | Local voice labels | Audio uploaded |
 | --- | --- | --- | --- |
@@ -247,6 +250,25 @@ source/settings match.
 | `whisperx` (default) | Local WhisperX large-v3-turbo with word alignment | A, B, C, etc. | No |
 | `mlx` | Local MLX Whisper large-v3-turbo | A, B, C, etc. | No |
 | `gpt-transcribe+whisperx` | GPT-Transcribe + WhisperX/voices + GPT text reconciliation | A, B, C, etc.; supported names when available | Yes, extracted audio |
+| `all` | Independent GPT-Transcribe, WhisperX and MLX; final log uses WhisperX | A, B, C, etc. | Yes, extracted audio |
+
+`all` is a comparison mode. It runs GPT-Transcribe Online, WhisperX Turbo and
+MLX Turbo once each, sequentially, with one shared diarization pass. It does not
+invoke `gpt-transcribe+whisperx`, text reconciliation, or name discovery. Final
+transcript and summaries use WhisperX word/voice text; all three original texts
+and the shared diarization are embedded in separate report source tabs when
+`transcript` is selected. Ordinary summary/header text requests still apply.
+
+WhisperX and MLX have independent word checkpoints in `all`, so repeated runs
+or new output folders can reuse both without alternating one shared cache.
+Compatible single-model word checkpoints remain reusable. `--force` reruns
+all three recognizers and one diarization pass. A failed cloud stage leaves both
+local sources and a clearly reported local fallback; without a completed report
+pair, retrying reuses local stages and retries the missing cloud result. A failed
+local recognizer reports an error, preserving completed stage caches for retry.
+As with other modes, a completed log/report pair still skips on the next launch.
+`--offline` retains its existing priority: with `all`, it selects only WhisperX,
+disables summaries and makes no cloud requests.
 
 Choose the voice model independently with `--diarization-model nemotron|community-1`.
 The default is `nemotron`, which detects up to eight voices automatically.
@@ -438,7 +460,8 @@ Smaller gray source tabs follow the selected main tabs automatically:
 
 Only successful source results from that recognition run appear. API-only mode
 has the GPT source; local-only mode has the selected local source and diarization;
-combined mode normally has all three. If cloud recognition fails, there is no GPT
+combined mode normally has all three. `all` normally has four source tabs: GPT-Transcribe, WhisperX, MLX and
+one shared diarization. If cloud recognition fails, there is no GPT
 source tab. If reconciliation fails, both successful inputs remain inspectable
 beside the local final fallback. Local final/source text can be identical when
 no reconciliation ran. Source tabs do not run extra recognizers or API requests.
@@ -760,7 +783,7 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
 | `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
 | `--monitor-dir [DIR]` | Off | Watch growing MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
-| `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, or GPT + WhisperX with reconciliation. |
+| `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers independently. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls combined-mode fusion. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
@@ -783,9 +806,12 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 be written in full. The removed `--model`, `--reasoning`, and transcription value
 `whisper` are rejected; use the new options above. The removed `--speakers`
 option is also rejected: local diarizers determine the count automatically. The old
-`gpt-transcribe`, `whisper-local` and `all` CLI values are removed; use
-`gpt-transcribe-online`, `mlx` and `gpt-transcribe+whisperx` respectively. The
-combined mode now uses WhisperX, and the new default is local WhisperX recognition.
+`gpt-transcribe` and `whisper-local` CLI values are removed; use
+`gpt-transcribe-online` and `mlx`. Historical `all` meant combined reconciliation;
+that behavior is now `gpt-transcribe+whisperx`. The new `all` instead compares three
+independent recognizers without reconciliation. Old partial outputs are protected
+against this meaning change; completed pairs continue to skip. The default remains
+local WhisperX recognition.
 
 ## Editable prompts and long recordings
 
@@ -869,6 +895,9 @@ input/configuration errors, and `130` for interruption.
 # Luna for fusion and summary on an unfinished recording
 ./scribe.sh --transcription-model gpt-transcribe+whisperx --summarize-model gpt-6-luna:medium
 
+# Compare all three recognizers; final log and summaries use WhisperX
+./scribe.sh --transcription-model all
+
 # Deliberately replace only an existing summary using Luna
 ./scribe.sh -f "recording.mkv" --summary-only --summarize-model gpt-6-luna:medium
 ```
@@ -908,6 +937,8 @@ output protection in either format, interrupted-level reuse, invalidation, and
 preservation of existing results on failure. Transcript checks cover exact embedded text,
 per-output source snapshots, raw inputs after fusion/fallback, mode-specific source
 tabs, edited/legacy-log isolation, and source-tab keyboard/theme interactions,
+three-recognizer comparison without fusion, independent local word checkpoints,
+one shared forced diarization, retry of missing stages and historical-all protection,
 long-log completeness, escaped markup, the inline icon, and copying the HTML
 without its source log. Header checks cover role citations,
 unknown participants, date/duration provenance, long-log coverage, conflicting

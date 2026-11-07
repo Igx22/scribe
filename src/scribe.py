@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.14.0"
+VERSION = "2.15.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -49,6 +49,7 @@ AUDIO_API_URL = "https://api.openai.com/v1/audio/transcriptions"
 DEFAULT_TRANSCRIPTION_MODEL = "whisperx"
 ONLINE_MODE = "gpt-transcribe-online"
 COMBINED_MODE = "gpt-transcribe+whisperx"
+ALL_MODE = "all"
 AUDIO_CHUNK_SECONDS = 600
 MONITOR_SETTLE_SECONDS = 30
 MONITOR_POLL_SECONDS = 5
@@ -487,6 +488,8 @@ def ensure_models(models_dir, offline=False, verify=False, *,
     manifest = model_manifest()
     recognizer = "mlx" if transcription_model == "mlx" else "whisperx"
     groups = {recognizer, diarization_model}
+    if transcription_model == ALL_MODE:
+        groups.add("mlx")
     if not offline and "community-1" in groups and not os.getenv("HF_TOKEN", "").strip():
         gated_missing = any(i.get("group") == "community-1" and
             (not (models_dir / i["path"]).is_file() or (models_dir / i["path"]).stat().st_size != i["size"]
@@ -1604,22 +1607,33 @@ def output_state_path(cache, log_path):
     return cache / "outputs" / identity / "state.json"
 
 
-def local_recognition(wav_path, cache, settings, args):
+def local_recognition(wav_path, cache, settings, args, *, voice_intervals=None):
     """Reuse the local stages independently of the chosen final transcript model."""
-    voice_path, word_path = cache / "voices-stage.json", cache / "words-stage.json"
-    voices, words = read_json(voice_path, {}), read_json(word_path, {})
+    backend = settings["recognizer"]["backend"]
+    voice_path = cache / "voices-stage.json"
+    shared_word_path, backend_word_path = cache / "words-stage.json", cache / f"words-stage-{backend}.json"
+    word_path = backend_word_path if args.transcription_model == ALL_MODE else shared_word_path
+    other_word_path = shared_word_path if word_path == backend_word_path else backend_word_path
+    voices = read_json(voice_path, {})
     voice_settings = {k: settings[k] for k in ("source", "models", "diarization")}
-    word_settings = {k: v for k, v in settings.items() if k != "diarization"}
+    word_settings = {k: v for k, v in settings.items() if k not in ("diarization", "additional_recognizers")}
     # Legacy word checkpoints also included the old fixed-count voice settings.
     # Word decoding did not use those fields; old voice intervals are NOT reused.
-    saved_word_settings = words.get("settings")
-    if isinstance(saved_word_settings, dict):
-        saved_word_settings = {k: v for k, v in saved_word_settings.items()
-                               if k not in ("speakers", "diarization")}
-        if "recognizer" not in saved_word_settings and settings["recognizer"]["backend"] == "mlx":
-            saved_word_settings["recognizer"] = settings["recognizer"]
+    def matches_words(stage):
+        saved = stage.get("settings")
+        if not isinstance(saved, dict):
+            return False
+        saved = {k: v for k, v in saved.items() if k not in ("speakers", "diarization")}
+        if "recognizer" not in saved and backend == "mlx":
+            saved["recognizer"] = settings["recognizer"]
+        return saved == word_settings
+    words = read_json(word_path, {})
+    if not args.force and not matches_words(words):
+        alternate = read_json(other_word_path, {})
+        if matches_words(alternate):
+            words = alternate
     voices_ready = not args.force and voices.get("settings") == voice_settings
-    words_ready = not args.force and saved_word_settings == word_settings
+    words_ready = not args.force and matches_words(words)
     with wave.open(str(wav_path)) as reader:
         duration = reader.getnframes() / reader.getframerate()
         if not reader.getnframes():
@@ -1627,7 +1641,10 @@ def local_recognition(wav_path, cache, settings, args):
         if not words_ready:
             import numpy as np
             audio = np.frombuffer(reader.readframes(reader.getnframes()), dtype=np.int16).astype(np.float32) / 32768
-    if voices_ready:
+    if voice_intervals is not None:
+        intervals = voice_intervals
+        say("  Reusing voice intervals from the current comparison run.")
+    elif voices_ready:
         intervals = voices["intervals"]
         say(f"  Reusing {args.diarization_model} automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
     else:
@@ -1635,14 +1652,14 @@ def local_recognition(wav_path, cache, settings, args):
         save_json(voice_path, {"settings": voice_settings, "intervals": intervals})
     if words_ready:
         recognized = words["words"]
-        say("  Reusing saved local words.")
+        say(f"  Reusing saved {backend} words.")
     else:
         recognized = recognize(audio, args.models_dir, args.language, args.vocabulary,
                                settings["recognizer"]["backend"]) if intervals else []
         save_json(word_path, {"settings": word_settings, "duration": duration, "words": recognized})
     turns = assign_speakers(recognized, intervals)
     result = {"duration": duration, "words": recognized, "voices": intervals, "turns": turns}
-    save_json(cache / "recognition.json", result)
+    save_json(cache / (f"recognition-{backend}.json" if args.transcription_model == ALL_MODE else "recognition.json"), result)
     return result
 
 
@@ -1984,7 +2001,7 @@ def gpt_transcript_text(source, chunks):
 
 
 def recognition_source_reports(source, *, local=None, gpt_chunks=None,
-                               recognizer="whisperx", diarizer="nemotron"):
+                               recognizer="whisperx", diarizer="nemotron", mlx_local=None):
     """Freeze actual upstream results before reconciliation changes the final log."""
     reports = []
     if gpt_chunks is not None:
@@ -2007,6 +2024,10 @@ def recognition_source_reports(source, *, local=None, gpt_chunks=None,
         lines.extend(f"[{v['start']:.3f}–{v['end']:.3f}] {speaker_label(v['speaker'])}" for v in voices)
         reports.append({"id": "diarization", "label": voice_label,
             "description": "Voice intervals", "text": "\n".join(lines) + "\n"})
+    if mlx_local is not None:
+        # The all-mode recognizers share the exact same voice intervals.
+        mlx_report = recognition_source_reports(source, local=mlx_local, recognizer="mlx", diarizer=diarizer)[0]
+        reports.insert(len(reports) - 1, mlx_report)
     return reports
 
 
@@ -2058,6 +2079,8 @@ def recognition_settings(source, args):
     if args.transcription_model != ONLINE_MODE:
         settings["diarization"] = diarization_spec(args.diarization_model)["identity"]
         settings["recognizer"] = model_manifest()["mlx" if args.transcription_model == "mlx" else "whisperx"]["identity"]
+        if args.transcription_model == ALL_MODE:
+            settings["additional_recognizers"] = {"mlx": model_manifest()["mlx"]["identity"]}
     return settings
 
 
@@ -2125,7 +2148,10 @@ def _process_file(source, args, key):
         state = {"settings": settings, "selection": selection, "pipeline_complete": False}
         if old_summary:
             state["summary"] = old_summary
-        gpt_chunks, gpt_error, local = None, None, None
+        if args.transcription_model == ALL_MODE:
+            say("  Comparing GPT-Transcribe, WhisperX and MLX independently; "
+                "the final log uses WhisperX, without reconciliation.")
+        gpt_chunks, gpt_error, local, mlx_local = None, None, None, None
         temporary = cache / "tmp"
         temporary.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="scribe-audio-", dir=temporary) as tmp:
@@ -2135,7 +2161,7 @@ def _process_file(source, args, key):
             if args.monitor_dir is not None and (monitor_snapshot(source) != args.monitor_expected_snapshot
                                                 or source_signature(source) != settings["source"]):
                 raise AppError("Source changed during audio extraction; no recognition request was started.")
-            if args.transcription_model in (ONLINE_MODE, COMBINED_MODE):
+            if args.transcription_model in (ONLINE_MODE, COMBINED_MODE, ALL_MODE):
                 gpt_settings = {"source": settings["source"], "language": args.language,
                                 "vocabulary": args.vocabulary, "model": "gpt-transcribe", "request_version": 1}
                 try:
@@ -2151,9 +2177,16 @@ def _process_file(source, args, key):
                         raise
                     gpt_error = str(exc).replace(key, "[key redacted]") if key else str(exc)
                     state["gpt_error"] = gpt_error
-                    say("  WARNING: " + gpt_error + " Using the local source only; fusion will be skipped.")
+                    action = ("Using local comparison sources only." if args.transcription_model == ALL_MODE
+                              else "Using the local source only; fusion will be skipped.")
+                    say("  WARNING: " + gpt_error + " " + action)
             if args.transcription_model != ONLINE_MODE:
                 local = local_recognition(wav_path, cache, settings, args)
+                if args.transcription_model == ALL_MODE:
+                    mlx_settings = {k: v for k, v in settings.items() if k != "additional_recognizers"}
+                    mlx_settings["recognizer"] = settings["additional_recognizers"]["mlx"]
+                    mlx_local = local_recognition(wav_path, cache, mlx_settings, args,
+                                                  voice_intervals=local["voices"])
         if args.transcription_model == ONLINE_MODE:
             transcript = gpt_transcript_text(source, gpt_chunks)
         else:
@@ -2161,6 +2194,9 @@ def _process_file(source, args, key):
                 provenance=f"{'MLX' if args.transcription_model == 'mlx' else 'WhisperX'} large-v3-turbo "
                            f"+ {args.diarization_model} voice/time anchors")
             atomic_write(cache / "sources/local.log.md", transcript)
+            if mlx_local is not None:
+                atomic_write(cache / "sources/mlx.log.md", recognition_source_reports(source,
+                    local=mlx_local, recognizer="mlx", diarizer=args.diarization_model)[0]["text"])
         # Persist the selected usable source BEFORE either text API step.
         atomic_write(log_path, transcript)
         if args.force:
@@ -2171,9 +2207,12 @@ def _process_file(source, args, key):
             "transcript_sha256": state["transcript_sha256"],
             "reports": recognition_source_reports(source, local=local, gpt_chunks=gpt_chunks,
                 recognizer="mlx" if args.transcription_model == "mlx" else "whisperx",
-                diarizer=args.diarization_model)}
-        state["pipeline_complete"] = args.transcription_model != COMBINED_MODE
+                diarizer=args.diarization_model, mlx_local=mlx_local)}
+        state["pipeline_complete"] = (args.transcription_model != COMBINED_MODE
+            and (args.transcription_model != ALL_MODE or gpt_chunks is not None))
         state["source_mode"] = args.transcription_model if args.transcription_model != COMBINED_MODE else "local-fallback"
+        if args.transcription_model == ALL_MODE and gpt_chunks is None:
+            state["source_mode"] = "all-local-fallback"
         save_json(state_path, state)
         if args.transcription_model == COMBINED_MODE and gpt_chunks is not None:
             try:
@@ -2279,10 +2318,11 @@ def build_parser():
                         help="Scan MKV files in this directory without subfolders; defaults to ./data; cannot combine with -f")
     inputs.add_argument("--monitor-dir", type=Path, metavar="DIR", nargs="?", const=True,
                         help="Monitor growing MKVs; omit DIR for ~/Movies on macOS or ~/Videos on Linux/Windows; wait for OBS finalization and 30s stability")
-    p.add_argument("--transcription-model", choices=(ONLINE_MODE, "whisperx", "mlx", COMBINED_MODE),
+    p.add_argument("--transcription-model", choices=(ONLINE_MODE, "whisperx", "mlx", COMBINED_MODE, ALL_MODE),
                    default=DEFAULT_TRANSCRIPTION_MODEL,
                    help="gpt-transcribe-online: API words only; whisperx: local WhisperX Turbo; "
-                        "mlx: local MLX Turbo; gpt-transcribe+whisperx: both sources + GPT reconciliation")
+                        "mlx: local MLX Turbo; gpt-transcribe+whisperx: both sources + GPT reconciliation; "
+                        "all: GPT-Transcribe, WhisperX and MLX independently, no reconciliation")
     p.add_argument("--diarization-model", choices=("nemotron", "community-1"), default="nemotron",
                    help="Local automatic voice model; Community-1 needs gated HF access for download. Ignored for API-only recognition")
     p.add_argument("--output-dir", type=Path, help="Output directory; defaults to the monitor folder in monitor mode, otherwise ./data in the launch directory")
@@ -2326,7 +2366,7 @@ def main(argv=None):
         return 0
     configure_mode(args)
     if (not args.summary_only and not args.download_models
-            and args.transcription_model in ("whisperx", COMBINED_MODE)
+            and args.transcription_model in ("whisperx", COMBINED_MODE, ALL_MODE)
             and args.language not in ("auto", "en", "ru")):
         raise AppError("WhisperX alignment is prepared for English and Russian. "
                        "Use --language auto/en/ru, or select mlx or gpt-transcribe-online.")

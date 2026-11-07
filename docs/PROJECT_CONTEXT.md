@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.14.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.15.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -26,8 +26,9 @@ but cannot move anchors or change their speaker/time assignments. Speech that
 cannot be placed confidently must remain unassigned. Thus clearer recognition
 does not establish more accurate speaker attribution.
 
-The four recognition choices are now API-only, default local WhisperX Turbo,
-local MLX Turbo, and API + WhisperX reconciliation. Diarization is independently
+The five recognition choices are API-only, default local WhisperX Turbo,
+local MLX Turbo, API + WhisperX reconciliation, and independent three-source
+comparison through `all`. Diarization is independently
 selectable between default Nemotron and optional Community-1. A failed cloud
 stage in combined mode must still leave a usable local
 log; API-only mode must not silently load or substitute local models. See
@@ -179,6 +180,20 @@ uses a token only for initial gated HF requests, strips it on redirects, and run
 locally after download. Python support is 3.12–3.13 because this WhisperX release
 excludes 3.14. The shared environment keeps both recognizers; unused weights and
 all existing private outputs are preserved. README owns migration commands.
+
+SCR-064 reintroduces `all` with a new meaning: run GPT-Transcribe, WhisperX Turbo
+and MLX Turbo independently, sharing one diarization pass. WhisperX remains the
+final log/summary source; all successful raw texts and one shared diarization
+are snapshotted into report source tabs. There is no implicit combined-mode,
+fusion or name-identification call. Setup prepares both local recognizers and
+the selected diarizer. Per-backend word/result checkpoints preserve both local
+outputs; compatible shared single-model checkpoints still work in either direction.
+The extra MLX identity is part of final-output ownership, but excluded from WhisperX
+word/voice cache identity. Force reruns each recognizer and one shared diarization.
+Cloud failure leaves local comparison sources; local ASR failure reports an error
+and retry reuses completed stages. Offline still forces only WhisperX unless MLX
+was explicitly selected. The historical combined `all` is not reused as this new
+comparison mode; completed-pair protection and summary-only behavior are unchanged.
 
 ### Honest uncertainty and language preservation
 
@@ -496,6 +511,21 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.15.0 passed 156 mocked tests covering three recognizers without fusion,
+  one diarization even with force, independent word-cache resume and model-identity
+  invalidation, cloud/local failure recovery, summary-only snapshots and historical
+  `all` protection. A fresh monologue run executed WhisperX 3.8.6 Turbo CPU int8
+  and MLX Whisper 0.4.3 Turbo Metal in the same process, with Nemotron 3 Q8_0 CPU
+  once: 150/156 words, one voice, 54.30 s including imports/model loading. GPT audio
+  text was cached. Both recordings also completed all-mode integration from cached
+  GPT/WhisperX/MLX/voice sources, preserving one/two voices and producing four source
+  views beside the unchanged WhisperX final. HTML/script checks and completed-pair
+  preservation passed; browser visual QA remains unavailable. Model hashes and
+  launcher syntax/help/version passed. No new paid API calls, returned usage,
+  fusion, summary or header-model validation occurred. All 59 baseline files kept
+  their current hashes/mtimes. These are integration observations, not independent
+  accuracy or latency benchmarks. Evidence: [integration](../data/comparison/all-mode-integration/verification.json),
+  [fresh local run](../data/comparison/all-mode-integration/fresh-local.json).
 - Version 2.14.0 passed 145 mocked tests and launcher syntax/help/version checks.
   New checks cover bare/explicit monitor paths, macOS/Linux/Windows home-folder
   presets, explicit output precedence, resolved relative paths, unchanged batch

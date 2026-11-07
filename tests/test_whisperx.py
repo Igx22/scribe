@@ -49,17 +49,17 @@ class WhisperXTests(unittest.TestCase):
                 app.ensure_whisperx_tokenizers(root, manifest, False)
             self.assertFalse((root / 'nltk/bad-hash').exists())
 
-    def test_four_modes_defaults_and_offline_priority(self):
+    def test_five_modes_defaults_and_offline_priority(self):
         parser = app.build_parser()
         default = parser.parse_args([])
         self.assertEqual((default.transcription_model, default.diarization_model), ("whisperx", "nemotron"))
-        for mode in [app.ONLINE_MODE, "whisperx", "mlx", app.COMBINED_MODE]:
+        for mode in [app.ONLINE_MODE, "whisperx", "mlx", app.COMBINED_MODE, app.ALL_MODE]:
             args = parser.parse_args(["--transcription-model", mode, "--offline", "--diarization-model", "community-1"])
             app.configure_mode(args)
             self.assertEqual(args.transcription_model, "mlx" if mode == "mlx" else "whisperx")
             self.assertEqual(args.diarization_model, "community-1")
             self.assertIsNone(args.summarize_model)
-        for mode in ["all", "whisper-local", "gpt-transcribe", "unknown"]:
+        for mode in ["whisper-local", "gpt-transcribe", "unknown"]:
             with self.subTest(mode=mode), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 parser.parse_args(["--transcription-model", mode])
 
