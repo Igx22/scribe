@@ -90,9 +90,25 @@ The checkout already includes a `data` subfolder. Put your MKV files there, for 
 After setup, fully local recognition is available with `./run.sh --offline`.
 There is no need to ship or commit a separate Python installation in `data/runtime`.
 
-Without `-f`, Scribe scans `./data` in the Terminal's current working directory,
-non-recursively. When you run from the project folder, this is the project's
-`data` subfolder. You can also select a recording by its explicit path:
+Without `-f`, Scribe scans `--input-dir DIR`, or `./data` in the Terminal's current
+working directory when that option is omitted. Scanning is non-recursive. When
+you run from the project folder, the default is the project's `data` subfolder.
+To process all MKV recordings in `~/Movies` and save their logs and HTML reports
+in the same folder:
+
+```bash
+./run.sh --input-dir ~/Movies --output-dir ~/Movies
+```
+
+`--input-dir` and `--output-dir` are independent: changing the input folder alone
+still saves results in `./data`. Both accept absolute paths, relative paths from
+the Terminal working directory, and `~` home paths. `--input-dir` selects a batch
+and cannot be combined with `-f`, which selects individual recordings. Generated
+logs and reports are ignored when scanning for MKV files. Existing completed
+recordings are skipped as described below. This is a one-time scan, not a folder
+watcher; wait until recording has finished before running it.
+
+You can also select a recording by its explicit path:
 
 ```bash
 ./run.sh -f "./data/recording.mkv"
@@ -583,7 +599,8 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `-h`, `--help` | — | Show English help. |
-| `-f FILE`, `--file FILE` | Scan `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. |
+| `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
+| `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
 | `--transcription-model gpt-transcribe\|whisper-local\|all` | `all` | API only, local only, or both plus reconciliation. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls all-mode fusion. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
@@ -730,6 +747,10 @@ and generated files. Detail-icon checks cover exact dot counts for all ten level
 When Node.js is available, an optional offline JavaScript check executes the actual
 report script for theme restoration/toggling, cookie fallback, blocked storage,
 and tab navigation; it is skipped otherwise. Node.js is not required to run Scribe.
+Input-directory checks cover relative and home paths, uppercase extensions,
+non-recursive scanning, symlink deduplication, invalid folders, exclusive `-f`
+selection, independent output defaults, and same-folder HTML generation with
+completed-result preservation.
 The original seven-minute recording has also been used
 for real API comparisons. In the original local installation, preserved Sol
 results, controlled Sol/Luna outputs, rejected candidate diagnostics, and usage/cost

@@ -35,7 +35,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1327,8 +1327,8 @@ def local_recognition(wav_path, cache, settings, args):
     return result
 
 
-def collect_files(file_args, cwd):
-    """Bare -f names are searched in cwd/data and ~/Movies; paths are explicit."""
+def collect_files(file_args, cwd, input_dir=None):
+    """Scan input_dir or cwd/data; explicit -f selection keeps its own search rules."""
     data_dir = cwd / "data"
     if file_args:
         paths = []
@@ -1348,15 +1348,17 @@ def collect_files(file_args, cwd):
                 path = Path(value).expanduser()
                 paths.append((path if path.is_absolute() else cwd / path).resolve())
     else:
-        if not data_dir.is_dir():
-            raise AppError(f"Input directory not found: {data_dir}. "
-                           "Create ./data and put MKV files there, or use -f 'recording.mkv'.")
-        paths = [p.resolve() for p in sorted(data_dir.iterdir())
+        scan_dir = Path(input_dir).expanduser() if input_dir is not None else data_dir
+        scan_dir = (scan_dir if scan_dir.is_absolute() else cwd / scan_dir).resolve()
+        if not scan_dir.is_dir():
+            raise AppError(f"Input directory not found or not a directory: {scan_dir}. "
+                           "Choose an existing folder with --input-dir or a recording with -f.")
+        paths = [p.resolve() for p in sorted(scan_dir.iterdir())
                  if p.is_file() and p.suffix.lower() == ".mkv"]
+        if not paths:
+            raise AppError(f"No MKV files found in {scan_dir}. "
+                           "Put recordings in this folder or select another --input-dir.")
     unique = list(dict.fromkeys(paths))
-    if not unique:
-        raise AppError(f"No MKV files found in {data_dir}. "
-                       "Put recordings in ./data or use -f 'recording.mkv'.")
     for path in unique:
         if not path.is_file():
             raise AppError(f"File not found: {path}")
@@ -1614,11 +1616,14 @@ def build_parser():
         prog="scribe.py",
         allow_abbrev=False,
         description="scribe: MKV to a speaker-labeled transcript and an OpenAI summary. "
-                    "Without -f, scan ./data. Bare -f names search ./data and ~/Movies. "
+                    "Without -f, scan --input-dir (default: ./data). Bare -f names search ./data and ~/Movies. "
                     "Outputs default to ./data relative to the launch directory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("-f", "--file", action="append", default=[],
-                   help="MKV filename or explicit path; repeat -f to process multiple files")
+    inputs = p.add_mutually_exclusive_group()
+    inputs.add_argument("-f", "--file", action="append", default=[],
+                        help="MKV filename or explicit path; repeat -f to process multiple files")
+    inputs.add_argument("--input-dir", type=Path, metavar="DIR",
+                        help="Scan MKV files in this directory without subfolders; defaults to ./data; cannot combine with -f")
     p.add_argument("--transcription-model", choices=("gpt-transcribe", "whisper-local", "all"),
                    default=DEFAULT_TRANSCRIPTION_MODEL,
                    help="gpt-transcribe: API only; whisper-local: local voices/text; all: both sources + GPT fusion")
@@ -1673,7 +1678,7 @@ def main(argv=None):
         ensure_models(args.models_dir, args.offline, args.verify_models)
         say("Models are ready.")
         return 0
-    files = collect_files(args.file, Path.cwd())
+    files = collect_files(args.file, Path.cwd(), args.input_dir)
     pending = []
     for source in files:
         if completed_pair(source, args):

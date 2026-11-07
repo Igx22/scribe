@@ -97,3 +97,4 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-045 | Exclude JetBrains IDE project files from Git | Done | 2026-11-07 | 2026-11-07 |
 | SCR-046 | Compare OBS Studio integration options and the recording-to-report user journey | Done | 2026-11-07 | 2026-11-07 |
 | SCR-047 | Verify input discovery and --output-dir behavior against the code | Done | 2026-11-07 | 2026-11-07 |
+| SCR-048 | Scan MKV recordings from a configurable --input-dir | Done | 2026-11-07 | 2026-11-07 |

@@ -77,6 +77,94 @@ class AppTests(unittest.TestCase):
                 custom = root / "custom outputs"
                 self.assertEqual(app.output_paths(movie, custom), (custom / "movie.log.md", custom / "movie.summary.html"))
 
+    def test_input_directory_scans_only_mkv_files_and_deduplicates_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            recordings = root / "meeting recordings"
+            recordings.mkdir()
+            first, second = recordings / "a.mkv", recordings / "b.MKV"
+            first.touch(); second.touch()
+            (recordings / "alias.mkv").symlink_to(first)
+            (recordings / "ignore.mp4").touch()
+            (recordings / "nested.mkv").mkdir()
+            (recordings / "nested.mkv/ignore.mkv").touch()
+            (root / "data").mkdir(); (root / "data/other.mkv").touch()
+            home_relative = Path("~") / os.path.relpath(recordings, Path.home())
+            for selected in (recordings, Path("meeting recordings"), home_relative):
+                with self.subTest(selected=selected):
+                    self.assertEqual(app.collect_files([], root, selected), [first, second])
+
+    def test_input_directory_errors_precede_processing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty, regular = root / "empty", root / "recording.mkv"
+            empty.mkdir(); regular.touch()
+            (empty / "nested").mkdir(); (empty / "nested/hidden.mkv").touch()
+            for directory, message in ((root / "missing", "Input directory"),
+                                       (regular, "not a directory"), (empty, "No MKV")):
+                with self.subTest(directory=directory), patch.object(app, "load_env"), \
+                        patch.object(app, "ensure_models") as models, \
+                        patch.object(app, "process_file") as process, \
+                        patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")):
+                    with self.assertRaisesRegex(app.AppError, message):
+                        app.main(["--input-dir", str(directory)])
+                    models.assert_not_called(); process.assert_not_called()
+
+    def test_input_directory_and_explicit_file_selection_are_mutually_exclusive(self):
+        for options in (["--input-dir", "recordings", "-f", "meeting.mkv"],
+                        ["-f", "meeting.mkv", "--input-dir", "recordings"]):
+            with self.subTest(options=options), patch("sys.stderr", new=io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                app.build_parser().parse_args(options)
+
+    def test_input_directory_does_not_change_default_output_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            recordings = root / "recordings"
+            recordings.mkdir(); (recordings / "meeting.mkv").touch()
+            with patch.object(app, "load_env"), patch.object(app.Path, "cwd", return_value=root), \
+                    patch.object(app, "process_file") as process:
+                self.assertEqual(app.main(["--input-dir", "recordings",
+                                          "--transcription-model", "gpt-transcribe",
+                                          "--summarize-model", "none"]), 0)
+            source, args, _ = process.call_args.args
+            self.assertEqual(source, recordings / "meeting.mkv")
+            self.assertEqual(args.output_dir, root / "data")
+
+    def test_input_directory_can_share_outputs_and_skip_completed_recordings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            recordings = root / "Movies"
+            recordings.mkdir()
+            sources = [recordings / "first.mkv", recordings / "second.MKV"]
+            for source in sources:
+                source.write_bytes(b"original recording")
+            options = ["--input-dir", str(recordings), "--output-dir", str(recordings),
+                       "--cache-dir", str(root / "cache"), "--transcription-model", "gpt-transcribe",
+                       "--report-tabs", "1", "transcript"]
+            chunks = [{"index": 0, "start": 0, "end": 2, "text": "Meeting words."}]
+            with patch.object(app, "load_env"), patch.dict(os.environ, {"OPENAI_API_KEY": "unit-test-key"}), \
+                    patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks) as gpt, \
+                    patch.object(app, "summarize", return_value="Meeting summary.") as summary, \
+                    patch.object(app, "ensure_models") as models:
+                self.assertEqual(app.main(options), 0)
+            self.assertEqual(gpt.call_count, 2); self.assertEqual(summary.call_count, 2)
+            models.assert_not_called()
+            outputs = [path for source in sources for path in app.output_paths(source, recordings)]
+            for source in sources:
+                self.assertEqual(source.read_bytes(), b"original recording")
+                log, report = app.output_paths(source, recordings)
+                self.assertIn("Meeting words.", log.read_text())
+                self.assertIn("Meeting summary.", report.read_text())
+                self.assertIn('id="tab-transcript"', report.read_text())
+            before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in outputs]
+            with patch.object(app, "load_env"), patch.dict(os.environ, {"OPENAI_API_KEY": ""}), \
+                    patch.object(app, "process_file") as process, patch.object(app, "ensure_models") as models, \
+                    patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")):
+                self.assertEqual(app.main(options), 0)
+            process.assert_not_called(); models.assert_not_called()
+            self.assertEqual(before, [(path.read_bytes(), path.stat().st_mtime_ns) for path in outputs])
+
     def test_env_is_data_and_environment_wins(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"OPENAI_MODEL": "existing"}, clear=True):
             p = Path(tmp) / ".env"

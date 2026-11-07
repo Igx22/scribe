@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.8.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.9.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -93,6 +93,14 @@ file and subdirectory under `data/`, preserving private recordings, generated
 results, weights, caches, and environments outside Git. This replaces the earlier
 first-run-only creation behavior; the launcher still recreates a missing folder
 when bootstrapping online. Checkout and ignore behavior have regression coverage.
+
+Input discovery and result placement are independent. `--input-dir` selects a
+non-recursive MKV batch, while `--output-dir` selects where its logs and reports
+are written; both default to the working directory's `data` folder. Explicit `-f`
+selection is mutually exclusive with `--input-dir` and retains its existing name
+search rules. This supports keeping OBS recordings and results together without
+changing default behavior or adding a watcher. Completed-pair protection still
+applies when input and output folders coincide. README owns the usage details.
 
 ### Multiple reading depths share one report
 
@@ -318,6 +326,9 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.9.0 passed 97 mocked tests, including custom input-folder discovery,
+  same-folder log/HTML generation, and completed-pair preservation on a repeated
+  batch scan. No live audio or API processing was needed for this change.
 - Version 2.8.0 passed 92 mocked tests, including the optional Node.js check of
   the actual inline theme/navigation script with saved, invalid, or blocked
   storage and HTTP(S) cookie fallback. Three real-data examples under ignored
