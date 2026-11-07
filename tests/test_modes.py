@@ -13,6 +13,11 @@ import scribe as app
 
 
 class ModeTests(unittest.TestCase):
+    def setUp(self):
+        metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
     def test_offline_launcher_cannot_bootstrap_a_missing_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             launcher = Path(tmp) / "run.sh"
@@ -27,7 +32,7 @@ class ModeTests(unittest.TestCase):
         source.write_bytes(b"fixture")
         args = app.build_parser().parse_args([
             "-f", str(source), "--cache-dir", str(root / "data/.cache"),
-            "--output-dir", str(root / "data"), "--summary-detail", "1", *options])
+            "--output-dir", str(root / "data"), "--report-tabs", "1", *options])
         local = {"duration": 2, "words": [], "voices": [], "turns": [
             {"start": 0, "end": 2, "speaker": 1, "text": "Recognized locally."}]}
         chunks = [{"index": 0, "start": 0, "end": 2, "text": "Recognized via API."}]
@@ -98,7 +103,7 @@ class ModeTests(unittest.TestCase):
                     patch.object(app, "load_env"), patch.object(app.Path, "cwd", return_value=root), \
                     patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")):
                 app.process_file(source, args, "")
-                self.assertEqual(app.main(["-f", str(source), "--summary-detail", "10"]), 0)
+                self.assertEqual(app.main(["-f", str(source), "--report-tabs", "10"]), 0)
             process.assert_not_called(); models.assert_not_called()
             self.assertFalse(args.cache_dir.exists())
             self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in (log, summary)])
@@ -106,7 +111,7 @@ class ModeTests(unittest.TestCase):
     def test_summary_only_bypasses_completion_skip_and_preserves_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, _, _ = self.setup_case(Path(tmp), "--summary-only",
-                "--summarize-model", "gpt-6-luna:high", "--summary-detail", "5")
+                "--summarize-model", "gpt-6-luna:high", "--report-tabs", "5")
             log, summary_path = app.output_paths(source, args.output_dir)
             app.atomic_write(log, "Reviewed text")
             app.atomic_write(summary_path, "Previous summary")

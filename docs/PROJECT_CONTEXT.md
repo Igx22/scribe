@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.6.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.8.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -96,25 +96,28 @@ when bootstrapping online. Checkout and ignore behavior have regression coverage
 
 ### Multiple reading depths share one report
 
-Multiple requested summary levels produce one standalone HTML report with tabs;
-a single distinct level retains the plain-text Markdown output. The default
-selection is now 1, 3, 5, and 10, replacing the earlier level-1 default.
-`SCRIBE_SUMMARY_DETAIL` in `.env` configures that selection; an explicit CLI value
+Report generation always produces standalone HTML, even with one selected tab.
+The default selection is 1, 3, 5, 10, and transcript. `SCRIBE_REPORT_TABS` in `.env`
+configures the contents; `--report-tabs` replaces the former summary-detail option
+and selects summary levels and/or transcript in the requested order. A transcript-only
+selection skips summarization, but retains grounded header extraction. Omitting
+transcript excludes its content from the report. An explicit CLI value
 takes precedence, and exported environment values retain precedence over `.env`.
 The built-in fallback matches `.env.example`, so absent configuration still yields
-the four summary levels. Each level uses
+the four summary levels and Transcript tab. Each summary level uses
 the same saved final log independently, rather than using another summary as its
 source. This preserves the existing detail guidance and language/identity rules,
 at the cost of one summarization pipeline per level. The inline template lives in
 `src/resources/summary.html`; model text and filenames are escaped before insertion.
 Detail tabs use the approved decorative dot indicators: exactly N dots for level
 N, with subdued colors and at most five dots per row. All ten levels are supported.
-These indicators and the Log document icon use inline markup/CSS without assets.
+These indicators and the Transcript document icon use inline markup/CSS without assets.
 
 An existing log plus either summary format still counts as completed, regardless
 of a changed selection. Explicit summary-only generation is required to change a
-finished result. Multi-level requests checkpoint completed levels and publish only
-after all levels succeed; failed regeneration preserves the old report. Pending
+finished result. Requests checkpoint completed summary levels, including a single
+level, and publish only after all summaries and the header succeed; failed
+regeneration preserves the old report. Pending
 results are invalidated by changed inputs or settings. Forced transcript changes
 archive both summary formats to avoid leaving stale results beside a new log.
 After successful summary-only generation for an edited log, a known stale summary
@@ -133,15 +136,26 @@ avoid repeating successful header extraction on unchanged inputs.
 Duration is parsed from log metadata. Date is parsed from explicit log metadata
 or a recognized recording filename, with provenance visible in the report. Neither
 is guessed by a text model or taken from filesystem timestamps. Missing facts stay
-unestablished. The HTML-only metadata calls leave single-level Markdown behavior
-unchanged; README owns the exact formats and request/resume details.
+unestablished. Header extraction now applies to every selection, including one
+summary level or transcript alone; README owns the exact formats and request/resume details.
 
-HTML reports also embed the entire final log in a last Log tab, after all selected
-Detail tabs. A decorative document icon is drawn in the inline CSS. The transcript
+When selected, Transcript embeds the entire saved final log as escaped text;
+the default puts it after all Detail tabs. A decorative document icon is drawn in
+the inline CSS. The transcript
 is inserted as escaped text with whitespace preserved; it is neither truncated nor
 loaded from the separate `.log.md`. This makes the HTML sufficient for sharing as
 one file. The separate log remains part of local output/resume behavior. Embedding
-adds no model call and leaves single-level Markdown output unchanged.
+adds no model call. Markdown summary generation has been removed; existing legacy
+Markdown files remain recognized for completion skipping, protection, and backups.
+The separate `.log.md` output and offline/disabled-report boundaries are preserved.
+
+The report's Dark Mode switch uses inline CSS and JavaScript, with theme setup in
+the head before rendering. A saved explicit choice overrides the system preference;
+printing resets to light. Browser localStorage remembers the preference when
+available; HTTP(S) also uses a shared site-wide cookie. Local files cannot reliably
+share a preference across different paths because file-origin storage behavior is
+browser-dependent. Storage errors must not break switching or tab navigation.
+There is no server, external asset, or transcript data in preference storage.
 
 ## Important observed results
 
@@ -242,6 +256,20 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.8.0 passed 92 mocked tests, including the optional Node.js check of
+  the actual inline theme/navigation script with saved, invalid, or blocked
+  storage and HTTP(S) cookie fallback. Three real-data examples under ignored
+  `data/comparison/dark-mode-preview/` reuse prior outputs without API/audio calls.
+  Offline script checks passed for all three; calculated text contrast exceeded
+  4.5:1 in both palettes. Browser visual verification remains unavailable, so
+  actual browser persistence is subject to the documented file-origin limits.
+- Version 2.7.0 passed 91 mocked tests covering tab configuration/precedence,
+  optional Transcript inclusion/order, HTML for single tabs, and summary reuse
+  after header failure. Default, single-summary, and transcript-only examples in
+  ignored `data/comparison/report-tabs-preview/` reuse saved real summaries/log and
+  revalidated header metadata from `gpt-6.1-sol:medium`; no new API or audio calls.
+  Structural and offline JavaScript navigation checks passed for all three.
+  Browser visual verification remains unavailable.
 - The detail indicators and tracked data-folder placeholder passed 88 mocked
   unit tests, including all ten dot counts and checkout-before-launch behavior.
   The existing real HTML example was rendered again from cached results without

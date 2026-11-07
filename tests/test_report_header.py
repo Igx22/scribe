@@ -175,9 +175,9 @@ class ReportHeaderTests(unittest.TestCase):
     def test_metadata_failure_preserves_report_and_reuses_completed_summaries_on_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
-            args = app.build_parser().parse_args(["--summary-only", "--summary-detail", "1,5",
+            args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "1,5",
                 "--output-dir", str(root / "output"), "--cache-dir", str(root / "cache")])
-            log, report = app.output_paths(source, args.output_dir, args.summary_detail)
+            log, report = app.output_paths(source, args.output_dir)
             app.atomic_write(log, self.log()); app.atomic_write(report, "Reviewed report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)
             with patch.object(app, "summarize", return_value="New summary.") as summaries, \
@@ -193,18 +193,41 @@ class ReportHeaderTests(unittest.TestCase):
             self.assertIn("Deployment planning.", report.read_text())
             self.assertIn("platform engineer", report.read_text())
 
-    def test_single_level_markdown_does_not_make_a_header_request(self):
+    def test_single_level_html_includes_grounded_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
-            args = app.build_parser().parse_args(["--summary-only", "--summary-detail", "1",
+            args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "1",
                 "--output-dir", str(root / "output"), "--cache-dir", str(root / "cache")])
             log, summary = app.output_paths(source, args.output_dir)
             app.atomic_write(log, self.log())
             with patch.object(app, "summarize", return_value="Plain summary."), \
-                    patch.object(app, "extract_report_metadata") as metadata:
+                    patch.object(app, "extract_report_metadata", return_value={"topic": "Deployment planning.", "roles": {}}) as metadata:
                 app.process_file(source, args, "key")
-            metadata.assert_not_called()
+            metadata.assert_called_once()
+            self.assertEqual(summary.suffix, ".html")
+            self.assertIn("Deployment planning.", summary.read_text())
             self.assertIn("Plain summary.", summary.read_text())
+
+    def test_single_summary_survives_header_failure_and_is_reused_on_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
+            args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "5",
+                "--output-dir", str(root / "output"), "--cache-dir", str(root / "cache")])
+            log, report = app.output_paths(source, args.output_dir)
+            app.atomic_write(log, self.log()); app.atomic_write(report, "Previous report")
+            before = (report.read_bytes(), report.stat().st_mtime_ns)
+            with patch.object(app, "summarize", return_value="Completed summary.") as summary, \
+                    patch.object(app, "extract_report_metadata", side_effect=app.AppError("header failed")):
+                with self.assertRaisesRegex(app.AppError, "header failed"):
+                    app.process_file(source, args, "key")
+            summary.assert_called_once()
+            self.assertEqual(before, (report.read_bytes(), report.stat().st_mtime_ns))
+            with patch.object(app, "summarize") as summary, patch.object(app, "extract_report_metadata",
+                    return_value={"topic": "Deployment planning.", "roles": {}}):
+                app.process_file(source, args, "key")
+            summary.assert_not_called()
+            self.assertIn("Completed summary.", report.read_text())
+            self.assertFalse(report.with_suffix(".md").exists())
 
 
 if __name__ == "__main__":

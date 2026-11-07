@@ -11,12 +11,17 @@ import scribe as app
 
 
 class BackendTests(unittest.TestCase):
+    def setUp(self):
+        metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
     def make_pipeline(self, root):
         source = root / "meeting.mkv"
         source.write_bytes(b"input")
         args = app.build_parser().parse_args([
             "-f", str(source), "--cache-dir", str(root / "cache"),
-            "--output-dir", str(root / "data"), "--summary-detail", "1"])
+            "--output-dir", str(root / "data"), "--report-tabs", "1"])
         local = {"duration": 2, "words": [], "voices": [], "turns": [
             {"start": 0, "end": 2, "speaker": 1, "uncertain": False, "text": "Local source text."}]}
         return source, args, local
@@ -82,7 +87,7 @@ class BackendTests(unittest.TestCase):
                 app.process_file(source, args, "")
             _, summary = app.output_paths(source, args.output_dir)
             self.assertFalse(summary.exists())
-            self.assertTrue(any(args.cache_dir.glob("*/outputs/*/previous-*.summary.md")))
+            self.assertTrue(any(args.cache_dir.glob("*/outputs/*/previous-*.summary.html")))
 
     def test_different_output_directory_has_separate_ownership_state(self):
         with tempfile.TemporaryDirectory() as tmp:

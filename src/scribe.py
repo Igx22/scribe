@@ -35,12 +35,12 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.6.0"
+VERSION = "2.8.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
 DEFAULT_SUMMARY_DETAIL = 1
-DEFAULT_SUMMARY_DETAILS = "1,3,5,10"
+DEFAULT_REPORT_TABS = "1,3,5,10,transcript"
 API_URL = "https://api.openai.com/v1/responses"
 AUDIO_API_URL = "https://api.openai.com/v1/audio/transcriptions"
 DEFAULT_TRANSCRIPTION_MODEL = "all"
@@ -721,28 +721,28 @@ def summary_limits(detail):
     return (200 if detail == 1 else 240 * detail), 450 * detail
 
 
-def summary_levels(detail):
-    """Keep the single-level API while accepting a normalized CLI list."""
-    return [detail] if isinstance(detail, int) else list(detail)
+def summary_levels(tabs):
+    """Only numeric tabs need summarization requests."""
+    return [tab for tab in tabs if isinstance(tab, int)]
 
 
-def parse_summary_details(value):
+def parse_report_tabs(value):
     try:
         parts = value.split(",")
         if any(not part.strip() for part in parts):
             raise ValueError
-        levels = list(dict.fromkeys(int(token) for part in parts for token in part.split()))
+        tabs = list(dict.fromkeys(token.lower() if token.lower() == "transcript" else int(token)
+                                  for part in parts for token in part.split()))
     except ValueError:
-        raise argparse.ArgumentTypeError("Use detail levels from 1 to 10, e.g. 1 5 10 or 1,5,10.") from None
-    if any(not 1 <= level <= 10 for level in levels):
-        raise argparse.ArgumentTypeError("Summary detail levels must be from 1 to 10.")
-    return levels[0] if len(levels) == 1 else levels
+        raise argparse.ArgumentTypeError("Use report tabs 1–10 or transcript, e.g. 1,5,10,transcript.") from None
+    if not tabs or any(isinstance(tab, int) and not 1 <= tab <= 10 for tab in tabs):
+        raise argparse.ArgumentTypeError("Select at least one report tab: levels 1–10 or transcript.")
+    return tabs
 
 
-class SummaryDetailAction(argparse.Action):
+class ReportTabsAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        levels = list(dict.fromkeys(level for group in values for level in summary_levels(group)))
-        setattr(namespace, self.dest, levels[0] if len(levels) == 1 else levels)
+        setattr(namespace, self.dest, list(dict.fromkeys(tab for group in values for tab in group)))
 
 
 def report_turns(transcript):
@@ -929,15 +929,29 @@ def report_header(source, transcript, metadata):
             "duration": duration, "date": date, "date_note": date_note}
 
 
-def summary_html(source, summaries, metadata=None, *, transcript):
+def summary_html(source, summaries, metadata=None, *, transcript, tabs=None):
     """Render model text as escaped data in a self-contained, offline report."""
-    tabs, panels = [], []
-    for index, (detail, answer) in enumerate(summaries.items()):
+    selection = tabs if tabs is not None else [*summaries, "transcript"]
+    buttons, panels = [], []
+    for index, detail in enumerate(selection):
         active = index == 0
+        if detail == "transcript":
+            buttons.append('<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
+                        f'aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}">'
+                        '<span class="tab-title"><span class="icon-slot">'
+                        '<i class="transcript-icon" aria-hidden="true"></i></span>Transcript</span>'
+                        '<span class="tab-description">Original conversation</span></button>')
+            panels.append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
+                          f'tabindex="0"{"" if active else " hidden"}>'
+                          '<div class="panel-heading"><h2>Conversation transcript</h2>'
+                          f'<span>{len(transcript.split()):,} words · Full transcript</span></div>'
+                          f'<div class="transcript-content" dir="auto">{html.escape(transcript)}</div></section>')
+            continue
+        answer = summaries[detail]
         description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(detail, "Summary")
         dots = (f'<span class="detail-dots" data-count="{detail}" aria-hidden="true">'
                 + '<i class="dot"></i>' * detail + '</span>')
-        tabs.append(f'<button type="button" role="tab" id="tab-{detail}" '
+        buttons.append(f'<button type="button" role="tab" id="tab-{detail}" '
                     f'aria-controls="panel-{detail}" aria-selected="{str(active).lower()}" '
                     f'tabindex="{0 if active else -1}"><span class="tab-title">{dots}Detail {detail}</span>'
                     f'<span class="tab-description">{description}</span></button>')
@@ -949,26 +963,22 @@ def summary_html(source, summaries, metadata=None, *, transcript):
                       f'<div class="panel-heading"><h2>{heading}</h2>'
                       f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span></div>'
                       f'<div class="prose" dir="auto">{paragraphs}</div></section>')
-    tabs.append('<button type="button" role="tab" id="tab-log" aria-controls="panel-log" '
-                'aria-selected="false" tabindex="-1"><span class="tab-title"><span class="icon-slot">'
-                '<i class="log-icon" aria-hidden="true"></i></span>Log</span>'
-                '<span class="tab-description">Full transcript</span></button>')
-    panels.append('<section role="tabpanel" id="panel-log" aria-labelledby="tab-log" tabindex="0" hidden>'
-                  '<div class="panel-heading"><h2>Conversation log</h2>'
-                  f'<span>{len(transcript.split()):,} words · Full transcript</span></div>'
-                  f'<div class="log-content" dir="auto">{html.escape(transcript)}</div></section>')
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
     metadata = metadata or report_header(source, "", {})
     participants = ", ".join(html.escape(person["name"]) +
         (f' <span class="participant-role">({html.escape(person["role"])})</span>' if person.get("role") else "")
-        for person in metadata["participants"]) or "Not established in log"
+        for person in metadata["participants"]) or "Not established in transcript"
+    contents = "Full conversation transcript."
+    if summaries:
+        contents = f"{len(summaries)} summary " + ("level" if len(summaries) == 1 else "levels")
+        contents += " · Full transcript included." if "transcript" in selection else "."
     values = {"TITLE": html.escape(metadata["topic"]), "SOURCE": html.escape(source.name),
               "TOPIC": html.escape(metadata["topic"]), "PARTICIPANTS": participants,
               "DURATION": html.escape(metadata["duration"]), "DATE": html.escape(metadata["date"]),
               "DATE_NOTE": " · " + html.escape(metadata["date_note"]) if metadata.get("date_note") else "",
-              "COUNT": str(len(summaries)), "TABS": "\n".join(tabs), "PANELS": "\n".join(panels)}
-    return re.sub(r"@@(TITLE|SOURCE|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|COUNT|TABS|PANELS)@@",
+              "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": "\n".join(panels)}
+    return re.sub(r"@@(TITLE|SOURCE|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS)@@",
                   lambda match: values[match[1]], template)
 
 
@@ -1355,16 +1365,15 @@ def collect_files(file_args, cwd):
     return unique
 
 
-def output_paths(source, output_dir=None, detail=DEFAULT_SUMMARY_DETAIL):
+def output_paths(source, output_dir=None):
     directory = output_dir if output_dir is not None else Path.cwd() / "data"
-    extension = ".html" if len(summary_levels(detail)) > 1 else ".md"
-    return directory / (source.stem + ".log.md"), directory / (source.stem + ".summary" + extension)
+    return directory / (source.stem + ".log.md"), directory / (source.stem + ".summary.html")
 
 
 def summary_paths(source, output_dir):
-    """Both formats share one transcript and ownership lock."""
-    markdown = output_paths(source, output_dir)[1]
-    return [markdown, markdown.with_suffix(".html")]
+    """Recognize legacy Markdown results for skipping, protection, and backups."""
+    report = output_paths(source, output_dir)[1]
+    return [report.with_suffix(".md"), report]
 
 
 def archive_summaries(paths, state_path):
@@ -1428,7 +1437,7 @@ def process_file(source, args, key):
 
 
 def _process_file(source, args, key):
-    log_path, summary_path = output_paths(source, args.output_dir, args.summary_detail)
+    log_path, summary_path = output_paths(source, args.output_dir)
     all_summaries = summary_paths(source, args.output_dir)
     cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
     cache = args.cache_dir / cache_id
@@ -1545,20 +1554,19 @@ def _process_file(source, args, key):
         return
     model, effort = args.summarize_model
     summary_settings = {"model": model, "effort": effort,
-                        "detail": args.summary_detail,
+                        "tabs": args.report_tabs,
                         "prompt": hashlib.sha256(SUMMARIZATION_PROMPT.encode()).hexdigest(),
                         "notes_prompt": hashlib.sha256(PART_NOTES_PROMPT.encode()).hexdigest(),
                         "transcript": transcript_hash}
-    levels = summary_levels(args.summary_detail)
-    if len(levels) > 1:
-        summary_settings["html_template"] = digest_file(RESOURCE_DIR / "summary.html")
-        summary_settings["header_prompt"] = hashlib.sha256(REPORT_HEADER_PROMPT.encode()).hexdigest()
-        summary_settings["topic_prompt"] = hashlib.sha256(REPORT_TOPIC_PROMPT.encode()).hexdigest()
+    levels = summary_levels(args.report_tabs)
+    summary_settings["html_template"] = digest_file(RESOURCE_DIR / "summary.html")
+    summary_settings["header_prompt"] = hashlib.sha256(REPORT_HEADER_PROMPT.encode()).hexdigest()
+    summary_settings["topic_prompt"] = hashlib.sha256(REPORT_TOPIC_PROMPT.encode()).hexdigest()
     if not args.force and not args.summary_only and summary_path.is_file() and state.get("summary") == summary_settings:
         say("  The summary is already up to date; no API request is needed.")
         return
     pending_path = state_path.parent / "summary-pending.json"
-    pending = read_json(pending_path, {}) if len(levels) > 1 and not args.force else {}
+    pending = read_json(pending_path, {}) if not args.force else {}
     answers = pending.get("answers", {}) if pending.get("settings") == summary_settings else {}
     if not isinstance(answers, dict):
         answers = {}
@@ -1572,23 +1580,19 @@ def _process_file(source, args, key):
             answer = summarize(transcript, key, model, effort, detail=level)
             if not isinstance(answer, str) or not answer.strip():
                 raise AppError(f"Summary detail {level}/10 was empty; existing summaries are preserved.")
-            if len(levels) > 1:
-                answers[str(level)] = answer
-                save_json(pending_path, {"settings": summary_settings, "answers": answers})
+            answers[str(level)] = answer
+            save_json(pending_path, {"settings": summary_settings, "answers": answers})
         summaries[level] = answer
-    if len(levels) > 1:
-        extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
-        content = summary_html(source, summaries, report_header(source, transcript, extracted), transcript=transcript)
-    else:
-        content = f"CONVERSATION SUMMARY\nSource file: {source.name}\n\n{summaries[levels[0]]}"
+    extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
+    content = summary_html(source, summaries, report_header(source, transcript, extracted),
+                           transcript=transcript, tabs=args.report_tabs)
     if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:
         # Once generation succeeds, do not leave the other format describing an old log.
         archive_summaries([path for path in all_summaries if path != summary_path], state_path)
     atomic_write(summary_path, content)
     state["summary"] = summary_settings
     save_json(state_path, state)
-    if len(levels) > 1:
-        pending_path.unlink(missing_ok=True)
+    pending_path.unlink(missing_ok=True)
     say(f"  Saved: {summary_path}")
 
 
@@ -1624,19 +1628,19 @@ def build_parser():
     p.add_argument("--vocabulary", default="", help="Optional domain-specific terms/names for Whisper")
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
                    default=os.getenv("SCRIBE_SUMMARIZE_MODEL", f"{DEFAULT_MODEL}:{DEFAULT_EFFORT}"),
-                   help="Summary model/effort; also selects all-mode fusion model. none disables summary; fusion then uses Sol medium")
-    p.add_argument("--summary-detail", type=parse_summary_details, action=SummaryDetailAction,
-                   nargs="+", metavar="1..10[,1..10]",
-                   default=os.getenv("SCRIBE_SUMMARY_DETAIL", DEFAULT_SUMMARY_DETAILS),
-                   help="Detail levels, e.g. 1 5 10 or 1,5,10; one writes .md, multiple write tabbed .html. "
-                        "Overrides SCRIBE_SUMMARY_DETAIL from .env. "
+                   help="Report model/effort; also selects all-mode fusion model. none disables reports; fusion then uses Sol medium")
+    p.add_argument("--report-tabs", type=parse_report_tabs, action=ReportTabsAction,
+                   nargs="+", metavar="TAB[,TAB]",
+                   default=os.getenv("SCRIBE_REPORT_TABS", DEFAULT_REPORT_TABS),
+                   help="HTML report tabs: summary levels 1–10 and/or transcript, e.g. 1,5,10,transcript. "
+                        "Overrides SCRIBE_REPORT_TABS from .env; order is preserved. "
                         "1 brief, 5 expanded, 10 detailed; short sources stay short")
     p.add_argument("--models-dir", type=Path, default=APP_DATA / "models", help="Local model directory")
     p.add_argument("--cache-dir", type=Path, default=APP_DATA / ".cache", help="Intermediate results and state directory")
     p.add_argument("--force", action="store_true", help="Process completed pairs again; bypass recognition/API caches")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--transcribe-only", action="store_true", help="Alias for --summarize-model none; all-mode fusion still uses the API")
-    group.add_argument("--summary-only", action="store_true", help="Summarize existing .log.md files in the output directory")
+    group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from existing .log.md files in the output directory")
     p.add_argument("--offline", action="store_true", help="Force whisper-local and no summary; prohibit API calls and model downloads")
     p.add_argument("--setup", "--download-models", dest="download_models", action="store_true",
                    help="Prepare local models and exit; run.sh also prepares data/.venv. No MKV files or API key required")
@@ -1650,8 +1654,11 @@ def main(argv=None):
     load_env()
     args = build_parser().parse_args(argv)
     if args.show_prompt:
-        for level in summary_levels(args.summary_detail):
+        levels = summary_levels(args.report_tabs)
+        for level in levels:
             say(summary_prompt(level))
+        if not levels:
+            say("No summary tabs selected; the transcript is embedded without summarization.")
         return 0
     if args.speakers < 1:
         raise AppError("--speakers must be a positive integer.")
@@ -1660,7 +1667,7 @@ def main(argv=None):
     args.cache_dir = args.cache_dir.expanduser().resolve()
     args.output_dir = (args.output_dir if args.output_dir is not None else Path.cwd() / "data").expanduser().resolve()
     if args.summary_only and args.summarize_model is None:
-        say("Summary generation is disabled; nothing to do.")
+        say("Report generation is disabled; nothing to do.")
         return 0
     if args.download_models:
         ensure_models(args.models_dir, args.offline, args.verify_models)
@@ -1677,7 +1684,7 @@ def main(argv=None):
     if not pending:
         say(f"Done: 0; skipped: {skipped}; failed: 0.")
         return 0
-    destinations = [p for f in pending for p in output_paths(f, args.output_dir, args.summary_detail)]
+    destinations = [p for f in pending for p in output_paths(f, args.output_dir)]
     if len(set(destinations)) != len(destinations):
         raise AppError("Input files have colliding output names. Use separate --output-dir locations or rename the inputs.")
     # Libraries must not silently download models during local inference.

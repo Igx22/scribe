@@ -18,6 +18,11 @@ import scribe as app
 
 
 class AppTests(unittest.TestCase):
+    def setUp(self):
+        metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
     def test_saved_model_path_uses_home_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -45,7 +50,7 @@ class AppTests(unittest.TestCase):
             self.assertEqual(app.collect_files([str(b), str(a), str(b)], root), [b, a])
             self.assertEqual(app.collect_files([str(outside)], root), [outside])
             with patch.object(app.Path, "cwd", return_value=root):
-                self.assertEqual(app.output_paths(a), (data / "recording 1.log.md", data / "recording 1.summary.md"))
+                self.assertEqual(app.output_paths(a), (data / "recording 1.log.md", data / "recording 1.summary.html"))
 
     def test_bare_names_search_data_and_movies_and_explicit_paths_use_cwd(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,9 +73,9 @@ class AppTests(unittest.TestCase):
                 (movies / "local.mkv").symlink_to(local)
                 self.assertEqual(app.collect_files(["local.mkv"], cwd), [local])
             with patch.object(app.Path, "cwd", return_value=cwd):
-                self.assertEqual(app.output_paths(movie), (data / "movie.log.md", data / "movie.summary.md"))
+                self.assertEqual(app.output_paths(movie), (data / "movie.log.md", data / "movie.summary.html"))
                 custom = root / "custom outputs"
-                self.assertEqual(app.output_paths(movie, custom), (custom / "movie.log.md", custom / "movie.summary.md"))
+                self.assertEqual(app.output_paths(movie, custom), (custom / "movie.log.md", custom / "movie.summary.html"))
 
     def test_env_is_data_and_environment_wins(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"OPENAI_MODEL": "existing"}, clear=True):
@@ -196,7 +201,7 @@ class AppTests(unittest.TestCase):
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"input")
             args = app.build_parser().parse_args(["-f", str(source), "--cache-dir", str(root / "cache"),
                                                  "--output-dir", str(root / "data"),
-                                                 "--transcription-model", "whisper-local", "--summary-detail", "1"])
+                                                 "--transcription-model", "whisper-local", "--report-tabs", "1"])
             log, summary = app.output_paths(source, args.output_dir)
             log.parent.mkdir()
             log.write_text("Reviewed transcript", encoding="utf-8")

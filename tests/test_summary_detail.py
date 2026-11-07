@@ -14,14 +14,14 @@ class SummaryDetailTests(unittest.TestCase):
     def test_cli_bounds_and_rendered_preview(self):
         with patch.dict(os.environ, {}, clear=True):
             parser = app.build_parser()
-        self.assertEqual(parser.parse_args([]).summary_detail, [1, 3, 5, 10])
+        self.assertEqual(parser.parse_args([]).report_tabs, [1, 3, 5, 10, "transcript"])
         for value in ("0", "11", "2.5"):
             with self.subTest(value=value), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
-                    parser.parse_args(["--summary-detail", value])
+                    parser.parse_args(["--report-tabs", value])
         preview = io.StringIO()
         with patch.object(app, "load_env"), contextlib.redirect_stdout(preview):
-            self.assertEqual(app.main(["--show-prompt", "--summary-detail", "5"]), 0)
+            self.assertEqual(app.main(["--show-prompt", "--report-tabs", "5"]), 0)
         self.assertIn("5/10", preview.getvalue())
         self.assertIn("1200-2250", preview.getvalue())
         self.assertNotIn("{summary_", preview.getvalue())
@@ -77,43 +77,47 @@ class SummaryDetailTests(unittest.TestCase):
 class SummaryConfigurationTests(unittest.TestCase):
     def test_environment_lists_are_normalized_like_cli_values(self):
         for value, expected in (("1,5,10", [1, 5, 10]), ("1, 5, 10", [1, 5, 10]),
-                                ("1 5 10", [1, 5, 10]), ("10,1,10", [10, 1]), ("5,5", 5)):
-            with self.subTest(value=value), patch.dict(os.environ, {"SCRIBE_SUMMARY_DETAIL": value}, clear=True):
-                self.assertEqual(app.build_parser().parse_args([]).summary_detail, expected)
-                self.assertEqual(app.build_parser().parse_args(["--summary-detail", "3", "7"]).summary_detail,
+                                ("1 5 10", [1, 5, 10]), ("10,1,10", [10, 1]), ("5,5", [5]),
+                                ("1,3,5,10,transcript", [1, 3, 5, 10, "transcript"]),
+                                ("transcript, 5, TRANSCRIPT", ["transcript", 5])):
+            with self.subTest(value=value), patch.dict(os.environ, {"SCRIBE_REPORT_TABS": value}, clear=True):
+                self.assertEqual(app.build_parser().parse_args([]).report_tabs, expected)
+                self.assertEqual(app.build_parser().parse_args(["--report-tabs", "3", "7"]).report_tabs,
                                  [3, 7])
 
     def test_environment_overrides_dotenv_and_cli_overrides_both(self):
         with tempfile.TemporaryDirectory() as tmp, \
-                patch.dict(os.environ, {"SCRIBE_SUMMARY_DETAIL": "3,7"}, clear=True):
+                patch.dict(os.environ, {"SCRIBE_REPORT_TABS": "3,7"}, clear=True):
             env = Path(tmp) / ".env"
-            env.write_text('SCRIBE_SUMMARY_DETAIL="1, 5, 10"\n')
+            env.write_text('SCRIBE_REPORT_TABS="1, 5, 10"\n')
             app.load_env(env)
-            self.assertEqual(app.build_parser().parse_args([]).summary_detail, [3, 7])
-            self.assertEqual(app.build_parser().parse_args(["--summary-detail", "5"]).summary_detail, 5)
+            self.assertEqual(app.build_parser().parse_args([]).report_tabs, [3, 7])
+            self.assertEqual(app.build_parser().parse_args(["--report-tabs", "5"]).report_tabs, [5])
 
     def test_invalid_environment_is_rejected_but_explicit_cli_still_works(self):
-        for value in ("", "1,,5", "1,11", "five", "2.5"):
-            with self.subTest(value=value), patch.dict(os.environ, {"SCRIBE_SUMMARY_DETAIL": value}, clear=True):
+        for value in ("", "   ", "1,,5", "1,11", "five", "2.5", "log", "transcript,"):
+            with self.subTest(value=value), patch.dict(os.environ, {"SCRIBE_REPORT_TABS": value}, clear=True):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     app.build_parser().parse_args([])
-                self.assertEqual(app.build_parser().parse_args(["--summary-detail", "1,5,10"]).summary_detail,
+                self.assertEqual(app.build_parser().parse_args(["--report-tabs", "1,5,10"]).report_tabs,
                                  [1, 5, 10])
 
-    def test_main_uses_default_or_dotenv_levels_and_cli_controls_output_format(self):
+    def test_main_uses_default_or_dotenv_tabs_and_cli_always_writes_html(self):
         load_env = app.load_env
-        for configured, options, levels in (
-                (None, [], [1, 3, 5, 10]),
+        for configured, options, tabs in (
+                (None, [], [1, 3, 5, 10, "transcript"]),
                 ('"1, 5, 10"', [], [1, 5, 10]),
                 ("5", [], [5]),
-                ("1,3,5,10", ["--summary-detail", "5"], [5]),
-                ("5", ["--summary-detail", "1", "10"], [1, 10])):
+                ("transcript", [], ["transcript"]),
+                ("1,5,transcript", ["--report-tabs", "transcript", "3"], ["transcript", 3]),
+                ("1,3,5,10", ["--report-tabs", "5"], [5]),
+                ("5", ["--report-tabs", "1", "10"], [1, 10])):
             with self.subTest(configured=configured, options=options), tempfile.TemporaryDirectory() as tmp, \
                     patch.dict(os.environ, {}, clear=True):
                 root = Path(tmp)
                 env = root / ".env"
                 env.write_text("OPENAI_API_KEY=unit-test-key\n" +
-                               (f"SCRIBE_SUMMARY_DETAIL={configured}\n" if configured is not None else ""))
+                               (f"SCRIBE_REPORT_TABS={configured}\n" if configured is not None else ""))
                 source = root / "meeting.mkv"; source.write_bytes(b"fixture")
                 output = root / "output"
                 log, _ = app.output_paths(source, output)
@@ -125,14 +129,20 @@ class SummaryConfigurationTests(unittest.TestCase):
                         patch.object(app, "extract_audio") as extract, patch.object(app, "ensure_models") as models:
                     self.assertEqual(app.main(["-f", str(source), "--summary-only", "--output-dir", str(output),
                                                "--cache-dir", str(root / "cache"), *options]), 0)
-                self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], levels)
+                self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], app.summary_levels(tabs))
                 extract.assert_not_called(); models.assert_not_called()
                 self.assertEqual(before, (log.read_bytes(), log.stat().st_mtime_ns))
-                _, summary = app.output_paths(source, output, levels)
+                _, summary = app.output_paths(source, output)
                 self.assertTrue(summary.is_file())
-                self.assertEqual(summary.suffix, ".html" if len(levels) > 1 else ".md")
-                for level in levels:
+                self.assertEqual(summary.suffix, ".html")
+                self.assertFalse(summary.with_suffix(".md").exists())
+                self.assertEqual('id="tab-transcript"' in summary.read_text(), "transcript" in tabs)
+                for level in app.summary_levels(tabs):
                     self.assertIn(f"Summary at level {level}.", summary.read_text())
+
+    def test_removed_summary_detail_option_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            app.build_parser().parse_args(["--summary-detail", "5"])
 
 
 if __name__ == "__main__":

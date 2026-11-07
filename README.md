@@ -1,7 +1,7 @@
 # scribe
 
 macOS command-line tool for detailed conversation logs and summaries with selectable
-detail. It accepts MKV recordings, extracts the first audio track, and supports
+detail in standalone HTML reports. It accepts MKV recordings, extracts the first audio track, and supports
 English, Russian, and mixed conversations. Input recordings are never modified.
 
 For run commands, jump to [4. Transcribe recordings](#4-transcribe-recordings).
@@ -111,12 +111,12 @@ Repeated references or symlinks to the same resolved file are processed once.
 For `meeting.mkv`, the default outputs are:
 
 - `./data/meeting.log.md`: detailed conversation log.
-- `./data/meeting.summary.md`: summary when one detail level is selected.
-- `./data/meeting.summary.html`: one standalone report with tabs when several
-  detail levels are selected (by default, `1,3,5,10`). Only the selected summary
-  format is written.
+- `./data/meeting.summary.html`: one standalone report with the selected tabs
+  (by default, Detail 1, Detail 3, Detail 5, Detail 10, and Transcript).
 
-The `.md` files contain plain text despite their extension. There are no Markdown
+Reports always use HTML, including when only one tab is selected. New Markdown
+summaries are no longer generated; legacy `.summary.md` results remain protected.
+The `.log.md` files contain plain text despite their extension. There are no Markdown
 headings, tables, emphasis, or code fences. Speaker labels and approximate times
 are available in local and combined modes. Combined mode can replace anonymous
 display labels with names supported by the conversation; see below. API-only logs
@@ -247,24 +247,47 @@ and does not force or translate the summary language.
 Summaries distinguish decisions from proposals and open questions, and include
 owners and deadlines only when explicitly present.
 
-## Summary detail: 1–10
+## Report tabs and summary detail
 
-`--summary-detail N [N ...]` controls how much substantive information the summary retains.
-The default levels are `1,3,5,10`, producing an HTML report with four summary tabs and a Log tab when the
-option is omitted. Set `SCRIBE_SUMMARY_DETAIL` in `.env` to choose different
-defaults; an explicit `--summary-detail` overrides that value. Detail is independent
-of the model's reasoning effort: higher detail requests more coverage, not a
-different reasoning setting.
+`--report-tabs TAB [TAB ...]` selects the contents of the HTML report. The default
+is `1,3,5,10,transcript`: four independent summary levels and the original
+conversation transcript. Set `SCRIBE_REPORT_TABS` in `.env` to choose different
+defaults; an explicit `--report-tabs` replaces the whole configured selection.
 
-Select one level for the existing plain-text `.summary.md`, or multiple levels
-for a single `.summary.html` with one tab per level. Both space-separated
-(`--summary-detail 1 5 10`) and comma-separated (`--summary-detail 1,5,10`) lists
-work. Levels must be integers from 1 to 10. Duplicate levels are removed, and tabs
-follow the requested order. A list containing only one distinct level writes `.md`.
+Use summary levels from 1 to 10 and/or `transcript`, separated by spaces or commas,
+for example `--report-tabs 1 5 10 transcript` or `--report-tabs 1,5,10,transcript`.
+Duplicates are removed, tabs follow the requested order, and at least one tab is
+required. `--report-tabs 5` creates HTML with one summary tab; add `transcript` to
+include the source conversation. `--report-tabs transcript` creates a transcript-only
+HTML report, without summary requests; the common header still uses text API
+requests. Transcript is included only when selected.
+
+Numeric detail controls substantive coverage independently of the model's
+reasoning effort: higher detail requests more coverage, not a different reasoning
+setting. Every selection writes `.summary.html`; there is no Markdown output mode.
+The former `--summary-detail` and `SCRIBE_SUMMARY_DETAIL` settings have been
+replaced by `--report-tabs` and `SCRIBE_REPORT_TABS`; migrate existing commands and
+`.env` files. The old CLI option is rejected and the old environment key is unused.
 
 The HTML report has inline CSS and JavaScript, needs no server or external assets,
 and opens directly in a browser. Tabs support clicks and Left/Right/Home/End keys;
 printing includes the selected tab. Without JavaScript, the first tab is readable.
+The **Dark Mode On/Off** switch beside Scribe changes the entire report, including
+its header, tabs, and transcript. It supports mouse, keyboard, and screen readers.
+On first opening, the report follows the system color preference; an explicit
+choice takes precedence and is applied before the content is displayed. Printing
+always uses the light palette and hides the controls.
+
+The choice is saved in browser `localStorage`; HTTP/HTTPS reports also save a
+one-year preference cookie with a shared key and site-wide path. Reports on the
+same website can therefore share it. For local `file://` reports, cookies are not
+used and storage can be unavailable or isolated to each file: reopening the same
+file may retain the choice, but sharing it across different local files is not
+guaranteed. See [browser localStorage limitations](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage#description).
+If storage is blocked, the switch still works for the current view. Clearing
+browser data removes the preference. No transcript text is stored in cookies or
+browser storage, and the HTML still needs no network or external files.
+
 Model text and filenames are escaped as text, never rendered as HTML instructions.
 The interface is in English; summaries retain their conversation-driven language.
 Each Detail tab has a small muted-color dot icon matching its level: one dot for
@@ -272,15 +295,15 @@ Detail 1, three for Detail 3, five for Detail 5, and two rows of five for Detail
 The same count rule applies to intermediate levels. These decorative icons are
 drawn with inline HTML/CSS and require no image files.
 
-The final **Log** tab follows all selected Detail tabs (after Detail 10 with the
-default selection). It contains a complete copy of the final `.log.md` text,
+The **Transcript** tab follows Detail 10 with the default selection. It contains a
+complete copy of the final `.log.md` text,
 including its metadata, speaker labels, times, uncertainty markers, and whitespace.
-Long logs are not truncated. The document icon is drawn with inline CSS; log
-content is escaped plain text, so markup or URLs in speech do not become HTML or
+Long transcripts are not truncated. The document icon is drawn with inline CSS;
+transcript content is escaped plain text, so markup or URLs in speech do not become HTML or
 external links. The `.log.md` is still written for local inspection and resume,
 but the HTML never loads or links to it. To share a report, send just the HTML
 file: the recipient needs no accompanying log, stylesheets, scripts, images, or
-server. Embedding the log makes no additional API requests.
+server. Embedding the transcript makes no additional API requests.
 
 The common report header shows Topic, Participants, Duration, and Date in that
 order. A separate structured text request derives one short topic sentence and
@@ -308,8 +331,8 @@ role evidence across boundaries and a topic-combination step when needed. This
 adds text API requests to HTML generation. Validated header responses are cached
 separately by their input, roster, model/effort, prompt, and schema, and revalidated
 on reuse. `--force` bypasses them. A header error during summary-only regeneration preserves the existing report;
-retrying the same request reuses already completed summaries. Single-level
-Markdown generation makes no header-extraction request.
+retrying the same request reuses already completed summaries. All HTML reports,
+including single-tab and transcript-only reports, use the common header.
 
 | Level | Approximate length for long, information-dense discussions | Word guide |
 | --- | --- | --- |
@@ -331,41 +354,42 @@ at every level. Higher levels retain more reasoning, alternatives, dependencies,
 relevant examples, and technical nuance; they do not fill pages with quotations.
 
 ```bash
-# Use configured levels (1, 3, 5, 10 by default) in a tabbed HTML report
+# Use configured tabs (1, 3, 5, 10, transcript by default)
 ./run.sh
 
-# Select the detail for unfinished recordings
-./run.sh --summary-detail 5
+# Select a single summary tab for unfinished recordings (still HTML)
+./run.sh --report-tabs 5
 
 # Regenerate only an existing summary, preserving the log and recognition caches
-./run.sh -f "recording.mkv" --summary-only --summary-detail 10
+./run.sh -f "recording.mkv" --summary-only --report-tabs 10
 
 # Generate three independent summaries in one HTML file from an existing log
-./run.sh -f "recording.mkv" --summary-only --summary-detail 1 5 10
+./run.sh -f "recording.mkv" --summary-only --report-tabs 1 5 10 transcript
 
 # Equivalent comma-separated syntax
-./run.sh -f "recording.mkv" --summary-only --summary-detail 1,5,10
+./run.sh -f "recording.mkv" --summary-only --report-tabs 1,5,10,transcript
 
 # Inspect the actual rendered prompt without making an API call
-./run.sh --show-prompt --summary-detail 5
+./run.sh --show-prompt --report-tabs 5
 ```
 
-Changing detail or selecting HTML does not override completed-pair skipping. Use `--summary-only`
+Changing tabs does not override completed-pair skipping. Use `--summary-only`
 to change a finished summary without repeating transcription or fusion. Offline
-mode and `--summarize-model none` still disable summaries at every detail level.
+mode and `--summarize-model none` still disable report generation, including a
+transcript-only report; the separate local log is unaffected.
 
 Each level is summarized independently from the same final log, rather than
 expanding or shortening another tab. Multiple levels therefore require additional
 paid text requests, including separate notes for long recordings. If a later level
 fails, completed levels are checkpointed; retry the same command to reuse them.
-The HTML is published atomically only after every requested level succeeds, so a
-failed regeneration preserves the previous report. Changes to the transcript,
-levels/order, model/effort, prompts, or HTML template invalidate that pending work;
+The HTML is published atomically only after every requested level and the header
+succeed, so a failed regeneration preserves the previous report. Changes to the transcript,
+tabs/order, model/effort, prompts, or HTML template invalidate that pending work;
 `--force` also bypasses it. After successful publication, an explicit
 `--summary-only` run regenerates every requested level. When the log is unchanged,
-creating one format leaves an existing summary in the other format in place.
-After successful summary-only generation for an edited log, a known summary in
-the other format is archived if it refers to the old transcript.
+generating HTML leaves an existing legacy Markdown summary in place.
+After successful summary-only generation for an edited log, a known legacy summary
+is archived if it refers to the old transcript.
 
 One shortening request is made if the answer exceeds the selected word ceiling;
 there is no fixed one-page clamp at higher levels. This remains a model-guided
@@ -449,7 +473,6 @@ scribe/
     .gitkeep
     recording.mkv
     recording.log.md
-    recording.summary.md
     recording.summary.html
     models/
     .venv/
@@ -538,16 +561,18 @@ variables take priority over `.env`; the file is parsed as data and never execut
 ```text
 OPENAI_API_KEY=your-api-key
 SCRIBE_SUMMARIZE_MODEL=gpt-6.1-sol:medium
-SCRIBE_SUMMARY_DETAIL=1,3,5,10
+SCRIBE_REPORT_TABS=1,3,5,10,transcript
 ```
 
 `SCRIBE_SUMMARIZE_MODEL` supplies the default for `--summarize-model`.
-`SCRIBE_SUMMARY_DETAIL` supplies the default for `--summary-detail`; it accepts
-commas or spaces, for example `SCRIBE_SUMMARY_DETAIL="1, 5, 10"`. A single value
-such as `SCRIBE_SUMMARY_DETAIL=5` selects Markdown output. `.env.example` includes
-`1,3,5,10`, and the application uses those same levels when no value is configured.
+`SCRIBE_REPORT_TABS` supplies the default for `--report-tabs`; it accepts
+commas or spaces, for example `SCRIBE_REPORT_TABS="1, 5, 10, transcript"`.
+`.env.example` and the built-in fallback both use `1,3,5,10,transcript`.
+A single value such as `SCRIBE_REPORT_TABS=5` still creates HTML; `transcript`
+can be selected alone or with summaries. The old `SCRIBE_SUMMARY_DETAIL` key is
+unused; rename it and add `transcript` if the full conversation should be included.
 The precedence is explicit CLI option, process environment, `.env`, then built-in
-fallback. Invalid configured levels produce an error unless a valid CLI value
+fallback. Invalid configured tabs produce an error unless a valid CLI value
 overrides them. The old `OPENAI_MODEL` and `OPENAI_REASONING` settings are no longer
 used. No API key is required to skip completed pairs or run offline.
 API requests consume the account's API credits/billing; do not infer available
@@ -561,7 +586,7 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-f FILE`, `--file FILE` | Scan `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. |
 | `--transcription-model gpt-transcribe\|whisper-local\|all` | `all` | API only, local only, or both plus reconciliation. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls all-mode fusion. |
-| `--summary-detail N [N ...]` | `SCRIBE_SUMMARY_DETAIL`, or `1,3,5,10` | Levels 1–10, separated by spaces or commas. CLI overrides configuration. One level writes `.md`; multiple levels write tabbed `.html`. Length remains subject to the source content. |
+| `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
 | `--output-dir DIR` | Working directory's `data` | Destination for logs and summaries. |
 | `--speakers N` | `2` | Positive known speaker count for local diarization. |
@@ -571,7 +596,7 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `--cache-dir DIR` | Application's `data/.cache` | Explicit checkpoint/library/temp cache directory. |
 | `--force` | Off | Bypass completion skipping and recognition/API caches; may repeat paid calls. |
 | `--transcribe-only` | Off | Alias for disabling final summaries. Combined-mode fusion still uses the API. |
-| `--summary-only` | Off | Explicitly regenerate summary from an existing log, without recognition/fusion. |
+| `--summary-only` | Off | Regenerate an HTML report from an existing log, without recognition/fusion. |
 | `--download-models` | Off | Prepare/verify local models and exit. Offline mode only checks existing files. |
 | `--verify-models` | Off | Verify SHA-256 hashes as well as sizes when preparing local models. |
 | `--show-prompt` | Off | Print the rendered final summary prompt for the selected detail, without processing or API calls. |
@@ -687,10 +712,10 @@ paths, voice labels, uncertainty spans, all modes, offline isolation, completed-
 skipping, API failures, ownership, retries, cache reuse, prompt chunk coverage,
 model verification, detail propagation, output budgets, and detail-aware long-input
 notes. Configuration checks cover the four default summary tabs, `.env` lists, environment
-and CLI precedence, single-level Markdown overrides, and invalid defaults. HTML
+and CLI precedence, single-tab HTML overrides and transcript-only selections, and invalid defaults. HTML
 checks cover multi-level parsing, escaping, tab associations, completed
 output protection in either format, interrupted-level reuse, invalidation, and
-preservation of existing results on failure. Log checks cover exact embedded text,
+preservation of existing results on failure. Transcript checks cover exact embedded text,
 long-log completeness, escaped markup, the inline icon, and copying the HTML
 without its source log. Header checks cover role citations,
 unknown participants, date/duration provenance, long-log coverage, conflicting
@@ -702,6 +727,9 @@ reaching the final log and summary. Setup checks cover a ready virtual
 environment without a bundled runtime, offline rejection of outdated dependencies,
 the data-folder placeholder in a fresh checkout, and Git exclusions for private
 and generated files. Detail-icon checks cover exact dot counts for all ten levels.
+When Node.js is available, an optional offline JavaScript check executes the actual
+report script for theme restoration/toggling, cookie fallback, blocked storage,
+and tab navigation; it is skipped otherwise. Node.js is not required to run Scribe.
 The original seven-minute recording has also been used
 for real API comparisons. In the original local installation, preserved Sol
 results, controlled Sol/Luna outputs, rejected candidate diagnostics, and usage/cost

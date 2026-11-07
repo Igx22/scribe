@@ -10,6 +10,11 @@ import scribe as app
 
 
 class SpeakerNameTests(unittest.TestCase):
+    def setUp(self):
+        metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
     def turn(self, start, speaker, text):
         return {"start": start, "end": start + 1, "speaker": speaker, "text": text}
 
@@ -197,7 +202,7 @@ class SpeakerNameTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "meeting.mkv"; source.write_bytes(b"input")
             args = app.build_parser().parse_args(["--output-dir", str(root / "data"),
-                                                 "--cache-dir", str(root / "cache"), "--summary-detail", "1"])
+                                                 "--cache-dir", str(root / "cache"), "--report-tabs", "1"])
             turns = [self.turn(0, 1, "I'm Alice."), self.turn(2, 2, "I'm Bob.")]
             local = {"duration": 4, "turns": turns}
             chunks = [{"index": 0, "start": 0, "end": 4, "text": "I'm Alice. I'm Bob."}]
