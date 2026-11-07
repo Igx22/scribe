@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.5.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.6.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -87,6 +87,13 @@ still has a legacy-runtime compatibility path; it is not the new-install design.
 Docker was considered and explicitly deferred. MIT covers Scribe's own source;
 third-party assets keep their own licenses.
 
+Fresh checkouts now include `data/` before any launcher invocation, using the sole
+tracked placeholder `data/.gitkeep`. The root ignore rules exclude every other
+file and subdirectory under `data/`, preserving private recordings, generated
+results, weights, caches, and environments outside Git. This replaces the earlier
+first-run-only creation behavior; the launcher still recreates a missing folder
+when bootstrapping online. Checkout and ignore behavior have regression coverage.
+
 ### Multiple reading depths share one report
 
 Multiple requested summary levels produce one standalone HTML report with tabs;
@@ -95,11 +102,14 @@ selection is now 1, 3, 5, and 10, replacing the earlier level-1 default.
 `SCRIBE_SUMMARY_DETAIL` in `.env` configures that selection; an explicit CLI value
 takes precedence, and exported environment values retain precedence over `.env`.
 The built-in fallback matches `.env.example`, so absent configuration still yields
-the four-tab report. Each level uses
+the four summary levels. Each level uses
 the same saved final log independently, rather than using another summary as its
 source. This preserves the existing detail guidance and language/identity rules,
 at the cost of one summarization pipeline per level. The inline template lives in
 `src/resources/summary.html`; model text and filenames are escaped before insertion.
+Detail tabs use the approved decorative dot indicators: exactly N dots for level
+N, with subdued colors and at most five dots per row. All ten levels are supported.
+These indicators and the Log document icon use inline markup/CSS without assets.
 
 An existing log plus either summary format still counts as completed, regardless
 of a changed selection. Explicit summary-only generation is required to change a
@@ -125,6 +135,13 @@ or a recognized recording filename, with provenance visible in the report. Neith
 is guessed by a text model or taken from filesystem timestamps. Missing facts stay
 unestablished. The HTML-only metadata calls leave single-level Markdown behavior
 unchanged; README owns the exact formats and request/resume details.
+
+HTML reports also embed the entire final log in a last Log tab, after all selected
+Detail tabs. A decorative document icon is drawn in the inline CSS. The transcript
+is inserted as escaped text with whitespace preserved; it is neither truncated nor
+loaded from the separate `.log.md`. This makes the HTML sufficient for sharing as
+one file. The separate log remains part of local output/resume behavior. Embedding
+adds no model call and leaves single-level Markdown output unchanged.
 
 ## Important observed results
 
@@ -225,6 +242,17 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- The detail indicators and tracked data-folder placeholder passed 88 mocked
+  unit tests, including all ten dot counts and checkout-before-launch behavior.
+  The existing real HTML example was rendered again from cached results without
+  additional API or audio processing.
+- Version 2.6.0 passed 86 mocked unit tests plus offline checks of actual-report
+  Log clicks, Home/End navigation, arrow wrapping, and focus. A real example was
+  rendered under ignored `data/comparison/log-tab-preview/` from the previous
+  saved log, all four summaries, and revalidated header cache. No new API or audio
+  calls were made. The embedded text exactly matched the complete saved log, and
+  no external resource references were present. Browser visual verification
+  remains unavailable; these checks cover content, structure, and interaction.
 - The configurable default selection passed 71 mocked unit tests, including
   end-to-end HTML generation with no detail flag, `.env` lists, and single-level
   CLI overrides. This configuration change required no new paid API requests;

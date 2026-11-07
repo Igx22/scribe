@@ -143,7 +143,7 @@ class ReportHeaderTests(unittest.TestCase):
         metadata = {"topic": '<script>alert("topic")</script>',
                     "participants": [{"name": "Alice & Bob", "role": "<img src=x>"}],
                     "duration": "1 hr 24 min", "date": "25 September 2026", "date_note": "Date from recording filename"}
-        result = app.summary_html(Path("meeting.mkv"), {1: "Brief.", 5: "Expanded."}, metadata)
+        result = app.summary_html(Path("meeting.mkv"), {1: "Brief.", 5: "Expanded."}, metadata, transcript=self.log())
         self.assertIn("&lt;script&gt;", result)
         self.assertIn("Alice &amp; Bob", result)
         self.assertIn("&lt;img src=x&gt;", result)

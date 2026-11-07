@@ -4,6 +4,9 @@ macOS command-line tool for detailed conversation logs and summaries with select
 detail. It accepts MKV recordings, extracts the first audio track, and supports
 English, Russian, and mixed conversations. Input recordings are never modified.
 
+For run commands, jump to [4. Transcribe recordings](#4-transcribe-recordings).
+If this is your first installation, follow the setup steps below.
+
 ## Setup from GitHub: start here
 
 Scribe requires macOS 14+ on Apple Silicon (M1 or newer) and an installed ARM64
@@ -74,7 +77,9 @@ them again. Use `--verify-models` to recheck existing model hashes too.
 
 ### 4. Transcribe recordings
 
-Put MKV files into `data`, or select a recording from `~/Movies`:
+Open Terminal in the Scribe project folder (the folder containing `run.sh`).
+The checkout already includes a `data` subfolder. Put your MKV files there, for example
+`scribe/data/recording.mkv`, then run:
 
 ```bash
 ./run.sh
@@ -85,14 +90,12 @@ Put MKV files into `data`, or select a recording from `~/Movies`:
 After setup, fully local recognition is available with `./run.sh --offline`.
 There is no need to ship or commit a separate Python installation in `data/runtime`.
 
-Without `-f`, scan the lowercase `data` directory in the current working directory,
-non-recursively. A bare filename searches both `./data` and `~/Movies`. `~/Movies`
-uses the current user's home directory and capital-M `Movies`, via `Path.home()`.
-If distinct files with that name exist in both locations, pass an explicit path.
-Repeated references or symlinks to the same resolved file are processed once.
+Without `-f`, Scribe scans `./data` in the Terminal's current working directory,
+non-recursively. When you run from the project folder, this is the project's
+`data` subfolder. You can also select a recording by its explicit path:
 
 ```bash
-./run.sh -f "~/Movies/recording.mkv"
+./run.sh -f "./data/recording.mkv"
 ./run.sh -f "./recording.mkv"
 ./run.sh -f "/absolute/path/recording.mkv"
 python3 src/scribe.py -f "recording.mkv"
@@ -101,6 +104,7 @@ python3 src/scribe.py -f "recording.mkv"
 An explicit relative path is relative to the Terminal working directory. The
 launcher preserves that directory. Only MKV files are accepted; `.MKV` also works.
 Missing inputs, empty input directories, and output-name collisions are reported.
+Repeated references or symlinks to the same resolved file are processed once.
 
 ## Outputs and completed recordings
 
@@ -246,7 +250,7 @@ owners and deadlines only when explicitly present.
 ## Summary detail: 1–10
 
 `--summary-detail N [N ...]` controls how much substantive information the summary retains.
-The default levels are `1,3,5,10`, producing an HTML report with four tabs when the
+The default levels are `1,3,5,10`, producing an HTML report with four summary tabs and a Log tab when the
 option is omitted. Set `SCRIBE_SUMMARY_DETAIL` in `.env` to choose different
 defaults; an explicit `--summary-detail` overrides that value. Detail is independent
 of the model's reasoning effort: higher detail requests more coverage, not a
@@ -263,6 +267,20 @@ and opens directly in a browser. Tabs support clicks and Left/Right/Home/End key
 printing includes the selected tab. Without JavaScript, the first tab is readable.
 Model text and filenames are escaped as text, never rendered as HTML instructions.
 The interface is in English; summaries retain their conversation-driven language.
+Each Detail tab has a small muted-color dot icon matching its level: one dot for
+Detail 1, three for Detail 3, five for Detail 5, and two rows of five for Detail 10.
+The same count rule applies to intermediate levels. These decorative icons are
+drawn with inline HTML/CSS and require no image files.
+
+The final **Log** tab follows all selected Detail tabs (after Detail 10 with the
+default selection). It contains a complete copy of the final `.log.md` text,
+including its metadata, speaker labels, times, uncertainty markers, and whitespace.
+Long logs are not truncated. The document icon is drawn with inline CSS; log
+content is escaped plain text, so markup or URLs in speech do not become HTML or
+external links. The `.log.md` is still written for local inspection and resume,
+but the HTML never loads or links to it. To share a report, send just the HTML
+file: the recipient needs no accompanying log, stylesheets, scripts, images, or
+server. Embedding the log makes no additional API requests.
 
 The common report header shows Topic, Participants, Duration, and Date in that
 order. A separate structured text request derives one short topic sentence and
@@ -379,12 +397,15 @@ local log without cloud text processing.
 
 | Commit to Git | Keep local; excluded by `.gitignore` |
 | --- | --- |
-| `src/`, including the small model manifest | The entire `data/` directory |
+| `src/`, including the small model manifest; `data/.gitkeep` | All other contents of `data/` |
 | `tests/`, `run.sh`, `requirements.txt` | `data/.venv`, downloaded model weights, pip/library/API caches |
 | `README.md`, `LICENSE`, `.gitignore`, `.env.example` | Recordings, generated logs/summaries, comparisons, and `.env` |
 
-A fresh checkout has no `data` directory or `.env`. Copy `.env.example` when API
-features are needed; `run.sh` creates `data` and the environment automatically.
+A fresh checkout includes `data/` with only the hidden `.gitkeep` placeholder, so
+you can add recordings before the first launch. Everything else inside `data/`
+remains excluded from Git. A checkout has no `.env`; copy `.env.example` when API
+features are needed. `run.sh` prepares the environment and recreates `data` if needed
+on an online launch.
 For a source checkout on another machine, follow the setup commands rather than
 copying the virtual environment. Python virtual environments depend on their base
 Python installation and location; they should be recreated after moving the
@@ -425,6 +446,7 @@ scribe/
   docs/
     PROJECT_CONTEXT.md
   data/
+    .gitkeep
     recording.mkv
     recording.log.md
     recording.summary.md
@@ -664,11 +686,13 @@ The checks use mocks and local fixtures, without paid API calls. They cover inpu
 paths, voice labels, uncertainty spans, all modes, offline isolation, completed-pair
 skipping, API failures, ownership, retries, cache reuse, prompt chunk coverage,
 model verification, detail propagation, output budgets, and detail-aware long-input
-notes. Configuration checks cover the four default tabs, `.env` lists, environment
+notes. Configuration checks cover the four default summary tabs, `.env` lists, environment
 and CLI precedence, single-level Markdown overrides, and invalid defaults. HTML
 checks cover multi-level parsing, escaping, tab associations, completed
 output protection in either format, interrupted-level reuse, invalidation, and
-preservation of existing results on failure. Header checks cover role citations,
+preservation of existing results on failure. Log checks cover exact embedded text,
+long-log completeness, escaped markup, the inline icon, and copying the HTML
+without its source log. Header checks cover role citations,
 unknown participants, date/duration provenance, long-log coverage, conflicting
 roles, escaped metadata, checkpoint revalidation, and preservation after header
 failures. Name checks cover introductions, cross-chunk address/response evidence,
@@ -676,15 +700,17 @@ conflicts and corrections, invalid citations, shared names, checkpoint reuse, an
 two-/three-person address evidence, human-name preference over nicknames, and names
 reaching the final log and summary. Setup checks cover a ready virtual
 environment without a bundled runtime, offline rejection of outdated dependencies,
-and Git exclusions for generated files.
+the data-folder placeholder in a fresh checkout, and Git exclusions for private
+and generated files. Detail-icon checks cover exact dot counts for all ten levels.
 The original seven-minute recording has also been used
 for real API comparisons. In the original local installation, preserved Sol
 results, controlled Sol/Luna outputs, rejected candidate diagnostics, and usage/cost
 estimates are stored under `data/comparison/luna-vs-sol/`. These are local experiment
 artifacts and are **not included in the Git repository**. A fresh GitHub checkout
 does not contain the recordings, comparison transcripts, summaries, reports, or
-usage logs. The entire `data/` directory, including `data/comparison/`, is excluded
-by `.gitignore`; setup does not download or recreate those private comparison files.
+usage logs. Except for `data/.gitkeep`, the contents of `data/`, including
+`data/comparison/`, are excluded by `.gitignore`; setup does not download or
+recreate those private comparison files.
 If you have the local comparison report, consult it before choosing Luna for
 fusion: a lower token price does not establish equivalent transcript quality.
 

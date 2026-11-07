@@ -62,11 +62,34 @@ class SetupTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
             for name in (".env", "data/.venv/lib/dependency.py", "data/models/weights.safetensors",
                          "data/.cache/stage.json", "data/recording.mkv", "data/comparison/usage.json",
-                         "exports/meeting.summary.html"):
+                         "data/notes.txt", "data/.env", "data/.gitkeep.copy", "exports/meeting.summary.html"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 0, name)
             for name in (".env.example", "requirements.txt", "run.sh", "src/scribe.py",
-                         "src/resources/models-manifest.json", "src/resources/summary.html", "tests/test_setup.py"):
+                         "src/resources/models-manifest.json", "src/resources/summary.html", "tests/test_setup.py",
+                         "data/.gitkeep"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 1, name)
+
+    @unittest.skipUnless(shutil.which("git"), "Git is needed to verify fresh checkout contents")
+    def test_checkout_contains_data_before_any_launch_but_no_private_contents(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, checkout = root / "repo", root / "checkout"
+            repo.mkdir(); checkout.mkdir()
+            shutil.copy2(app.APP_DIR / ".gitignore", repo / ".gitignore")
+            (repo / "data").mkdir()
+            shutil.copy2(app.APP_DIR / "data/.gitkeep", repo / "data/.gitkeep")
+            for name in ("recording.mkv", "notes.txt", "models/model.bin", ".cache/stage.json"):
+                path = repo / "data" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"private fixture")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+            subprocess.run(["git", "add", "--all"], cwd=repo, check=True, capture_output=True)
+            tracked = subprocess.run(["git", "ls-files"], cwd=repo, check=True, capture_output=True, text=True)
+            self.assertEqual(tracked.stdout.splitlines(), [".gitignore", "data/.gitkeep"])
+            subprocess.run(["git", "checkout-index", "--all", "--prefix", str(checkout) + os.sep],
+                           cwd=repo, check=True, capture_output=True)
+            self.assertTrue((checkout / "data").is_dir())
+            self.assertEqual([path.name for path in (checkout / "data").iterdir()], [".gitkeep"])
 
 
 if __name__ == "__main__":

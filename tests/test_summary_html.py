@@ -20,6 +20,48 @@ class Elements(HTMLParser):
         self.elements.append((tag, dict(attrs)))
 
 
+class EmbeddedLog(HTMLParser):
+    def __init__(self, text):
+        super().__init__()
+        self.in_log = False
+        self.text = []
+        self.feed(text)
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "div" and dict(attrs).get("class") == "log-content":
+            self.in_log = True
+
+    def handle_endtag(self, tag):
+        if tag == "div":
+            self.in_log = False
+
+    def handle_data(self, text):
+        if self.in_log:
+            self.text.append(text)
+
+
+class DetailDots(HTMLParser):
+    def __init__(self, text):
+        super().__init__()
+        self.level = None
+        self.counts = {}
+        self.hidden = []
+        self.feed(text)
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "span" and attrs.get("class") == "detail-dots":
+            self.level = int(attrs["data-count"])
+            self.counts[self.level] = 0
+            self.hidden.append(attrs.get("aria-hidden"))
+        if tag == "i" and attrs.get("class") == "dot":
+            self.counts[self.level] += 1
+
+    def handle_endtag(self, tag):
+        if tag == "span":
+            self.level = None
+
+
 class SummaryHtmlTests(unittest.TestCase):
     def setUp(self):
         metadata = patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}})
@@ -58,7 +100,7 @@ class SummaryHtmlTests(unittest.TestCase):
     def test_html_escapes_source_and_model_text_and_connects_accessible_tabs(self):
         text = app.summary_html(Path('<img src=x onerror=alert(1)>@@TABS@@.mkv'), {
             10: 'Привет, Alice & Bob.\n\n<script>alert("x")</script>\nSecond line.',
-            1: 'A short summary.'})
+            1: 'A short summary.'}, transcript="Original log.")
         elements = Elements(text).elements
         self.assertNotIn("img", [tag for tag, attrs in elements])
         self.assertEqual(sum(tag == "script" for tag, attrs in elements), 1)
@@ -70,7 +112,8 @@ class SummaryHtmlTests(unittest.TestCase):
         panels = [attrs for tag, attrs in elements if attrs.get("role") == "tabpanel"]
         self.assertEqual([tab["aria-controls"] for tab in tabs], [panel["id"] for panel in panels])
         self.assertEqual([panel["aria-labelledby"] for panel in panels], [tab["id"] for tab in tabs])
-        self.assertEqual([tab["aria-selected"] for tab in tabs], ["true", "false"])
+        self.assertEqual([tab["aria-selected"] for tab in tabs], ["true", "false", "false"])
+        self.assertEqual([tab["id"] for tab in tabs], ["tab-10", "tab-1", "tab-log"])
         self.assertNotIn("hidden", panels[0])
         self.assertIn("hidden", panels[1])
         self.assertFalse(any("src" in attrs or "href" in attrs for tag, attrs in elements))
@@ -91,6 +134,51 @@ class SummaryHtmlTests(unittest.TestCase):
             self.assertEqual(summary.suffix, ".html")
             for level in (1, 5, 10):
                 self.assertIn(f"Summary for {level}.", summary.read_text())
+            self.assertIn("Reviewed conversation.\n", summary.read_text())
+
+    def test_embedded_log_preserves_text_and_cannot_inject_html_or_external_assets(self):
+        transcript = ('\nDETAILED TRANSCRIPT\n\tAlice & Bob — Привет.\n\n'
+                      '</div><script>alert("log")</script><img src="https://example.invalid/image">\n'
+                      'https://example.invalid/recording.log.md\n@@SOURCE@@\n  Trailing spaces.  \n')
+        rendered = app.summary_html(Path("meeting.mkv"), {1: "Brief.", 3: "Overview.", 5: "Expanded.", 10: "Detailed."},
+                                    transcript=transcript)
+        self.assertEqual("".join(EmbeddedLog(rendered).text), transcript)
+        elements = Elements(rendered).elements
+        self.assertEqual([attrs["id"] for tag, attrs in elements if attrs.get("role") == "tab"],
+                         ["tab-1", "tab-3", "tab-5", "tab-10", "tab-log"])
+        self.assertEqual(sum(tag == "script" for tag, attrs in elements), 1)
+        self.assertFalse(any(tag in ("img", "link", "iframe", "object", "embed") for tag, attrs in elements))
+        self.assertFalse(any(key in attrs for tag, attrs in elements for key in ("src", "href", "srcset")))
+        icon = [attrs for tag, attrs in elements if attrs.get("class") == "log-icon"]
+        self.assertEqual(icon, [{"class": "log-icon", "aria-hidden": "true"}])
+
+    def test_long_log_is_embedded_without_truncation(self):
+        transcript = "BEGIN_LOG\n" + "Long conversation. " * 20000 + "\nEND_LOG\n"
+        rendered = app.summary_html(Path("meeting.mkv"), {1: "Brief.", 10: "Detailed."}, transcript=transcript)
+        self.assertEqual("".join(EmbeddedLog(rendered).text), transcript)
+
+    def test_each_detail_level_has_exactly_that_many_decorative_dots(self):
+        summaries = {level: "Summary." for level in range(1, 11)}
+        rendered = app.summary_html(Path("meeting.mkv"), summaries, transcript="Full log.")
+        dots = DetailDots(rendered)
+        self.assertEqual(dots.counts, {level: level for level in range(1, 11)})
+        self.assertEqual(dots.hidden, ["true"] * 10)
+        tabs = [attrs["id"] for tag, attrs in Elements(rendered).elements if attrs.get("role") == "tab"]
+        self.assertEqual(tabs, [f"tab-{level}" for level in range(1, 11)] + ["tab-log"])
+
+    def test_copied_html_remains_complete_without_the_original_log_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
+            transcript = "DETAILED TRANSCRIPT\n\n[00:00–00:02] Alice\nOriginal words & uncertainty [speaker uncertain: retained].\n"
+            app.atomic_write(log, transcript)
+            with patch.object(app, "summarize", return_value="Summary.") as summarize:
+                app.process_file(source, args, "key")
+            self.assertEqual(summarize.call_count, 3)
+            shared = Path(tmp) / "shared" / "report.html"
+            shared.parent.mkdir(); shared.write_bytes(summary.read_bytes())
+            log.unlink()
+            self.assertEqual(list(shared.parent.iterdir()), [shared])
+            self.assertEqual("".join(EmbeddedLog(shared.read_text()).text), transcript)
 
     def test_failure_preserves_existing_html_and_retries_only_unfinished_levels(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,7 +35,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -929,16 +929,18 @@ def report_header(source, transcript, metadata):
             "duration": duration, "date": date, "date_note": date_note}
 
 
-def summary_html(source, summaries, metadata=None):
+def summary_html(source, summaries, metadata=None, *, transcript):
     """Render model text as escaped data in a self-contained, offline report."""
     tabs, panels = [], []
     for index, (detail, answer) in enumerate(summaries.items()):
         active = index == 0
         description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(detail, "Summary")
+        dots = (f'<span class="detail-dots" data-count="{detail}" aria-hidden="true">'
+                + '<i class="dot"></i>' * detail + '</span>')
         tabs.append(f'<button type="button" role="tab" id="tab-{detail}" '
                     f'aria-controls="panel-{detail}" aria-selected="{str(active).lower()}" '
-                    f'tabindex="{0 if active else -1}">Detail {detail}'
-                    f'<span>{description}</span></button>')
+                    f'tabindex="{0 if active else -1}"><span class="tab-title">{dots}Detail {detail}</span>'
+                    f'<span class="tab-description">{description}</span></button>')
         paragraphs = "\n".join(f'<p>{html.escape(part.strip())}</p>'
                                for part in re.split(r"\n\s*\n", answer.strip()) if part.strip())
         heading = {1: "Brief summary", 3: "Conversation overview", 5: "Expanded summary", 10: "Detailed summary"}.get(detail, "Conversation summary")
@@ -947,6 +949,14 @@ def summary_html(source, summaries, metadata=None):
                       f'<div class="panel-heading"><h2>{heading}</h2>'
                       f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span></div>'
                       f'<div class="prose" dir="auto">{paragraphs}</div></section>')
+    tabs.append('<button type="button" role="tab" id="tab-log" aria-controls="panel-log" '
+                'aria-selected="false" tabindex="-1"><span class="tab-title"><span class="icon-slot">'
+                '<i class="log-icon" aria-hidden="true"></i></span>Log</span>'
+                '<span class="tab-description">Full transcript</span></button>')
+    panels.append('<section role="tabpanel" id="panel-log" aria-labelledby="tab-log" tabindex="0" hidden>'
+                  '<div class="panel-heading"><h2>Conversation log</h2>'
+                  f'<span>{len(transcript.split()):,} words · Full transcript</span></div>'
+                  f'<div class="log-content" dir="auto">{html.escape(transcript)}</div></section>')
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
     metadata = metadata or report_header(source, "", {})
@@ -1568,7 +1578,7 @@ def _process_file(source, args, key):
         summaries[level] = answer
     if len(levels) > 1:
         extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
-        content = summary_html(source, summaries, report_header(source, transcript, extracted))
+        content = summary_html(source, summaries, report_header(source, transcript, extracted), transcript=transcript)
     else:
         content = f"CONVERSATION SUMMARY\nSource file: {source.name}\n\n{summaries[levels[0]]}"
     if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:

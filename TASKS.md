@@ -89,3 +89,6 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-037 | Put English before Russian and use English example names throughout project documentation | Done | 2026-11-07 | 2026-11-07 |
 | SCR-038 | Generate tabbed HTML summaries with grounded meeting metadata | Done | 2026-11-07 | 2026-11-07 |
 | SCR-039 | Default to summary levels 1, 3, 5, 10 and configure levels through .env | Done | 2026-11-07 | 2026-11-07 |
+| SCR-040 | Embed the complete transcript in a standalone HTML Log tab | Done | 2026-11-07 | 2026-11-07 |
+| SCR-041 | Clarify the README project data folder and add a direct link to run commands | Done | 2026-11-07 | 2026-11-07 |
+| SCR-042 | Include the project data folder in fresh checkouts while excluding private contents | Done | 2026-11-07 | 2026-11-07 |
