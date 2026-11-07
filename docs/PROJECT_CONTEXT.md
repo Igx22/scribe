@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.11.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.12.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -13,8 +13,10 @@ formats, and operational behavior; do not duplicate its reference material here.
 The original local-only results contained too much unclear speech and uncertain
 speaker attribution, especially in Russian technical discussion. A live comparison
 led the user to prefer cloud recognition for clearer words, while retaining local
-voice/time anchors. The resulting design uses two sources and text reconciliation,
-rather than asking a text model to infer who spoke from meaning.
+voice/time anchors. The resulting combined mode uses two sources and text
+reconciliation, rather than asking a text model to infer who spoke from meaning.
+SCR-061 later selected WhisperX Turbo as the local default while preserving the
+combined option.
 
 Whisper recognizes words. Nemotron 3 establishes voices independently, through
 the pinned NeMo-Speech.cpp 0.3.0 CPU runtime and Q8_0 model. It automatically
@@ -24,8 +26,10 @@ but cannot move anchors or change their speaker/time assignments. Speech that
 cannot be placed confidently must remain unassigned. Thus clearer recognition
 does not establish more accurate speaker attribution.
 
-The user explicitly retained API-only and local-only choices alongside the combined
-default. A failed cloud stage in combined mode must still leave a usable local
+The four recognition choices are now API-only, default local WhisperX Turbo,
+local MLX Turbo, and API + WhisperX reconciliation. Diarization is independently
+selectable between default Nemotron and optional Community-1. A failed cloud
+stage in combined mode must still leave a usable local
 log; API-only mode must not silently load or substitute local models. See
 `configure_mode()`, `_process_file()`, and `fuse_transcripts()` in
 [src/scribe.py](../src/scribe.py), with regression coverage in
@@ -152,6 +156,29 @@ remain protected against a backend change, and existing API-only logs can resume
 despite their obsolete unused speaker-count setting. README owns the migration
 and removed-option instructions. These decisions follow two controls, not a
 general accuracy benchmark or a claim that eight voices always separate correctly.
+
+SCR-061 makes recognizer identity part of word checkpoints, independently of voice
+checkpoints. MLX words cannot stand in for WhisperX; changing only the diarizer
+reuses compatible words. Legacy MLX word caches remain reusable with explicit MLX.
+Completed pairs still skip, partial outputs with changed settings remain protected,
+and summary-only regeneration keeps the final log. API service IDs and cached audio
+responses retain `gpt-transcribe`; the renamed public option is `gpt-transcribe-online`.
+
+WhisperX 3.8.6 runs Turbo on CPU int8 with four threads, batch four and beam five,
+using local pyannote VAD and prepared English/Russian wav2vec2 word alignment.
+Automatic language detection is per recording; MLX retains per-chunk detection.
+Other alignment languages are not prepared; unsupported detection fails clearly.
+Alignment scores are retained separately from ASR segment confidence. Untimed
+words are retained with approximate neighboring bounds and uncertain voice markers.
+The default recognizer supplies anonymous labels, without text reconciliation or
+name discovery; ordinary summaries still send text unless disabled/offline.
+
+Setup prepares only the selected assets, including local NLTK tokenizers for
+WhisperX. Public pinned default assets need no HF account. Optional Community-1
+uses a token only for initial gated HF requests, strips it on redirects, and runs
+locally after download. Python support is 3.12–3.13 because this WhisperX release
+excludes 3.14. The shared environment keeps both recognizers; unused weights and
+all existing private outputs are preserved. README owns migration commands.
 
 ### Honest uncertainty and language preservation
 
@@ -445,6 +472,21 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.12.0 passed 133 mocked tests, dependency consistency, launcher
+  syntax/help/version, selected online setup, and offline hash verification for
+  the default, MLX and Community-1 selections. Fresh production WhisperX Turbo
+  ASR/alignment plus Nemotron detected one/two voices and produced 150/788 word
+  items on the two controls, with automatic Russian detection, no count hints,
+  missing word times or invalid bounds. Repeated runs reused final logs without
+  extraction/inference. Switching to Community-1 on the monologue detected one
+  voice in 72.47 s while reusing WhisperX words; API-only mode reused cached GPT
+  audio text without local models. English alignment weights loaded locally,
+  but English/mixed speech and fresh MLX inference were not retested. No new API
+  calls, returned API usage, fusion or summary validation occurred; 59 private
+  baseline files retained hashes/mtimes. A verification-script field typo and a
+  unit fixture's trailing-newline expectation were corrected without changing
+  model outputs. These checks establish integration, not independent accuracy.
+  Evidence: [integration](../data/comparison/whisperx-integration/REPORT.txt).
 - Version 2.11.0 passed 122 mocked tests and dependency consistency, launcher
   syntax/help/version, live setup downloads (113,908,104 new bytes; existing
   Whisper reused), and offline full model/runtime verification. An isolated

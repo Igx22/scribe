@@ -306,7 +306,7 @@ class SummaryHtmlTests(unittest.TestCase):
 
     def test_forced_transcription_archives_both_formats_before_failed_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source, args, log, summary = self.setup_case(Path(tmp), "--force", "--transcription-model", "gpt-transcribe")
+            source, args, log, summary = self.setup_case(Path(tmp), "--force", "--transcription-model", "gpt-transcribe-online")
             for path in app.summary_paths(source, args.output_dir):
                 app.atomic_write(path, "Previous " + path.suffix)
             chunks = [{"start": 0, "end": 2, "text": "Changed speech."}]

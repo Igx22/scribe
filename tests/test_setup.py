@@ -26,7 +26,7 @@ class SetupTests(unittest.TestCase):
                     if offline:
                         arguments.append("--offline")
                     self.assertEqual(app.main(arguments), 0)
-                    prepare.assert_called_once_with(models.resolve(), offline, False)
+                    prepare.assert_called_once_with(models.resolve(), offline, False, transcription_model="whisperx", diarization_model="nemotron")
                     process.assert_not_called()
 
     def test_ready_venv_runs_without_a_bundled_python_or_pip_and_stale_one_is_rejected_offline(self):

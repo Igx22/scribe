@@ -10,7 +10,7 @@ If this is your first installation, follow the setup steps below.
 ## Setup from GitHub: start here
 
 Scribe requires macOS 14+ on Apple Silicon (M1 or newer) and an installed ARM64
-Python 3.12, 3.13, or 3.14. The Git repository contains source code and setup
+Python 3.12 or 3.13 (WhisperX does not support 3.14). The Git repository contains source code and setup
 instructions, **not a downloaded Python distribution or model weights**.
 
 ### 1. Install Python and Git once
@@ -18,7 +18,7 @@ instructions, **not a downloaded Python distribution or model weights**.
 If a suitable Python and Git are already installed, skip this step. With Homebrew:
 
 ```bash
-brew install python@3.14 git
+brew install python@3.13 git
 ```
 
 If Homebrew is missing, install it using the command from its
@@ -27,14 +27,14 @@ If Homebrew is missing, install it using the command from its
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 eval "$(/opt/homebrew/bin/brew shellenv)"
-brew install python@3.14 git
+brew install python@3.13 git
 ```
 
 Follow the installer's prompts, including Apple's Command Line Tools if requested.
 Homebrew has its own supported macOS versions; if it does not support your macOS,
-install Python 3.12–3.14 using the [official macOS installer](https://www.python.org/downloads/macos/)
+install Python 3.12–3.13 using the [official macOS installer](https://www.python.org/downloads/macos/)
 and use GitHub's Download ZIP option if Git is unavailable. The remaining setup is
-the same. [Python formula details](https://formulae.brew.sh/formula/python@3.14).
+the same. [Python formula details](https://formulae.brew.sh/formula/python@3.13).
 
 ### 2. Clone and configure Scribe
 
@@ -60,22 +60,34 @@ recognition needs no API key; online downloads are still needed to prepare it on
 
 This command automatically creates `data/.venv` using the installed Python,
 installs the libraries from `requirements.txt` into that isolated environment,
-and downloads Whisper, the Nemotron 3 diarization model, and NVIDIA's native
-macOS ARM64 CPU runtime into `data/models`. Downloads total approximately
-1.73 GB. All download URLs are public: **no Hugging Face account or token is
-required**, including for diarization. File sizes and SHA-256 hashes are checked
-during download. FFmpeg is provided by the Python dependency `imageio-ffmpeg`;
-a separate `brew install ffmpeg` is not required.
-No MKV file or API key is needed for this setup command, and no paid transcription
-or summary request is made. You do not need to run pip or activate the environment
-manually.
+and prepares assets for the selected recognizer and diarizer in `data/models`.
+The default **WhisperX Turbo + Nemotron 3** downloads about **3.38 GB**, including
+English and Russian word-alignment models and tokenizer data. No Hugging Face
+account or token is required for this default. Downloads use pinned revisions,
+sizes and SHA-256 hashes. The native runtime is downloaded from NVIDIA's official
+release; it needs no compiler, GPU toolkit or global installation.
+FFmpeg is provided by `imageio-ffmpeg`; a separate installation is not required.
+Setup needs no recording or API key and makes no paid API requests.
 
-The explicit setup step is convenient but optional: an ordinary first launch
-also prepares its Python environment, and local/combined recognition downloads
-missing models when needed. API-only mode does not download local model weights.
-`--setup` deliberately prepares all local models, regardless of the transcription
-mode. Existing verified-size files are reused; repeated setup does not download
-them again. Use `--verify-models` to recheck existing model hashes too.
+Choose other local assets explicitly:
+
+```bash
+./scribe.sh --setup --transcription-model mlx
+./scribe.sh --setup --diarization-model community-1
+```
+
+The MLX + Nemotron selection downloads about 1.73 GB. Community-1 is optional
+and requires accepting its [model conditions](https://huggingface.co/pyannote/speaker-diarization-community-1)
+and setting `HF_TOKEN` in the ignored `.env` for the initial download. Once
+prepared, it runs locally without a token or network access. Tokens are not
+forwarded to model CDN redirects. API-only setup prepares the Python environment
+without local model downloads.
+
+An ordinary online launch also prepares missing selected assets. Repeated setup
+reuses valid files; `--verify-models` checks existing model hashes too. Setup does
+not prepare every alternative: run setup with the same selections before using
+them offline. Existing unused weights are retained. The Python environment is
+shared across selections; no environment activation or manual pip command is needed.
 
 ### 4. Transcribe recordings
 
@@ -207,30 +219,47 @@ source/settings match.
 
 ## Transcription modes
 
-`--transcription-model` accepts exactly three values:
+`--transcription-model` accepts exactly four values:
 
 | Value | Recognition and final log | Local voice labels | Audio uploaded |
 | --- | --- | --- | --- |
-| `gpt-transcribe` | OpenAI GPT-Transcribe only | No | Yes, extracted audio |
-| `whisper-local` | Local Whisper and local diarization only | A, B, C, D, etc. | No |
-| `all` (default) | GPT-Transcribe + local Whisper/voices + GPT text reconciliation | A, B, C, D, etc.; supported names when available | Yes, extracted audio |
+| `gpt-transcribe-online` | OpenAI GPT-Transcribe only | No | Yes, extracted audio |
+| `whisperx` (default) | Local WhisperX large-v3-turbo with word alignment | A, B, C, etc. | No |
+| `mlx` | Local MLX Whisper large-v3-turbo | A, B, C, etc. | No |
+| `gpt-transcribe+whisperx` | GPT-Transcribe + WhisperX/voices + GPT text reconciliation | A, B, C, etc.; supported names when available | Yes, extracted audio |
 
-The default `all` preserves the earlier two-source pipeline. GPT-Transcribe runs
-first, local recognition supplies voice/time anchors, and a text model combines
-the sources into the final log. The MKV container/video itself is not uploaded.
-The summary is generated from that final log.
+Choose the voice model independently with `--diarization-model nemotron|community-1`.
+The default is `nemotron`, which detects up to eight voices automatically.
+Community-1 also estimates the count automatically and is the gated optional
+alternative described above. No exact/minimum/maximum count hints are supplied.
+API-only recognition ignores the diarizer selection and does not load or prepare
+local recognition/voice models.
 
-API-only mode does not load, prepare, or fall back to local recognition models.
-An API failure is reported. In `all`, failed cloud transcription falls back to the
-local log and skips reconciliation; a failed reconciliation retains the local log.
-If summaries are enabled, the text model then summarizes that available log.
-The source transcripts and error state remain cached for inspection and retries.
-A fallback log plus a successful summary counts as a completed pair on the next
-ordinary run; use explicit regeneration if you want another attempt at fusion.
+The default `whisperx` uses CPU int8, batch four, four threads and beam five,
+with local pyannote VAD and forced word alignment. English, Russian and mixed
+speech are supported; auto language detection runs per recording. Alignment
+assets are prepared for English and Russian; choose `mlx` or API-only recognition
+for other languages. MLX uses Apple Silicon acceleration and per-chunk detection.
+WhisperX alignment scores are not ASR confidence; low-confidence speech is marked
+from source-segment recognition scores. Words without precise alignment are
+retained with approximate neighboring bounds and speaker-uncertainty markers.
+
+In combined mode, GPT-Transcribe runs first and WhisperX supplies local word/time
+anchors, using the selected diarizer's fixed voice IDs. Text reconciliation combines
+these sources; the MKV container/video itself is never uploaded. The summary is
+made from the final log. A failed cloud audio stage leaves local text and skips
+reconciliation; failed reconciliation retains local text. An API-only failure
+is reported without falling back to local recognition.
+
+**Local recognition does not disable API summaries.** The default still uses
+`--summarize-model gpt-6.1-sol:medium` on the resulting text. Use `--offline` or
+`--summarize-model none` for a local-only log. Combined mode still needs text API
+reconciliation when summaries are disabled. A fallback log plus successful report
+counts as a completed pair on the next run; explicit regeneration can repeat calls.
 
 ## Speaker names from the conversation
 
-In combined `all` mode, the existing GPT reconciliation request also proposes names
+In combined `gpt-transcribe+whisperx` mode, the existing GPT reconciliation request also proposes names
 for fixed local voice IDs. No separate name-recognition request is made. Evidence
 can be a direct self-introduction, an unambiguous named address and response, or
 an introduction confirmed by subsequent interaction. For example, "I'm Alice,
@@ -299,10 +328,10 @@ Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported eff
 values are `low`, `medium`, `high`, `xhigh`, and `max`; the chosen API model must
 support the requested effort. The default is `gpt-6.1-sol:medium`.
 
-This selection controls final summaries and, in `all`, the text reconciliation.
-`none` disables the summary only: `all` still needs GPT reconciliation and uses
+This selection controls final summaries and, in `gpt-transcribe+whisperx`, the text reconciliation.
+`none` disables the summary only: `gpt-transcribe+whisperx` still needs GPT reconciliation and uses
 `gpt-6.1-sol:medium` for it. To avoid all text-model calls while using cloud audio
-recognition, choose `gpt-transcribe --summarize-model none`. To avoid every cloud
+recognition, choose `gpt-transcribe-online --summarize-model none`. To avoid every cloud
 call, use `--offline`.
 
 The summary follows the predominant language of the conversation: mostly English
@@ -474,15 +503,15 @@ detail can therefore increase summary API cost, including intermediate note call
 ./scribe.sh -f "recording.mkv" --offline
 ```
 
-`--offline` takes priority over transcription and summary selections. It forces
-`whisper-local`, disables summary generation and fusion, and prohibits model
+`--offline` takes priority over transcription and summary selections. It retains an explicit
+`mlx` selection and otherwise uses `whisperx`, disables summary generation and fusion, and prohibits model
 downloads. No audio or text is sent to OpenAI. There is no local LLM summary.
-The prepared `data/.venv` and all local models must already be present; missing
+The prepared `data/.venv` and the selected local models must already be present; missing
 or outdated dependencies produce an error instead of a network bootstrap. Run
 `./scribe.sh --setup` online once before offline use. `--offline --summary-only` is
 rejected because offline mode does not generate summaries.
 
-`--transcription-model whisper-local` by itself can still send the final text for
+`--transcription-model mlx` by itself can still send the final text for
 the default API summary. Add `--summarize-model none`, or use `--offline`, for a
 local log without cloud text processing.
 
@@ -606,8 +635,8 @@ Application bytecode generation is disabled with Python `-B` and
 `sys.dont_write_bytecode`. No root-level `__pycache__` is needed. Existing dependency
 bytecode is inside `data/.venv`; it is safe to retain there.
 
-Whisper uses the downloaded MLX large-v3-turbo model. Voice separation uses
-**Nemotron 3 Diarization**, independently of Whisper, through the pinned native
+WhisperX Turbo is the default recognizer; MLX Turbo is the selectable alternative.
+Default voice separation uses **Nemotron 3 Diarization**, independently of recognition, through the pinned native
 NeMo-Speech.cpp 0.3.0 CPU runtime and Q8_0 weights. It automatically detects the
 number of voices, up to the model's capacity of eight. No participant-count hint
 is supplied. The `v3-offline` preset processes local audio in stateful chunks,
@@ -619,23 +648,25 @@ follow first voice appearance and never guess real names. Overlapping speech can
 still have uncertain attribution. `[speaker uncertain: words]` and
 `[low-confidence speech: words]` apply only to the affected span; one uncertain
 word does not mark an entire turn. `[unintelligible]` means no words were recognized.
-Cloud transcription alone does not supply the local A/B labels in this tool.
+Community-1 is the other local diarizer. Cloud transcription alone does not supply local A/B labels.
 
 Upgrading does not regenerate existing completed log/report pairs. A partial
 local output from the old diarizer remains protected when its settings differ;
 use `--summary-only` to keep its transcript, a separate output folder for a new
 result, or deliberately `--force` to replace it. `--force` bypasses recognition
 caches and can repeat paid requests. When processing into a new output location
-without `--force`, compatible cached Whisper words and GPT audio responses can
+without `--force`, compatible cached words for the selected recognizer and GPT audio responses can
 be reused; old sherpa-onnx voice intervals are never reused as Nemotron results.
 The voice checkpoint records the engine, model/runtime revisions and preset,
-separately from the Whisper word checkpoint. Old ONNX weights are left untouched
+separately from the word checkpoint, which identifies WhisperX or MLX. Changing
+the recognizer reuses compatible voices; changing the diarizer reuses compatible
+words. Legacy MLX words are never reused as WhisperX output. Old ONNX weights are left untouched
 but are no longer required by setup or recognition.
 
 The model manifest records sizes and SHA-256 hashes. Missing local models can be
 downloaded automatically in online local/combined mode. `--download-models` prepares
-them explicitly, and `--verify-models` also checks their hashes. No Hugging Face login
-is required. Prepare each machine online with `./scribe.sh --setup` before using it
+the selected models explicitly, and `--verify-models` checks their hashes. No Hugging
+Face login is required for WhisperX, MLX, or Nemotron; Community-1 download requires one. Prepare each machine online with `./scribe.sh --setup` before using it
 offline. Downloaded weights can be copied into `data/models` and checked with
 `--verify-models`; the Python environment should be recreated on each machine.
 Pip's cache is `data/.cache/pip`. No root-level models, runtime, virtual environment,
@@ -677,12 +708,13 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
 | `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
 | `--monitor-dir DIR` | Off | Watch MKVs for observed size growth, including existing recordings, then wait for 30 seconds of stability plus OBS-style finalization checks. Stationary files are ignored. Alternative to `-f` and `--input-dir`. |
-| `--transcription-model gpt-transcribe\|whisper-local\|all` | `all` | API only, local only, or both plus reconciliation. |
-| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls all-mode fusion. |
+| `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, or GPT + WhisperX with reconciliation. |
+| `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
+| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls combined-mode fusion. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
 | `--output-dir DIR` | Working directory's `data` | Destination for logs and summaries. |
-| `--language CODE` | `auto` | Local per-chunk detection; GPT receives English/Russian hints. An explicit code guides either recognizer. |
+| `--language CODE` | `auto` | WhisperX detects per recording; MLX per chunk. GPT receives English/Russian hints. An explicit code guides recognition; WhisperX alignment supports `en` and `ru`. |
 | `--vocabulary TEXT` | Empty | Domain terms/names for local Whisper and GPT keyword hints. |
 | `--models-dir DIR` | Application's `data/models` | Explicit local model directory. |
 | `--cache-dir DIR` | Application's `data/.cache` | Explicit checkpoint/library/temp cache directory. |
@@ -693,12 +725,15 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `--verify-models` | Off | Verify SHA-256 hashes as well as sizes when preparing local models. |
 | `--show-prompt` | Off | Print the rendered final summary prompt for the selected detail, without processing or API calls. |
 | `--version` | — | Print the version. |
-| `--setup` | Off | Prepare the isolated Python environment through the launcher, prepare local models, and exit without recordings or paid API calls. |
+| `--setup` | Off | Prepare the isolated Python environment through the launcher, prepare selected models, and exit without recordings or paid API calls. |
 
 `--transcribe-only` and `--summary-only` are mutually exclusive. Long options must
 be written in full. The removed `--model`, `--reasoning`, and transcription value
 `whisper` are rejected; use the new options above. The removed `--speakers`
-option is also rejected: Nemotron 3 determines the count automatically.
+option is also rejected: local diarizers determine the count automatically. The old
+`gpt-transcribe`, `whisper-local` and `all` CLI values are removed; use
+`gpt-transcribe-online`, `mlx` and `gpt-transcribe+whisperx` respectively. The
+combined mode now uses WhisperX, and the new default is local WhisperX recognition.
 
 ## Editable prompts and long recordings
 
@@ -764,23 +799,23 @@ input/configuration errors, and `130` for interruption.
 ## Examples
 
 ```bash
-# Default: both recognizers, fusion, and a Sol medium summary
+# Default: WhisperX Turbo + Nemotron voices, followed by a Sol medium summary
 ./scribe.sh
 
 # API transcription and summary, without local voice models
-./scribe.sh -f "recording.mkv" --transcription-model gpt-transcribe
+./scribe.sh -f "recording.mkv" --transcription-model gpt-transcribe-online
 
-# Local recognition, followed by an API summary
-./scribe.sh --transcription-model whisper-local
+# MLX alternative, followed by an API summary
+./scribe.sh --transcription-model mlx
 
 # Cloud audio recognition only; no text-model calls
-./scribe.sh --transcription-model gpt-transcribe --summarize-model none
+./scribe.sh --transcription-model gpt-transcribe-online --summarize-model none
 
 # Strictly local log; no network calls or summary
 ./scribe.sh --offline
 
 # Luna for fusion and summary on an unfinished recording
-./scribe.sh --transcription-model all --summarize-model gpt-6-luna:medium
+./scribe.sh --transcription-model gpt-transcribe+whisperx --summarize-model gpt-6-luna:medium
 
 # Deliberately replace only an existing summary using Luna
 ./scribe.sh -f "recording.mkv" --summary-only --summarize-model gpt-6-luna:medium
@@ -811,6 +846,9 @@ notes. Native diarization checks cover automatic counts, first-appearance voice
 IDs, overlaps, invalid output rejection, checked anonymous runtime downloads,
 archive/link safety, offline integrity checks and repair, legacy voice-cache
 invalidation with Whisper-word reuse, and protected old local/API-only outputs.
+WhisperX checks cover selected assets, scoped gated authentication, tokenizer
+integrity, local CPU ASR/alignment, independent recognizer/voice cache identities,
+retention of untimed words, and separation of alignment scores from ASR confidence.
 Configuration checks cover the four default summary tabs, `.env` lists, environment
 and CLI precedence, single-tab HTML overrides and transcript-only selections, and invalid defaults. HTML
 checks cover multi-level parsing, escaping, tab associations, completed

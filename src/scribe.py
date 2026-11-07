@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scribe: MKV → GPT + local voice anchors (or Whisper only) → log and summary.
+"""scribe: MKV → selectable recognition and diarization → log and summary.
 
 Run with ./scribe.sh; SUMMARIZATION_PROMPT below is intentionally editable.
 API mode uploads audio; local mode uploads only text if a summary is requested.
@@ -13,6 +13,7 @@ import hashlib
 import html
 import json
 import math
+from numbers import Real
 import os
 import platform
 import re
@@ -28,6 +29,7 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -36,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -44,7 +46,9 @@ DEFAULT_SUMMARY_DETAIL = 1
 DEFAULT_REPORT_TABS = "1,3,5,10,transcript"
 API_URL = "https://api.openai.com/v1/responses"
 AUDIO_API_URL = "https://api.openai.com/v1/audio/transcriptions"
-DEFAULT_TRANSCRIPTION_MODEL = "all"
+DEFAULT_TRANSCRIPTION_MODEL = "whisperx"
+ONLINE_MODE = "gpt-transcribe-online"
+COMBINED_MODE = "gpt-transcribe+whisperx"
 AUDIO_CHUNK_SECONDS = 600
 MONITOR_SETTLE_SECONDS = 30
 MONITOR_POLL_SECONDS = 5
@@ -432,9 +436,67 @@ def ensure_diarization_runtime(models_dir, manifest, offline=False):
             say(f"  Previous runtime preserved at {previous}")
 
 
-def ensure_models(models_dir, offline=False, verify=False):
+class ModelRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """A gated model token belongs to the initial HF request, never its CDN redirect."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def ensure_whisperx_tokenizers(models_dir, manifest, offline):
+    spec = manifest.get("whisperx", {}).get("nltk")
+    if not spec:
+        return
+    target = models_dir / spec["directory"]
+    missing = [i for i in spec["members"] if not (target / i["path"]).is_file()
+               or digest_file(target / i["path"]) != i["sha256"]]
+    if not missing:
+        return
+    if offline:
+        raise AppError("WhisperX tokenizer data is missing or damaged. Run --setup online first.")
+    archive_path = models_dir / spec["archive"]
+    item = next(i for i in manifest["files"] if i["path"] == spec["archive"])
+    if digest_file(archive_path) != item["sha256"]:
+        raise AppError("WhisperX tokenizer archive is damaged. Run --setup --verify-models.")
+    with zipfile.ZipFile(archive_path) as archive:
+        for item in missing:
+            relative = Path(item["path"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise AppError("Invalid tokenizer path in the model manifest.")
+            data = archive.read(item["archive_member"])
+            if len(data) != item["size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
+                raise AppError("WhisperX tokenizer SHA-256 verification failed.")
+            dest = target / relative
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary = tempfile.mkstemp(prefix=".punkt-", dir=dest.parent)
+            try:
+                with os.fdopen(fd, "wb") as out:
+                    out.write(data)
+                Path(temporary).chmod(0o644)
+                os.replace(temporary, dest)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+
+
+def ensure_models(models_dir, offline=False, verify=False, *,
+                  transcription_model="whisperx", diarization_model="nemotron"):
+    if transcription_model == ONLINE_MODE:
+        return
     manifest = model_manifest()
+    recognizer = "mlx" if transcription_model == "mlx" else "whisperx"
+    groups = {recognizer, diarization_model}
+    if not offline and "community-1" in groups and not os.getenv("HF_TOKEN", "").strip():
+        gated_missing = any(i.get("group") == "community-1" and
+            (not (models_dir / i["path"]).is_file() or (models_dir / i["path"]).stat().st_size != i["size"]
+             or (verify and digest_file(models_dir / i["path"]) != i["sha256"])) for i in manifest["files"])
+        if gated_missing:
+            raise AppError("Community-1 download requires HF_TOKEN and accepted model conditions. "
+                           "Use --diarization-model nemotron for token-free setup.")
     for item in manifest["files"]:
+        if item.get("group") and item["group"] not in groups:
+            continue
         target = models_dir / item["path"]
         valid = target.is_file() and target.stat().st_size == item["size"]
         if valid and verify:
@@ -449,11 +511,25 @@ def ensure_models(models_dir, offline=False, verify=False):
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".download")
         try:
-            request = urllib.request.Request(item["url"], headers={"User-Agent": "scribe/1"})
+            headers = {"User-Agent": "scribe/1"}
+            if item.get("hf_auth"):
+                token = os.getenv("HF_TOKEN", "").strip()
+                if not token:
+                    raise AppError("Community-1 download requires HF_TOKEN and accepted model conditions. "
+                                   "Use --diarization-model nemotron for public, token-free setup.")
+                if not item["url"].startswith("https://huggingface.co/"):
+                    raise AppError("Gated model authentication is restricted to huggingface.co.")
+                headers["Authorization"] = "Bearer " + token
+            request = urllib.request.Request(item["url"], headers=headers)
             h = hashlib.sha256()
             download_size = item.get("download_size", item["size"])
             download_hash = item.get("download_sha256", item["sha256"])
-            with urllib.request.urlopen(request, timeout=90, context=ssl_context()) as response, partial.open("wb") as f:
+            if item.get("hf_auth"):
+                response = urllib.request.build_opener(ModelRedirectHandler(),
+                    urllib.request.HTTPSHandler(context=ssl_context())).open(request, timeout=90)
+            else:
+                response = urllib.request.urlopen(request, timeout=90, context=ssl_context())
+            with response, partial.open("wb") as f:
                 downloaded, last = 0, -1
                 while block := response.read(4 * 1024 * 1024):
                     downloaded += len(block)
@@ -490,7 +566,10 @@ def ensure_models(models_dir, offline=False, verify=False):
             raise AppError(f"Could not download {item['path']}: {exc}") from None
         finally:
             partial.unlink(missing_ok=True)
-    ensure_diarization_runtime(models_dir, manifest, offline)
+    if diarization_model == "nemotron":
+        ensure_diarization_runtime(models_dir, manifest, offline)
+    if recognizer == "whisperx":
+        ensure_whisperx_tokenizers(models_dir, manifest, offline)
 
 
 def extract_audio(source, wav_path):
@@ -503,7 +582,9 @@ def extract_audio(source, wav_path):
         raise AppError("FFmpeg could not extract the first audio track:\n" + result.stderr[-2500:])
 
 
-def diarize(wav_path, models_dir):
+def diarize(wav_path, models_dir, backend="nemotron"):
+    if backend == "community-1":
+        return diarize_community(wav_path, models_dir)
     """Run pinned native Nemotron 3 locally, with automatic count and bounded memory."""
     spec = model_manifest()["diarization"]
     binary = models_dir / spec["runtime"]["directory"] / spec["runtime"]["executable"]
@@ -555,7 +636,113 @@ def diarize(wav_path, models_dir):
     return intervals
 
 
-def recognize(audio, models_dir, language, vocabulary):
+def diarization_spec(backend):
+    return model_manifest()["diarization" if backend == "nemotron" else "community_diarization"]
+
+
+def diarize_community(wav_path, models_dir):
+    import numpy as np
+    import torch
+    from whisperx.diarize import DiarizationPipeline
+    spec = diarization_spec("community-1")
+    torch.set_num_threads(4)
+    with wave.open(str(wav_path)) as reader:
+        audio = np.frombuffer(reader.readframes(reader.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    say("  Speaker diarization: Community-1, automatic count, CPU...")
+    started = time.monotonic()
+    pipeline = DiarizationPipeline(model_name=str(models_dir / spec["model"]), device="cpu")
+    frame = pipeline(audio)  # No exact, minimum, or maximum count hint.
+    rows = sorted(({"start": float(r.start), "end": float(r.end), "speaker": str(r.speaker)}
+                   for r in frame.itertuples()), key=lambda r: (r["start"], r["end"], r["speaker"]))
+    mapping = {}
+    for row in rows:
+        if not (math.isfinite(row["start"]) and math.isfinite(row["end"])
+                and 0 <= row["start"] < row["end"] <= len(audio) / 16000 + .05):
+            raise AppError("Community-1 returned an invalid speaker interval.")
+        mapping.setdefault(row["speaker"], len(mapping) + 1)
+        row["speaker"] = mapping[row["speaker"]]
+    say(f"  Community-1 detected {len(mapping)} voice(s), {len(rows)} speech interval(s) "
+        f"in {time.monotonic() - started:.2f}s.")
+    return rows
+
+
+def recognize(audio, models_dir, language, vocabulary, backend="whisperx"):
+    if backend == "mlx":
+        return recognize_mlx(audio, models_dir, language, vocabulary)
+    return recognize_whisperx(audio, models_dir, language, vocabulary)
+
+
+def recognize_whisperx(audio, models_dir, language, vocabulary):
+    import nltk
+    import torch
+    from whisperx.asr import load_model
+    from whisperx.alignment import load_align_model, align
+    spec = model_manifest()["whisperx"]
+    torch.set_num_threads(4)
+    nltk_dir = str(models_dir / spec["nltk"]["directory"])
+    if nltk_dir not in nltk.data.path:
+        nltk.data.path.insert(0, nltk_dir)
+    say("  Transcription: WhisperX large-v3-turbo, CPU int8...")
+    model = load_model(str(models_dir / spec["asr"]), "cpu", compute_type="int8",
+        language=None if language == "auto" else language, local_files_only=True,
+        threads=4, vad_method="pyannote", asr_options={"initial_prompt": vocabulary or None})
+    result = model.transcribe(audio, batch_size=4, language=None if language == "auto" else language)
+    del model
+    gc.collect()
+    if not result["segments"]:
+        return []
+    detected = result["language"]
+    if detected not in spec["alignment"]:
+        raise AppError(f"WhisperX word alignment is prepared for English and Russian, not '{detected}'. "
+                       "Use --language en/ru, --transcription-model mlx, or gpt-transcribe-online.")
+    try:
+        nltk.data.find("tokenizers/punkt_tab/" + ("english" if detected == "en" else "russian") + "/")
+    except LookupError:
+        raise AppError("WhisperX tokenizer data is unavailable. Run --setup online first.") from None
+    say(f"  Aligning WhisperX words: {detected}...")
+    model, metadata = load_align_model(detected, "cpu",
+        model_name=str(models_dir / spec["alignment"][detected]), model_cache_only=True)
+    aligned = align(result["segments"], model, metadata, audio, "cpu", return_char_alignments=False)
+    words = []
+    duration = len(audio) / 16000
+    for segment in aligned["segments"]:
+        segment_words = segment.get("words", [])
+        previous_end = segment["start"]
+        for index, word in enumerate(segment_words):
+            text = word.get("word", "")
+            if not text.strip():
+                continue
+            uncertain = word.get("start") is None or word.get("end") is None
+            next_start = next((w["start"] for w in segment_words[index + 1:]
+                               if isinstance(w.get("start"), Real) and not isinstance(w["start"], bool)), segment["end"])
+            start = word["start"] if word.get("start") is not None else previous_end
+            if not isinstance(start, Real) or isinstance(start, bool):
+                raise AppError("WhisperX returned invalid word timing.")
+            end = word["end"] if word.get("end") is not None else max(start, next_start)
+            if not isinstance(end, Real) or isinstance(end, bool):
+                raise AppError("WhisperX returned invalid word timing.")
+            start, end = float(start), float(end)
+            if not (math.isfinite(start) and math.isfinite(end) and 0 <= start <= end <= duration + .05):
+                raise AppError("WhisperX returned invalid word timing.")
+            if words and start < words[-1]["start"]:
+                raise AppError("WhisperX returned non-monotonic word timing.")
+            previous_end = end
+            uncertain = uncertain or start == end
+            midpoint = (start + end) / 2
+            source = next((s for s in result["segments"] if s["start"] <= midpoint <= s["end"]), {})
+            # Alignment score is not ASR confidence. Only the source segment's
+            # recognition log probability can flag low-confidence speech here.
+            words.append({"start": start, "end": end, "text": " " + text,
+                "unclear": bool(source.get("avg_logprob", 0) < -1.0),
+                "timing_uncertain": uncertain,
+                "alignment_score": float(word["score"]) if word.get("score") is not None else None,
+                "repetition_suspected": False})
+    del model
+    gc.collect()
+    return words
+
+
+def recognize_mlx(audio, models_dir, language, vocabulary):
     import mlx_whisper
     words = []
     duration = len(audio) / 16000
@@ -632,7 +819,7 @@ def assign_speakers(words, intervals):
             overlap = len(ordered) > 1 and scores[ordered[1]] >= .30 * (end - start)
             if overlap and previous in ordered[:2] and scores[previous] >= .30 * (end - start):
                 label = previous
-            uncertain = bool(overlap or scores[label] < .45 * (end - start))
+            uncertain = bool(overlap or scores[label] < .45 * (end - start) or word.get("timing_uncertain"))
         previous = label
         text = word["text"]
         fragment = {"start": start, "end": end, "text": text,
@@ -1407,6 +1594,8 @@ def local_recognition(wav_path, cache, settings, args):
     if isinstance(saved_word_settings, dict):
         saved_word_settings = {k: v for k, v in saved_word_settings.items()
                                if k not in ("speakers", "diarization")}
+        if "recognizer" not in saved_word_settings and settings["recognizer"]["backend"] == "mlx":
+            saved_word_settings["recognizer"] = settings["recognizer"]
     voices_ready = not args.force and voices.get("settings") == voice_settings
     words_ready = not args.force and saved_word_settings == word_settings
     with wave.open(str(wav_path)) as reader:
@@ -1418,15 +1607,16 @@ def local_recognition(wav_path, cache, settings, args):
             audio = np.frombuffer(reader.readframes(reader.getnframes()), dtype=np.int16).astype(np.float32) / 32768
     if voices_ready:
         intervals = voices["intervals"]
-        say(f"  Reusing Nemotron 3 automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
+        say(f"  Reusing {args.diarization_model} automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
     else:
-        intervals = diarize(wav_path, args.models_dir)
+        intervals = diarize(wav_path, args.models_dir, args.diarization_model)
         save_json(voice_path, {"settings": voice_settings, "intervals": intervals})
     if words_ready:
         recognized = words["words"]
         say("  Reusing saved local words.")
     else:
-        recognized = recognize(audio, args.models_dir, args.language, args.vocabulary) if intervals else []
+        recognized = recognize(audio, args.models_dir, args.language, args.vocabulary,
+                               settings["recognizer"]["backend"]) if intervals else []
         save_json(word_path, {"settings": word_settings, "duration": duration, "words": recognized})
     turns = assign_speakers(recognized, intervals)
     result = {"duration": duration, "words": recognized, "voices": intervals, "turns": turns}
@@ -1735,7 +1925,7 @@ def configure_mode(args):
     if args.offline:
         if args.summary_only:
             raise AppError("--summary-only cannot be combined with --offline: offline mode creates no summary.")
-        args.transcription_model = "whisper-local"
+        args.transcription_model = "mlx" if args.transcription_model == "mlx" else "whisperx"
         args.summarize_model = None
     if args.transcribe_only:
         args.summarize_model = None
@@ -1786,8 +1976,9 @@ def recognition_settings(source, args):
     settings = {"version": CACHE_VERSION, "source": source_signature(source),
                 "language": args.language, "vocabulary": args.vocabulary,
                 "models": portable_model_path(args.models_dir)}
-    if args.transcription_model != "gpt-transcribe":
-        settings["diarization"] = model_manifest()["diarization"]["identity"]
+    if args.transcription_model != ONLINE_MODE:
+        settings["diarization"] = diarization_spec(args.diarization_model)["identity"]
+        settings["recognizer"] = model_manifest()["mlx" if args.transcription_model == "mlx" else "whisperx"]["identity"]
     return settings
 
 
@@ -1802,7 +1993,7 @@ def _process_file(source, args, key):
     settings = recognition_settings(source, args)
     selection = {"transcription_model": args.transcription_model}
     fusion_model, fusion_effort = args.summarize_model or (DEFAULT_MODEL, DEFAULT_EFFORT)
-    if args.transcription_model == "all":
+    if args.transcription_model == COMBINED_MODE:
         selection["fusion"] = {"model": fusion_model, "effort": fusion_effort,
                                "prompt": hashlib.sha256(FUSION_PROMPT.encode()).hexdigest()}
     state_path = output_state_path(cache, log_path)
@@ -1812,15 +2003,26 @@ def _process_file(source, args, key):
     if not state and log_path.resolve() == (source.parent / (source.stem + ".log.md")).resolve():
         legacy = read_json(cache / "state.json", {})
         if legacy:
-            state = {**legacy, "selection": {"transcription_model": "whisper-local"}, "pipeline_complete": True}
+            state = {**legacy, "selection": {"transcription_model": "mlx"}, "pipeline_complete": True}
     saved_settings = state.get("settings")
-    if (args.transcription_model == "gpt-transcribe" and isinstance(saved_settings, dict)
-            and state.get("selection", {}).get("transcription_model") == "gpt-transcribe"):
+    saved_selection = state.get("selection")
+    if isinstance(saved_selection, dict):
+        saved_selection = dict(saved_selection)
+        previous_mode = saved_selection.get("transcription_model")
+        if previous_mode == "gpt-transcribe":
+            saved_selection["transcription_model"] = ONLINE_MODE
+        elif previous_mode == "whisper-local":
+            saved_selection["transcription_model"] = "mlx"
+    if (args.transcription_model == ONLINE_MODE and isinstance(saved_settings, dict)
+            and (saved_selection or {}).get("transcription_model") == ONLINE_MODE):
         # The old shared settings carried a count even for API-only outputs.
         # Discard that unused field only when ownership proves an API-only log.
         saved_settings = {k: v for k, v in saved_settings.items() if k != "speakers"}
+    elif (args.transcription_model == "mlx" and isinstance(saved_settings, dict)
+            and (saved_selection or {}).get("transcription_model") == "mlx" and "recognizer" not in saved_settings):
+        saved_settings = {**saved_settings, "recognizer": settings["recognizer"]}
     owned = saved_settings == settings
-    reusable = (owned and state.get("selection") == selection and log_path.is_file()
+    reusable = (owned and saved_selection == selection and log_path.is_file()
                 and state.get("pipeline_complete", True))
     if args.summary_only:
         if not log_path.is_file():
@@ -1854,7 +2056,7 @@ def _process_file(source, args, key):
             if args.monitor_dir is not None and (monitor_snapshot(source) != args.monitor_expected_snapshot
                                                 or source_signature(source) != settings["source"]):
                 raise AppError("Source changed during audio extraction; no recognition request was started.")
-            if args.transcription_model in ("gpt-transcribe", "all"):
+            if args.transcription_model in (ONLINE_MODE, COMBINED_MODE):
                 gpt_settings = {"source": settings["source"], "language": args.language,
                                 "vocabulary": args.vocabulary, "model": "gpt-transcribe", "request_version": 1}
                 try:
@@ -1866,17 +2068,19 @@ def _process_file(source, args, key):
                     atomic_write(cache / "sources/gpt-transcribe.txt",
                                  "\n\n".join(c["text"] for c in gpt_chunks))
                 except (AppError, OSError, ValueError) as exc:
-                    if args.transcription_model == "gpt-transcribe":
+                    if args.transcription_model == ONLINE_MODE:
                         raise
                     gpt_error = str(exc).replace(key, "[key redacted]") if key else str(exc)
                     state["gpt_error"] = gpt_error
                     say("  WARNING: " + gpt_error + " Using the local source only; fusion will be skipped.")
-            if args.transcription_model != "gpt-transcribe":
+            if args.transcription_model != ONLINE_MODE:
                 local = local_recognition(wav_path, cache, settings, args)
-        if args.transcription_model == "gpt-transcribe":
+        if args.transcription_model == ONLINE_MODE:
             transcript = gpt_transcript_text(source, gpt_chunks)
         else:
-            transcript = transcript_text(source, local["duration"], local["turns"])
+            transcript = transcript_text(source, local["duration"], local["turns"],
+                provenance=f"{'MLX' if args.transcription_model == 'mlx' else 'WhisperX'} large-v3-turbo "
+                           f"+ {args.diarization_model} voice/time anchors")
             atomic_write(cache / "sources/local.log.md", transcript)
         # Persist the selected usable source BEFORE either text API step.
         atomic_write(log_path, transcript)
@@ -1884,15 +2088,15 @@ def _process_file(source, args, key):
             archive_summaries(all_summaries, state_path)
             state.pop("summary", None)
         state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
-        state["pipeline_complete"] = args.transcription_model != "all"
-        state["source_mode"] = args.transcription_model if args.transcription_model != "all" else "local-fallback"
+        state["pipeline_complete"] = args.transcription_model != COMBINED_MODE
+        state["source_mode"] = args.transcription_model if args.transcription_model != COMBINED_MODE else "local-fallback"
         save_json(state_path, state)
-        if args.transcription_model == "all" and gpt_chunks is not None:
+        if args.transcription_model == COMBINED_MODE and gpt_chunks is not None:
             try:
                 turns, supplements = fuse_transcripts(gpt_chunks, local["turns"], cache,
                                                        key, fusion_model, fusion_effort, args.force)
                 transcript = transcript_text(source, local["duration"], turns,
-                    provenance=f"GPT-Transcribe text + local Whisper voice/time anchors; reconciled by {fusion_model}",
+                    provenance=f"GPT-Transcribe text + WhisperX / {args.diarization_model} voice/time anchors; reconciled by {fusion_model}",
                     supplements=supplements)
                 atomic_write(log_path, transcript)
                 state["pipeline_complete"] = True
@@ -1989,15 +2193,18 @@ def build_parser():
                         help="Scan MKV files in this directory without subfolders; defaults to ./data; cannot combine with -f")
     inputs.add_argument("--monitor-dir", type=Path, metavar="DIR",
                         help="Monitor MKVs whose size grows in this folder, including existing files; wait for OBS finalization and 30s stability")
-    p.add_argument("--transcription-model", choices=("gpt-transcribe", "whisper-local", "all"),
+    p.add_argument("--transcription-model", choices=(ONLINE_MODE, "whisperx", "mlx", COMBINED_MODE),
                    default=DEFAULT_TRANSCRIPTION_MODEL,
-                   help="gpt-transcribe: API only; whisper-local: local voices/text; all: both sources + GPT fusion")
+                   help="gpt-transcribe-online: API words only; whisperx: local WhisperX Turbo; "
+                        "mlx: local MLX Turbo; gpt-transcribe+whisperx: both sources + GPT reconciliation")
+    p.add_argument("--diarization-model", choices=("nemotron", "community-1"), default="nemotron",
+                   help="Local automatic voice model; Community-1 needs gated HF access for download. Ignored for API-only recognition")
     p.add_argument("--output-dir", type=Path, help="Output directory; defaults to ./data in the launch directory")
-    p.add_argument("--language", default="auto", help="Language code; auto detects local chunks and gives GPT en/ru hints")
+    p.add_argument("--language", default="auto", help="Language code; auto detects per recording with WhisperX or per chunk with MLX; GPT receives en/ru hints")
     p.add_argument("--vocabulary", default="", help="Optional domain-specific terms/names for Whisper")
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
                    default=os.getenv("SCRIBE_SUMMARIZE_MODEL", f"{DEFAULT_MODEL}:{DEFAULT_EFFORT}"),
-                   help="Report model/effort; also selects all-mode fusion model. none disables reports; fusion then uses Sol medium")
+                   help="Report model/effort; also selects combined-mode fusion model. none disables reports; fusion then uses Sol medium")
     p.add_argument("--report-tabs", type=parse_report_tabs, action=ReportTabsAction,
                    nargs="+", metavar="TAB[,TAB]",
                    default=os.getenv("SCRIBE_REPORT_TABS", DEFAULT_REPORT_TABS),
@@ -2008,9 +2215,9 @@ def build_parser():
     p.add_argument("--cache-dir", type=Path, default=APP_DATA / ".cache", help="Intermediate results and state directory")
     p.add_argument("--force", action="store_true", help="Process completed pairs again; bypass recognition/API caches")
     group = p.add_mutually_exclusive_group()
-    group.add_argument("--transcribe-only", action="store_true", help="Alias for --summarize-model none; all-mode fusion still uses the API")
+    group.add_argument("--transcribe-only", action="store_true", help="Alias for --summarize-model none; combined-mode fusion still uses the API")
     group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from existing .log.md files in the output directory")
-    p.add_argument("--offline", action="store_true", help="Force whisper-local and no summary; prohibit API calls and model downloads")
+    p.add_argument("--offline", action="store_true", help="Force local recognition and no summary; retain explicit mlx, otherwise use whisperx; no API calls/downloads")
     p.add_argument("--setup", "--download-models", dest="download_models", action="store_true",
                    help="Prepare local models and exit; scribe.sh also prepares data/.venv. No MKV files or API key required")
     p.add_argument("--verify-models", action="store_true", help="Verify model SHA-256 hashes as well as sizes")
@@ -2032,6 +2239,11 @@ def main(argv=None):
             say("No summary tabs selected; the transcript is embedded without summarization.")
         return 0
     configure_mode(args)
+    if (not args.summary_only and not args.download_models
+            and args.transcription_model in ("whisperx", COMBINED_MODE)
+            and args.language not in ("auto", "en", "ru")):
+        raise AppError("WhisperX alignment is prepared for English and Russian. "
+                       "Use --language auto/en/ru, or select mlx or gpt-transcribe-online.")
     args.models_dir = args.models_dir.expanduser().resolve()
     args.cache_dir = args.cache_dir.expanduser().resolve()
     args.output_dir = (args.output_dir if args.output_dir is not None else Path.cwd() / "data").expanduser().resolve()
@@ -2039,8 +2251,9 @@ def main(argv=None):
         say("Report generation is disabled; nothing to do.")
         return 0
     if args.download_models:
-        ensure_models(args.models_dir, args.offline, args.verify_models)
-        say("Models are ready.")
+        ensure_models(args.models_dir, args.offline, args.verify_models,
+                      transcription_model=args.transcription_model, diarization_model=args.diarization_model)
+        say("API-only mode needs no local models." if args.transcription_model == ONLINE_MODE else "Selected models are ready.")
         return 0
     if args.monitor_dir is not None:
         return monitor_directory(args)
@@ -2071,7 +2284,7 @@ def process_files(files, args):
     os.environ["NUMBA_CACHE_DIR"] = str(args.cache_dir / "numba")
     os.environ["TIKTOKEN_CACHE_DIR"] = str(args.cache_dir / "tiktoken")
     os.environ["MPLCONFIGDIR"] = str(args.cache_dir / "matplotlib")
-    if not args.summary_only and args.transcription_model != "gpt-transcribe":
+    if not args.summary_only and args.transcription_model != ONLINE_MODE:
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise AppError("Scribe requires macOS 14+ on Apple Silicon (M1 or newer).")
         if tuple(map(int, platform.mac_ver()[0].split(".")[:1])) < (14,):
@@ -2081,8 +2294,9 @@ def process_files(files, args):
         key = ""
     if args.summary_only and not key:
         raise AppError("OPENAI_API_KEY is required for --summary-only. Set it in .env.")
-    if not args.summary_only and args.transcription_model != "gpt-transcribe":
-        ensure_models(args.models_dir, args.offline, args.verify_models)
+    if not args.summary_only and args.transcription_model != ONLINE_MODE:
+        ensure_models(args.models_dir, args.offline, args.verify_models,
+                      transcription_model=args.transcription_model, diarization_model=args.diarization_model)
     errors = 0
     for i, source in enumerate(pending, 1):
         say(f"\n[{i}/{len(pending)}] {source}")

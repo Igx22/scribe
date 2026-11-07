@@ -255,7 +255,7 @@ class MonitorTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "new.mkv"
             original = mkv_fixture()
-            self.drive(self.options(root, "--transcription-model", "gpt-transcribe", "--report-tabs", "1"),
+            self.drive(self.options(root, "--transcription-model", "gpt-transcribe-online", "--report-tabs", "1"),
                        {1: lambda: source.write_bytes(original[:20]), 2: lambda: source.write_bytes(original)})
             gpt.assert_called_once()
             log, report = app.output_paths(source, root)
@@ -272,7 +272,7 @@ class MonitorTests(unittest.TestCase):
             def change(*args):
                 source.write_bytes(mkv_fixture() + b"changed")
             with patch.object(app, "extract_audio", side_effect=change):
-                text = self.drive(self.options(root, "--transcription-model", "gpt-transcribe"),
+                text = self.drive(self.options(root, "--transcription-model", "gpt-transcribe-online"),
                                    {1: lambda: source.write_bytes(mkv_fixture()[:20]),
                                     2: lambda: source.write_bytes(mkv_fixture())})
             self.assertIn("Source changed during audio extraction", text)

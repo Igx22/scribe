@@ -34,7 +34,7 @@ environment_ready() {
     "$VENV_PYTHON" -I -B -c '
 import hashlib, platform, sys
 from pathlib import Path
-valid = (3, 12) <= sys.version_info[:2] < (3, 15) and platform.machine() == "arm64"
+valid = (3, 12) <= sys.version_info[:2] < (3, 14) and platform.machine() == "arm64"
 valid = valid and sys.prefix != sys.base_prefix
 valid = valid and Path(sys.argv[2]).read_text().strip() == hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()
 sys.exit(not valid)
@@ -57,16 +57,16 @@ if $OFFLINE; then
 fi
 if [[ ! -x "$VENV_PYTHON" ]]; then
     SYSTEM_PYTHON=""
-    for candidate in python3.14 python3.13 python3.12 python3; do
+    for candidate in python3.13 python3.12 python3; do
         if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -I -B -c \
-           'import platform,sys; sys.exit(not ((3,12) <= sys.version_info[:2] < (3,15) and platform.machine()=="arm64"))' 2>/dev/null; then
+           'import platform,sys; sys.exit(not ((3,12) <= sys.version_info[:2] < (3,14) and platform.machine()=="arm64"))' 2>/dev/null; then
             SYSTEM_PYTHON="$(command -v "$candidate")"
             break
         fi
     done
     if [[ -z "$SYSTEM_PYTHON" ]]; then
-        echo "Python 3.12–3.14 for Apple Silicon is required." >&2
-        echo "Install it with: brew install python@3.14" >&2
+        echo "Python 3.12–3.13 for Apple Silicon is required by WhisperX." >&2
+        echo "Install it with: brew install python@3.13" >&2
         echo "Then run ./scribe.sh --setup. See README.md for installation from scratch." >&2
         exit 2
     fi
@@ -76,8 +76,8 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
 fi
 
 if ! "$VENV_PYTHON" -I -B -c \
-    'import platform,sys; sys.exit(not ((3,12) <= sys.version_info[:2] < (3,15) and platform.machine()=="arm64"))'; then
-    echo "data/.venv uses an unsupported Python. Recreate it using Python 3.12–3.14 for Apple Silicon." >&2
+    'import platform,sys; sys.exit(not ((3,12) <= sys.version_info[:2] < (3,14) and platform.machine()=="arm64"))'; then
+    echo "data/.venv uses an unsupported Python. Recreate it using Python 3.12–3.13 for Apple Silicon." >&2
     exit 2
 fi
 mkdir -p "$DATA_DIR/.cache/pip"

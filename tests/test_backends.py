@@ -21,15 +21,15 @@ class BackendTests(unittest.TestCase):
         source.write_bytes(b"input")
         args = app.build_parser().parse_args([
             "-f", str(source), "--cache-dir", str(root / "cache"),
-            "--output-dir", str(root / "data"), "--report-tabs", "1"])
+            "--output-dir", str(root / "data"), "--report-tabs", "1", "--transcription-model", app.COMBINED_MODE])
         local = {"duration": 2, "words": [], "voices": [], "turns": [
             {"start": 0, "end": 2, "speaker": 1, "uncertain": False, "text": "Local source text."}]}
         return source, args, local
 
-    def test_default_gpt_and_explicit_whisper(self):
-        self.assertEqual(app.build_parser().parse_args([]).transcription_model, "all")
-        self.assertEqual(app.build_parser().parse_args(["--transcription-model", "whisper-local"]).transcription_model,
-                         "whisper-local")
+    def test_default_whisperx_and_explicit_mlx(self):
+        self.assertEqual(app.build_parser().parse_args([]).transcription_model, "whisperx")
+        self.assertEqual(app.build_parser().parse_args(["--transcription-model", "mlx"]).transcription_model,
+                         "mlx")
 
     def test_gpt_failure_skips_fusion_and_summarizes_local_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,7 +82,7 @@ class BackendTests(unittest.TestCase):
                     patch.object(app, "fuse_transcripts", return_value=(fused, [])), \
                     patch.object(app, "summarize", return_value="Old fused summary"):
                 app.process_file(source, args, "key")
-                args.transcription_model, args.transcribe_only = "whisper-local", True
+                args.transcription_model, args.transcribe_only = "mlx", True
                 args.force = True
                 app.process_file(source, args, "")
             _, summary = app.output_paths(source, args.output_dir)
@@ -93,7 +93,7 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source, args, local = self.make_pipeline(root)
-            args.transcription_model, args.transcribe_only = "whisper-local", True
+            args.transcription_model, args.transcribe_only = "mlx", True
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local):
                 app.process_file(source, args, "")
                 args.output_dir = root / "another-output"
@@ -115,15 +115,16 @@ class BackendTests(unittest.TestCase):
                 self.assertIn("Local source text.", summarize.call_args.args[0])
             self.assertTrue(any(args.cache_dir.glob("*/sources/gpt-transcribe.txt")))
 
-    def test_whisper_never_calls_gpt_or_fusion(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source, args, local = self.make_pipeline(Path(tmp))
-            args.transcription_model, args.transcribe_only = "whisper-local", True
-            with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
-                    patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts") as fuse, \
-                    patch.object(app, "summarize") as summarize:
-                app.process_file(source, args, "")
-                gpt.assert_not_called(); fuse.assert_not_called(); summarize.assert_not_called()
+    def test_local_recognizers_never_call_gpt_or_fusion(self):
+        for model in ["whisperx", "mlx"]:
+            with self.subTest(model=model), tempfile.TemporaryDirectory() as tmp:
+                source, args, local = self.make_pipeline(Path(tmp))
+                args.transcription_model, args.transcribe_only = model, True
+                with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
+                        patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts") as fuse, \
+                        patch.object(app, "summarize") as summarize:
+                    app.process_file(source, args, "")
+                    gpt.assert_not_called(); fuse.assert_not_called(); summarize.assert_not_called()
 
     def test_fusion_preserves_anchors_and_caches(self):
         turns = [{"start": 1, "end": 2, "speaker": 2, "uncertain": False, "text": "misheard"}]

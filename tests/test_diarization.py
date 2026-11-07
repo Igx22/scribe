@@ -169,10 +169,10 @@ class NemotronTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"source")
             audio = root / "audio.wav"; wav(audio)
-            args = app.build_parser().parse_args(["--offline"])
+            args = app.build_parser().parse_args(["--offline", "--transcription-model", "mlx"])
             app.configure_mode(args)
             settings = app.recognition_settings(source, args)
-            legacy = {k:v for k,v in settings.items() if k!="diarization"}
+            legacy = {k:v for k,v in settings.items() if k not in ("diarization", "recognizer")}
             legacy["speakers"] = 2
             cache = root / "cache"
             words = [{"start": .5,"end": 1.,"text":" Hello","unclear":False}]
@@ -184,7 +184,7 @@ class NemotronTests(unittest.TestCase):
                     patch.object(app, "recognize") as recognize:
                 first = app.local_recognition(audio, cache, settings, args)
                 second = app.local_recognition(audio, cache, settings, args)
-                voice.assert_called_once_with(audio, args.models_dir); recognize.assert_not_called()
+                voice.assert_called_once_with(audio, args.models_dir, "nemotron"); recognize.assert_not_called()
             self.assertEqual(len({i['speaker'] for i in first['voices']}), 1)
             self.assertEqual(first, second)
             self.assertEqual((cache / "words-stage.json").read_bytes(), before)
@@ -208,7 +208,7 @@ class NemotronTests(unittest.TestCase):
     def test_previous_api_only_log_resumes_despite_irrelevant_legacy_count(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"source")
-            args = app.build_parser().parse_args(["--transcription-model", "gpt-transcribe", "--summarize-model", "none",
+            args = app.build_parser().parse_args(["--transcription-model", "gpt-transcribe-online", "--summarize-model", "none",
                 "--cache-dir", str(root/"cache"), "--output-dir", str(root/"out")])
             chunks=[{"index":0,"start":0,"end":4,"text":"Saved cloud words"}]
             with patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks):
@@ -216,7 +216,10 @@ class NemotronTests(unittest.TestCase):
             log,_=app.output_paths(source,args.output_dir)
             before=log.read_bytes(),log.stat().st_mtime_ns
             state_path=next(args.cache_dir.glob("*/outputs/*/state.json"))
-            state=app.read_json(state_path); state['settings']['speakers']=2; app.save_json(state_path,state)
+            state=app.read_json(state_path)
+            state['settings']['speakers']=2
+            state['selection']['transcription_model']='gpt-transcribe'
+            app.save_json(state_path,state)
             with patch.object(app, "extract_audio") as extract, patch.object(app, "transcribe_gpt") as cloud, \
                     patch.object(app, "diarize") as voice:
                 app.process_file(source,args,"key")
@@ -232,7 +235,7 @@ class NemotronTests(unittest.TestCase):
             log,_ = app.output_paths(source,args.output_dir)
             app.atomic_write(log,"Previously generated or reviewed log")
             settings = app.recognition_settings(source,args)
-            settings.pop('diarization'); settings['speakers']=2
+            settings.pop('diarization'); settings.pop('recognizer'); settings['speakers']=2
             cache=args.cache_dir/hashlib.sha256(str(source).encode()).hexdigest()[:16]
             app.save_json(app.output_state_path(cache,log),{'settings':settings,
                 'selection':{'transcription_model':'whisper-local'},'pipeline_complete':True})

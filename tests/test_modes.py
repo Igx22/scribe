@@ -41,13 +41,13 @@ class ModeTests(unittest.TestCase):
     def test_offline_overrides_api_options_and_makes_no_network_requests(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, local, _ = self.setup_case(Path(tmp), "--offline",
-                "--transcription-model", "all", "--summarize-model", "gpt-6-luna:high")
+                "--transcription-model", "gpt-transcribe+whisperx", "--summarize-model", "gpt-6-luna:high")
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")), \
                     patch.object(app, "transcribe_gpt") as gpt, patch.object(app, "fuse_transcripts") as fuse, \
                     patch.object(app, "summarize") as summary:
                 app.process_file(source, args, "configured-key")
-            self.assertEqual(args.transcription_model, "whisper-local")
+            self.assertEqual(args.transcription_model, "whisperx")
             self.assertIsNone(args.summarize_model)
             gpt.assert_not_called(); fuse.assert_not_called(); summary.assert_not_called()
             log, summary_path = app.output_paths(source, args.output_dir)
@@ -57,7 +57,7 @@ class ModeTests(unittest.TestCase):
     def test_api_only_never_invokes_local_recognition_or_fusion(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, _, chunks = self.setup_case(Path(tmp),
-                "--transcription-model", "gpt-transcribe", "--summarize-model", "none")
+                "--transcription-model", "gpt-transcribe-online", "--summarize-model", "none")
             with patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "local_recognition") as local, patch.object(app, "fuse_transcripts") as fuse, \
                     patch.object(app, "summarize") as summary:
@@ -71,7 +71,7 @@ class ModeTests(unittest.TestCase):
 
     def test_api_only_failure_does_not_run_local_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source, args, _, _ = self.setup_case(Path(tmp), "--transcription-model", "gpt-transcribe")
+            source, args, _, _ = self.setup_case(Path(tmp), "--transcription-model", "gpt-transcribe-online")
             with patch.object(app, "extract_audio"), \
                     patch.object(app, "transcribe_gpt", side_effect=app.AppError("credits exhausted")), \
                     patch.object(app, "local_recognition") as local, patch.object(app, "summarize") as summary:
@@ -82,7 +82,7 @@ class ModeTests(unittest.TestCase):
 
     def test_none_disables_summary_but_all_still_fuses_with_sol(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source, args, local, chunks = self.setup_case(Path(tmp), "--summarize-model", "none")
+            source, args, local, chunks = self.setup_case(Path(tmp), "--transcription-model", app.COMBINED_MODE, "--summarize-model", "none")
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "fuse_transcripts", return_value=(local["turns"], [])) as fuse, \
@@ -147,7 +147,7 @@ class ModeTests(unittest.TestCase):
             with patch.object(app, "load_env"), patch.object(app, "ensure_models") as models, \
                     patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "local_recognition") as local:
-                self.assertEqual(app.main(["-f", str(source), "--transcription-model", "gpt-transcribe",
+                self.assertEqual(app.main(["-f", str(source), "--transcription-model", "gpt-transcribe-online",
                     "--summarize-model", "none", "--output-dir", str(args.output_dir),
                     "--cache-dir", str(args.cache_dir)]), 0)
             models.assert_not_called(); local.assert_not_called()
