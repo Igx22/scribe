@@ -98,3 +98,15 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-046 | Compare OBS Studio integration options and the recording-to-report user journey | Done | 2026-11-07 | 2026-11-07 |
 | SCR-047 | Verify input discovery and --output-dir behavior against the code | Done | 2026-11-07 | 2026-11-07 |
 | SCR-048 | Scan MKV recordings from a configurable --input-dir | Done | 2026-11-07 | 2026-11-07 |
+| SCR-049 | Monitor growing OBS MKV recordings with --monitor-dir and finalization checks | Done | 2026-11-07 | 2026-11-07 |
+| SCR-050 | Rename the shell launcher to scribe.sh throughout the project | Done | 2026-11-07 | 2026-11-07 |
+| SCR-051 | Investigate false speaker splitting on the user's single-speaker OBS recording | Done | 2026-11-07 | 2026-11-07 |
+| SCR-052 | Research alternative diarization and local transcription models for Scribe | Done | 2026-11-07 | 2026-11-07 |
+| SCR-053 | Reprocess the sample with automatic speaker counting and publish a separate (2) HTML report | Done | 2026-11-07 | 2026-11-07 |
+| SCR-054 | Test automatic diarization thresholds on the supplied two-speaker recording | Done | 2026-11-07 | 2026-11-07 |
+| SCR-055 | Compare isolated WhisperX Russian transcription with cached local and API results on both test recordings | Done | 2026-11-07 | 2026-11-07 |
+| SCR-056 | Test WhisperX Community-1 diarization on both recordings without speaker-count hints | Done | 2026-11-07 | 2026-11-07 |
+| SCR-057 | Research local GitHub diarization alternatives with evidence for Russian speech | Done | 2026-11-07 | 2026-11-07 |
+| SCR-058 | Compare isolated Nemotron 3 automatic diarization with Community-1 and existing Scribe results | Done | 2026-11-07 | 2026-11-07 |
+| SCR-059 | Replace local diarization with automatic Nemotron 3 and prepare its public model/runtime during setup | Done | 2026-11-07 | 2026-11-07 |
+| SCR-060 | Make Superpowers workflows opt-in through explicit user requests | Done | 2026-11-07 | 2026-11-07 |

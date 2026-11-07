@@ -55,15 +55,17 @@ recognition needs no API key; online downloads are still needed to prepare it on
 ### 3. Prepare dependencies and models
 
 ```bash
-./run.sh --setup
+./scribe.sh --setup
 ```
 
 This command automatically creates `data/.venv` using the installed Python,
 installs the libraries from `requirements.txt` into that isolated environment,
-and downloads Whisper plus the local speaker-segmentation and embedding models
-into `data/models`. Model downloads total approximately 1.65 GB. File sizes and
-SHA-256 hashes are checked during download. FFmpeg is provided by the Python
-dependency `imageio-ffmpeg`; a separate `brew install ffmpeg` is not required.
+and downloads Whisper, the Nemotron 3 diarization model, and NVIDIA's native
+macOS ARM64 CPU runtime into `data/models`. Downloads total approximately
+1.73 GB. All download URLs are public: **no Hugging Face account or token is
+required**, including for diarization. File sizes and SHA-256 hashes are checked
+during download. FFmpeg is provided by the Python dependency `imageio-ffmpeg`;
+a separate `brew install ffmpeg` is not required.
 No MKV file or API key is needed for this setup command, and no paid transcription
 or summary request is made. You do not need to run pip or activate the environment
 manually.
@@ -77,17 +79,17 @@ them again. Use `--verify-models` to recheck existing model hashes too.
 
 ### 4. Transcribe recordings
 
-Open Terminal in the Scribe project folder (the folder containing `run.sh`).
+Open Terminal in the Scribe project folder (the folder containing `scribe.sh`).
 The checkout already includes a `data` subfolder. Put your MKV files there, for example
 `scribe/data/recording.mkv`, then run:
 
 ```bash
-./run.sh
-./run.sh -f "recording.mkv"
-./run.sh -f "first.mkv" -f "second.mkv"
+./scribe.sh
+./scribe.sh -f "recording.mkv"
+./scribe.sh -f "first.mkv" -f "second.mkv"
 ```
 
-After setup, fully local recognition is available with `./run.sh --offline`.
+After setup, fully local recognition is available with `./scribe.sh --offline`.
 There is no need to ship or commit a separate Python installation in `data/runtime`.
 
 Without `-f`, Scribe scans `--input-dir DIR`, or `./data` in the Terminal's current
@@ -97,7 +99,7 @@ To process all MKV recordings in `~/Movies` and save their logs and HTML reports
 in the same folder:
 
 ```bash
-./run.sh --input-dir ~/Movies --output-dir ~/Movies
+./scribe.sh --input-dir ~/Movies --output-dir ~/Movies
 ```
 
 `--input-dir` and `--output-dir` are independent: changing the input folder alone
@@ -111,9 +113,9 @@ watcher; wait until recording has finished before running it.
 You can also select a recording by its explicit path:
 
 ```bash
-./run.sh -f "./data/recording.mkv"
-./run.sh -f "./recording.mkv"
-./run.sh -f "/absolute/path/recording.mkv"
+./scribe.sh -f "./data/recording.mkv"
+./scribe.sh -f "./recording.mkv"
+./scribe.sh -f "/absolute/path/recording.mkv"
 python3 src/scribe.py -f "recording.mkv"
 ```
 
@@ -121,6 +123,57 @@ An explicit relative path is relative to the Terminal working directory. The
 launcher preserves that directory. Only MKV files are accepted; `.MKV` also works.
 Missing inputs, empty input directories, and output-name collisions are reported.
 Repeated references or symlinks to the same resolved file are processed once.
+
+## Monitor growing OBS recordings
+
+Start Scribe before or during the OBS recording:
+
+```bash
+./scribe.sh --monitor-dir ~/Movies --output-dir ~/Movies
+```
+
+`--monitor-dir DIR` keeps Scribe running in the foreground and polls that folder
+every five seconds, without subfolders. Only `.mkv` files (case-insensitive) are
+considered. Scribe tracks file sizes and selects a recording only after observing
+its size increase between polls. This includes files already present and still
+being recorded when the monitor starts. Stationary files are ignored regardless
+of when they appeared; merely copying in a completed file or changing its timestamp
+does not qualify unless size growth is observed. Very short recordings completed
+between polls can be missed; process them with `-f` or a batch scan.
+`--input-dir` remains a one-time batch scan and cannot be combined with
+`--monitor-dir`. `-f` also cannot be combined with either directory selection.
+`--output-dir` is independent and still defaults to `./data`.
+
+For each growing file, the console reports its path, old/new sizes in bytes/MiB,
+and readiness status. After growth, Scribe waits for at least 30 seconds of observed stability in file identity,
+size, and modification metadata. It then checks the EBML/Matroska header, a finite
+Segment size ending exactly at the file boundary, bounded top-level metadata,
+a positive Duration, a nonempty media Cluster, and the first audio track's CodecID.
+Metadata inspection seeks past media payloads; it does not decode the entire video.
+Unknown Segment sizes, truncated structures, or missing audio leave the file
+waiting, with the reason printed. This targets finalized OBS-style MKVs: it is
+not a universal MKV completion marker or a full corruption check. Recovered or
+other valid MKVs without these finalization fields can be processed manually
+with `-f` after recording has ended. Real OBS pause/stop/crash behavior still needs
+manual validation on the user's OBS version and settings.
+
+When ready, Scribe prints the criteria and starts the normal pipeline, one file at
+a time. Completed pairs are skipped, existing-output protection and caches still
+apply, and a source change detected during audio extraction stops recognition
+before an API request. Model preparation is deferred until a file needs processing.
+An unchanged file is attempted at most once per session, including on failure;
+use an ordinary `-f` run to retry it. Restarting the monitor requires fresh observed
+growth, including for files present at that new startup. The monitor has no persistent job queue and does not
+reconcile recordings missed while it was stopped. Conflicting output names wait
+until the conflict is removed. Recording splits are separate files, not automatically
+joined meetings. A filesystem check cannot guarantee that another application
+will never reopen the file later.
+
+Stop with Ctrl+C; completed outputs are preserved. The monitor does not open a
+browser automatically. `--force`, `--summary-only`, `--setup`/`--download-models`,
+and `--show-prompt` cannot be combined with `--monitor-dir`. Normal transcription,
+report-tab, and offline selections still apply; offline monitoring creates only
+local logs. Monitoring itself makes no API calls.
 
 ## Outputs and completed recordings
 
@@ -237,9 +290,9 @@ repeat recognition and paid calls, as described above.
 One option replaces the former `--model` and `--reasoning` options:
 
 ```bash
-./run.sh --summarize-model gpt-6.1-sol:medium
-./run.sh --summarize-model gpt-6-luna:medium
-./run.sh --summarize-model none
+./scribe.sh --summarize-model gpt-6.1-sol:medium
+./scribe.sh --summarize-model gpt-6-luna:medium
+./scribe.sh --summarize-model none
 ```
 
 Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported effort
@@ -371,22 +424,22 @@ relevant examples, and technical nuance; they do not fill pages with quotations.
 
 ```bash
 # Use configured tabs (1, 3, 5, 10, transcript by default)
-./run.sh
+./scribe.sh
 
 # Select a single summary tab for unfinished recordings (still HTML)
-./run.sh --report-tabs 5
+./scribe.sh --report-tabs 5
 
 # Regenerate only an existing summary, preserving the log and recognition caches
-./run.sh -f "recording.mkv" --summary-only --report-tabs 10
+./scribe.sh -f "recording.mkv" --summary-only --report-tabs 10
 
 # Generate three independent summaries in one HTML file from an existing log
-./run.sh -f "recording.mkv" --summary-only --report-tabs 1 5 10 transcript
+./scribe.sh -f "recording.mkv" --summary-only --report-tabs 1 5 10 transcript
 
 # Equivalent comma-separated syntax
-./run.sh -f "recording.mkv" --summary-only --report-tabs 1,5,10,transcript
+./scribe.sh -f "recording.mkv" --summary-only --report-tabs 1,5,10,transcript
 
 # Inspect the actual rendered prompt without making an API call
-./run.sh --show-prompt --report-tabs 5
+./scribe.sh --show-prompt --report-tabs 5
 ```
 
 Changing tabs does not override completed-pair skipping. Use `--summary-only`
@@ -417,8 +470,8 @@ detail can therefore increase summary API cost, including intermediate note call
 ## Fully offline mode
 
 ```bash
-./run.sh --offline
-./run.sh -f "recording.mkv" --offline
+./scribe.sh --offline
+./scribe.sh -f "recording.mkv" --offline
 ```
 
 `--offline` takes priority over transcription and summary selections. It forces
@@ -426,7 +479,7 @@ detail can therefore increase summary API cost, including intermediate note call
 downloads. No audio or text is sent to OpenAI. There is no local LLM summary.
 The prepared `data/.venv` and all local models must already be present; missing
 or outdated dependencies produce an error instead of a network bootstrap. Run
-`./run.sh --setup` online once before offline use. `--offline --summary-only` is
+`./scribe.sh --setup` online once before offline use. `--offline --summary-only` is
 rejected because offline mode does not generate summaries.
 
 `--transcription-model whisper-local` by itself can still send the final text for
@@ -438,13 +491,13 @@ local log without cloud text processing.
 | Commit to Git | Keep local; excluded by `.gitignore` |
 | --- | --- |
 | `src/`, including the small model manifest; `data/.gitkeep` | All other contents of `data/` |
-| `tests/`, `run.sh`, `requirements.txt` | `data/.venv`, downloaded model weights, pip/library/API caches |
+| `tests/`, `scribe.sh`, `requirements.txt` | `data/.venv`, downloaded model weights, pip/library/API caches |
 | `README.md`, `LICENSE`, `.gitignore`, `.env.example` | Recordings, generated logs/summaries, comparisons, and `.env` |
 
 A fresh checkout includes `data/` with only the hidden `.gitkeep` placeholder, so
 you can add recordings before the first launch. Everything else inside `data/`
 remains excluded from Git. A checkout has no `.env`; copy `.env.example` when API
-features are needed. `run.sh` prepares the environment and recreates `data` if needed
+features are needed. `scribe.sh` prepares the environment and recreates `data` if needed
 on an online launch.
 For a source checkout on another machine, follow the setup commands rather than
 copying the virtual environment. Python virtual environments depend on their base
@@ -459,7 +512,7 @@ while tests live in the separate root-level `tests` directory:
 
 ```text
 scribe/
-  run.sh
+  scribe.sh
   README.md
   LICENSE
   AGENTS.md
@@ -511,7 +564,7 @@ recordings, results, or API caches:
 
 ```bash
 rm -rf data/.venv
-./run.sh --setup
+./scribe.sh --setup
 ```
 
 Older prepared installations may still have `data/runtime/python`. The launcher
@@ -525,8 +578,13 @@ paths, download URLs, file sizes, SHA-256 checksums, and archive extraction deta
 It is required for model preparation and verification, including offline checks;
 the actual downloaded model files belong in `data/models`. Keep this resource
 with the source code when copying or restoring the application.
+The native runtime stays under `data/models/diarization`, with its bundled
+libraries and third-party license notices. No separate NVIDIA toolkit, GPU,
+compiler, or global runtime installation is required. Its executable and library
+hashes are checked whenever local models are prepared. An online repair preserves
+the old runtime in a sibling `.previous-*` directory before replacing it.
 
-The project root remains the base for `.env`, `data`, and `run.sh` regardless of
+The project root remains the base for `.env`, `data`, and `scribe.sh` regardless of
 the source file's location. Tests add `src` to their import path through
 `tests/__init__.py`, so testing the portable application requires no package
 installation or additional dependencies.
@@ -548,19 +606,36 @@ Application bytecode generation is disabled with Python `-B` and
 `sys.dont_write_bytecode`. No root-level `__pycache__` is needed. Existing dependency
 bytecode is inside `data/.venv`; it is safe to retain there.
 
-Whisper uses the downloaded MLX large-v3-turbo model. Voice separation uses local
-pyannote segmentation and WeSpeaker ResNet-34 embeddings through sherpa-onnx; it
-is a separate stage from Whisper. The default known speaker count is two. Labels
+Whisper uses the downloaded MLX large-v3-turbo model. Voice separation uses
+**Nemotron 3 Diarization**, independently of Whisper, through the pinned native
+NeMo-Speech.cpp 0.3.0 CPU runtime and Q8_0 weights. It automatically detects the
+number of voices, up to the model's capacity of eight. No participant-count hint
+is supplied. The `v3-offline` preset processes local audio in stateful chunks,
+so it supports long recordings without the short-file limit of the runtime's
+full-attention mode. It does not send audio to NVIDIA or Hugging Face.
+The former `--speakers N` option is removed; omit it from existing commands.
+Labels
 follow first voice appearance and never guess real names. Overlapping speech can
 still have uncertain attribution. `[speaker uncertain: words]` and
 `[low-confidence speech: words]` apply only to the affected span; one uncertain
 word does not mark an entire turn. `[unintelligible]` means no words were recognized.
 Cloud transcription alone does not supply the local A/B labels in this tool.
 
+Upgrading does not regenerate existing completed log/report pairs. A partial
+local output from the old diarizer remains protected when its settings differ;
+use `--summary-only` to keep its transcript, a separate output folder for a new
+result, or deliberately `--force` to replace it. `--force` bypasses recognition
+caches and can repeat paid requests. When processing into a new output location
+without `--force`, compatible cached Whisper words and GPT audio responses can
+be reused; old sherpa-onnx voice intervals are never reused as Nemotron results.
+The voice checkpoint records the engine, model/runtime revisions and preset,
+separately from the Whisper word checkpoint. Old ONNX weights are left untouched
+but are no longer required by setup or recognition.
+
 The model manifest records sizes and SHA-256 hashes. Missing local models can be
 downloaded automatically in online local/combined mode. `--download-models` prepares
 them explicitly, and `--verify-models` also checks their hashes. No Hugging Face login
-is required. Prepare each machine online with `./run.sh --setup` before using it
+is required. Prepare each machine online with `./scribe.sh --setup` before using it
 offline. Downloaded weights can be copied into `data/models` and checked with
 `--verify-models`; the Python environment should be recreated on each machine.
 Pip's cache is `data/.cache/pip`. No root-level models, runtime, virtual environment,
@@ -601,12 +676,12 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-h`, `--help` | — | Show English help. |
 | `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
 | `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
+| `--monitor-dir DIR` | Off | Watch MKVs for observed size growth, including existing recordings, then wait for 30 seconds of stability plus OBS-style finalization checks. Stationary files are ignored. Alternative to `-f` and `--input-dir`. |
 | `--transcription-model gpt-transcribe\|whisper-local\|all` | `all` | API only, local only, or both plus reconciliation. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls all-mode fusion. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; order is preserved. Always writes standalone HTML. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
 | `--output-dir DIR` | Working directory's `data` | Destination for logs and summaries. |
-| `--speakers N` | `2` | Positive known speaker count for local diarization. |
 | `--language CODE` | `auto` | Local per-chunk detection; GPT receives English/Russian hints. An explicit code guides either recognizer. |
 | `--vocabulary TEXT` | Empty | Domain terms/names for local Whisper and GPT keyword hints. |
 | `--models-dir DIR` | Application's `data/models` | Explicit local model directory. |
@@ -622,7 +697,8 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 
 `--transcribe-only` and `--summary-only` are mutually exclusive. Long options must
 be written in full. The removed `--model`, `--reasoning`, and transcription value
-`whisper` are rejected; use the new options above.
+`whisper` are rejected; use the new options above. The removed `--speakers`
+option is also rejected: Nemotron 3 determines the count automatically.
 
 ## Editable prompts and long recordings
 
@@ -689,31 +765,34 @@ input/configuration errors, and `130` for interruption.
 
 ```bash
 # Default: both recognizers, fusion, and a Sol medium summary
-./run.sh
+./scribe.sh
 
 # API transcription and summary, without local voice models
-./run.sh -f "recording.mkv" --transcription-model gpt-transcribe
+./scribe.sh -f "recording.mkv" --transcription-model gpt-transcribe
 
 # Local recognition, followed by an API summary
-./run.sh --transcription-model whisper-local
+./scribe.sh --transcription-model whisper-local
 
 # Cloud audio recognition only; no text-model calls
-./run.sh --transcription-model gpt-transcribe --summarize-model none
+./scribe.sh --transcription-model gpt-transcribe --summarize-model none
 
 # Strictly local log; no network calls or summary
-./run.sh --offline
+./scribe.sh --offline
 
 # Luna for fusion and summary on an unfinished recording
-./run.sh --transcription-model all --summarize-model gpt-6-luna:medium
+./scribe.sh --transcription-model all --summarize-model gpt-6-luna:medium
 
 # Deliberately replace only an existing summary using Luna
-./run.sh -f "recording.mkv" --summary-only --summarize-model gpt-6-luna:medium
+./scribe.sh -f "recording.mkv" --summary-only --summarize-model gpt-6-luna:medium
 ```
 
 ## License
 
 Scribe's source code is licensed under the MIT License; see [LICENSE](LICENSE).
 Third-party libraries and downloaded models retain their respective licenses.
+Nemotron 3 weights use [OpenMDW-1.1](https://huggingface.co/nvidia/Nemotron-3-Diarization);
+the [NeMo-Speech.cpp runtime](https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.3.0)
+includes Apache-2.0 code and bundled third-party notices retained during setup.
 
 ## Validation and comparison
 
@@ -728,7 +807,11 @@ The checks use mocks and local fixtures, without paid API calls. They cover inpu
 paths, voice labels, uncertainty spans, all modes, offline isolation, completed-pair
 skipping, API failures, ownership, retries, cache reuse, prompt chunk coverage,
 model verification, detail propagation, output budgets, and detail-aware long-input
-notes. Configuration checks cover the four default summary tabs, `.env` lists, environment
+notes. Native diarization checks cover automatic counts, first-appearance voice
+IDs, overlaps, invalid output rejection, checked anonymous runtime downloads,
+archive/link safety, offline integrity checks and repair, legacy voice-cache
+invalidation with Whisper-word reuse, and protected old local/API-only outputs.
+Configuration checks cover the four default summary tabs, `.env` lists, environment
 and CLI precedence, single-tab HTML overrides and transcript-only selections, and invalid defaults. HTML
 checks cover multi-level parsing, escaping, tab associations, completed
 output protection in either format, interrupted-level reuse, invalidation, and
@@ -751,6 +834,11 @@ Input-directory checks cover relative and home paths, uppercase extensions,
 non-recursive scanning, symlink deduplication, invalid folders, exclusive `-f`
 selection, independent output defaults, and same-folder HTML generation with
 completed-result preservation.
+Monitor checks cover growth selection among stationary files, existing active recordings, empty folders, new recordings,
+pause-like stability with unknown Segment size, metadata-only changes, malformed
+or truncated containers, missing audio, source-change guards, failure isolation,
+output collisions, and the normal processing path. They use simulated time and
+local fixtures, without waiting 30 seconds or making paid requests.
 The original seven-minute recording has also been used
 for real API comparisons. In the original local installation, preserved Sol
 results, controlled Sol/Luna outputs, rejected candidate diagnostics, and usage/cost

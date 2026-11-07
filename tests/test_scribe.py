@@ -293,8 +293,7 @@ class AppTests(unittest.TestCase):
             log, summary = app.output_paths(source, args.output_dir)
             log.parent.mkdir()
             log.write_text("Reviewed transcript", encoding="utf-8")
-            settings = {"version": app.CACHE_VERSION, "source": app.source_signature(source), "speakers": 2,
-                        "language": "auto", "vocabulary": "", "models": app.portable_model_path(args.models_dir)}
+            settings = app.recognition_settings(source, args)
             cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
             app.save_json(app.output_state_path(args.cache_dir / cache_id, log),
                           {"settings": settings, "selection": {"transcription_model": "whisper-local"},

@@ -17,7 +17,7 @@
   or other conventional English names in examples; actual recordings keep the
   participants' names in their original language and script.
 - Keep this portable application simple: the entry point is `src/scribe.py`, the
-  launcher is `run.sh`, static model metadata is in `src/resources`, and tests are
+  launcher is `scribe.sh`, static model metadata is in `src/resources`, and tests are
   in `tests`. Do not introduce packaging or dependencies without a task-related need.
 - Preserve the README's mode boundaries, output protection, and resume behavior.
   Changes to these contracts need corresponding documentation and relevant tests.
@@ -27,6 +27,18 @@
 - Keep personal paths out of committed examples; use `~/Movies` or generic paths.
   Never commit credentials, recordings, generated results, caches, model weights,
   or virtual environments. Preserve existing private data and user edits.
+
+## Superpowers
+
+- Use Superpowers skills and workflows only when the user explicitly asks to
+  enable Superpowers. Otherwise, follow this project's normal development workflow
+  without automatically invoking Superpowers.
+- A request to disable Superpowers stops its use for subsequent work in the
+  current chat until the user explicitly enables it again. Recognize equivalent
+  enable/disable requests in the user's language.
+- Apply activation only within the scope the user specifies (for example, the
+  current feature or task); do not carry activation into unrelated tasks or new
+  chats without another explicit request.
 
 ## Verification
 

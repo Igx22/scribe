@@ -36,8 +36,8 @@ class SetupTests(unittest.TestCase):
             (root / "src/scribe.py").write_text('import os\nprint("READY " + os.getcwd())\n')
             requirements = root / "requirements.txt"
             requirements.write_text("")
-            launcher = root / "run.sh"
-            shutil.copy2(app.APP_DIR / "run.sh", launcher)
+            launcher = root / "scribe.sh"
+            shutil.copy2(app.APP_DIR / "scribe.sh", launcher)
             environment = root / "data/.venv"
             subprocess.run([sys._base_executable, "-I", "-B", "-m", "venv", "--without-pip", "--symlinks",
                             str(environment)], check=True, capture_output=True)
@@ -64,7 +64,7 @@ class SetupTests(unittest.TestCase):
                          "data/.cache/stage.json", "data/recording.mkv", "data/comparison/usage.json",
                          "data/notes.txt", "data/.env", "data/.gitkeep.copy", "exports/meeting.summary.html"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 0, name)
-            for name in (".env.example", "requirements.txt", "run.sh", "src/scribe.py",
+            for name in (".env.example", "requirements.txt", "scribe.sh", "src/scribe.py",
                          "src/resources/models-manifest.json", "src/resources/summary.html", "tests/test_setup.py",
                          "data/.gitkeep"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 1, name)

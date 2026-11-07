@@ -52,7 +52,7 @@ if ! $SETUP && [[ ! -d "$VENV_DIR" && -x "$LEGACY_PYTHON" ]]; then
 fi
 
 if $OFFLINE; then
-    echo "Offline environment is not ready. Run ./run.sh --setup online first." >&2
+    echo "Offline environment is not ready. Run ./scribe.sh --setup online first." >&2
     exit 2
 fi
 if [[ ! -x "$VENV_PYTHON" ]]; then
@@ -67,7 +67,7 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     if [[ -z "$SYSTEM_PYTHON" ]]; then
         echo "Python 3.12–3.14 for Apple Silicon is required." >&2
         echo "Install it with: brew install python@3.14" >&2
-        echo "Then run ./run.sh --setup. See README.md for installation from scratch." >&2
+        echo "Then run ./scribe.sh --setup. See README.md for installation from scratch." >&2
         exit 2
     fi
     mkdir -p "$DATA_DIR"

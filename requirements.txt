@@ -1,4 +1,4 @@
-# Installed by run.sh into data/.venv on first setup; keep this file in Git.
+# Installed by scribe.sh into data/.venv on first setup; keep this file in Git.
 mlx-whisper==0.4.3
 mlx==0.32.4
 numpy==2.5.4
@@ -7,7 +7,6 @@ numba==0.68.1
 llvmlite==0.50.0
 tiktoken==0.14.0
 huggingface-hub==2.4.0
-sherpa-onnx==2.0.1
 soundfile==0.14.0
 imageio-ffmpeg==0.8.1
 certifi==2026.10.23

@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.9.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.11.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -16,8 +16,10 @@ led the user to prefer cloud recognition for clearer words, while retaining loca
 voice/time anchors. The resulting design uses two sources and text reconciliation,
 rather than asking a text model to infer who spoke from meaning.
 
-Whisper recognizes words. Separate pyannote segmentation and WeSpeaker ResNet-34
-embeddings, through sherpa-onnx, establish voices. Reconciliation may correct words
+Whisper recognizes words. Nemotron 3 establishes voices independently, through
+the pinned NeMo-Speech.cpp 0.3.0 CPU runtime and Q8_0 model. It automatically
+detects up to eight voices with the tested `v3-offline` stateful chunk preset;
+`--speakers N` has been removed. Reconciliation may correct words
 but cannot move anchors or change their speaker/time assignments. Speech that
 cannot be placed confidently must remain unassigned. Thus clearer recognition
 does not establish more accurate speaker attribution.
@@ -28,6 +30,128 @@ log; API-only mode must not silently load or substitute local models. See
 `configure_mode()`, `_process_file()`, and `fuse_transcripts()` in
 [src/scribe.py](../src/scribe.py), with regression coverage in
 [test_modes.py](../tests/test_modes.py) and [test_backends.py](../tests/test_backends.py).
+
+The SCR-051 single-speaker investigation found that the default `--speakers 2`
+forces two clusters, rather than estimating their count. Repeating diarization
+on the user's 94.25-second monologue reproduced the cached false split exactly.
+With the same segmentation/embedding models, automatic clustering at thresholds
+0.4–0.7 returned one voice; 0.3 returned two. Fixed-one also returned one, but
+that is an imposed count. Seven local diarization runs took about 14 seconds each;
+rerunning MLX Whisper large-v3-turbo took 11.44 seconds and repeated the cached
+text exactly (156 word items). No cloud calls or fusion validation were repeated;
+all 12 baseline recording/output/cache files retained their hashes and mtimes.
+The user's statement supplies the single-speaker reference, not a full accuracy
+benchmark. These measurements predate the SCR-059 Nemotron replacement.
+Private evidence: [investigation](../data/comparison/single-speaker-obs-20261107/REPORT.txt).
+
+SCR-054 tested automatic clustering (`num_clusters=-1`, no count hints) on the
+user's 425.05-second two-participant recording with unchanged models. Thresholds
+0.3/0.4/0.5/0.6/0.7/0.8/0.9/1.0 produced 32/20/14/7/4/3/2/1 voices respectively.
+At 0.9 the intervals exactly matched the cached fixed-two baseline; this is a
+consistency check, not independently annotated diarization accuracy. Each run
+took 63–68 seconds on CPU. Cached Whisper words were reused; no API calls or
+fusion validation ran, and all 15 baseline files retained their hashes/mtimes.
+Thus 0.5 fails the two-person control despite working for the monologue; 0.9 is
+sample-specific evidence, not a validated replacement default. A follow-up
+monologue control at 0.9 also returned one voice (13.70 seconds). Private evidence:
+[sweep](../data/comparison/two-speaker-auto-thresholds/results.json).
+
+SCR-053 then ran the ordinary manual all-mode pipeline with experimental automatic
+clustering (-1, threshold 0.5) in isolated caches/results. Local recognition was
+rerun; cached cloud audio transcription was reused, then fusion, four summary
+levels, and header were regenerated with `gpt-6.1-sol:medium`. All six text calls
+completed, returning 8,396 input / 1,459 output tokens (0 reported reasoning tokens),
+without fusion validation failures. The log and header contain only the one
+supported participant name throughout. Separate `(2)` HTML/log copies were
+published beside the recording, preserving all 12 baseline files by hash/mtime.
+Local and report passes took 24.76 and 24.57 seconds respectively on this sample;
+this is not a general latency or accuracy benchmark. Markers and approximate
+timings remain. Evidence: [report](../data/comparison/single-speaker-report-2/REPORT.txt).
+
+SCR-052 identified [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+and [NVIDIA's native diarization runtime](https://github.com/NVIDIA/NeMo-Speech.cpp)
+as candidates for a measured replacement comparison; subsequent tests are below.
+WhisperX adds alignment and pyannote diarization; a different Whisper runtime alone
+does not fix fixed-count voice clustering. Full large-v3 is a separate word-quality
+experiment. This motivated multi-speaker controls before selecting a replacement,
+rather than selecting a threshold from the monologue alone.
+
+SCR-055 ran isolated WhisperX 3.8.6 on both byte-identical test-recording copies,
+without changing production code/dependencies. CPU int8, four threads, batch four,
+beam five, explicit `ru`, bundled pyannote VAD, and no vocabulary prompts produced
+new large-v3-turbo and full large-v3 texts. Existing MLX turbo and cloud
+`gpt-transcribe` text were reused. Normalized word edit distances against the API
+text were respectively 12.0%/7.3%/12.0% (Scribe/WhisperX turbo/full, monologue)
+and 30.9%/21.6%/17.5% (two-person discussion). These measure disagreement with an
+automatic reference, not human-reference WER or general accuracy. Turbo improved
+technical spellings on these samples; full large-v3 improved the longer text but
+also turned Scribe into `skype` in the monologue. Runtime, VAD/chunking, decoding,
+language hints, and full-model weights are confounded; no isolated causal claim.
+
+WhisperX ASR took 17.96/85.42 seconds (turbo) and 29.37/150.98 seconds (full).
+Russian [wav2vec2 alignment](https://github.com/m-bain/whisperX/blob/main/whisperx/alignment.py)
+also completed for all four outputs, with no missing word times or invalid bounds;
+timing accuracy lacks human annotation. During SCR-055, Community-1 diarization
+was not run because Hugging Face authorization/token was unavailable then.
+No audio was uploaded, no new API usage or fusion validation occurred, and all
+31 baseline files retained hashes/mtimes. Private texts, revisions, timings, and
+checks: [comparison](../data/comparison/whisperx-comparison/comparison.html),
+[evidence](../data/comparison/whisperx-comparison/REPORT.txt).
+
+SCR-057 clarified that local inference and gated weight distribution are separate:
+WhisperX ASR needs no HF account with its public weights; default Community-1
+diarization needs account acceptance/token for download, then runs locally.
+[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) with ungated Nemotron 3
+is a CPU/Metal candidate with independent Russian-use evidence: BMeet reports
+correct counts on 4/5 hand-corrected Russian podcasts in its own NPU/postprocessed
+pipeline. This is not a raw-model or Scribe benchmark. Polyvoice offers ungated
+small native CPU models and Mac support; Russian-specific quality remains unverified.
+DiariZen and SUPlime have ungated weights but declare non-commercial weight
+licenses. That research did not run the alternatives or select a product default;
+correct counts alone do not validate turn attribution.
+Sources and limitations: [research](../data/comparison/diarization-candidates-20261107/REPORT.txt).
+
+SCR-056/SCR-058 subsequently tested default Community-1 through WhisperX 3.8.6 /
+pyannote.audio 4.0.7, plus Nemotron 3 through NeMo-Speech.cpp 0.3.0 CPU Q8_0
+(`v3-offline` stateful chunks). Both returned one/two voices on the monologue /
+discussion with no exact/min/max count hints. No threshold tuning, voice merging,
+ASR, alignment, fusion, or paid API calls were repeated. Community-1 CPU four-thread
+passes took 69.51/356.09 seconds, excluding initial 0.99-second model loading;
+native Nemotron took 1.65/7.21 seconds including per-process loading, with runtime
+thread defaults. These are single-run deployment observations, not a controlled
+speed benchmark across equivalent precision/thread settings.
+
+On identical cached WhisperX Turbo words, both new models assigned all 150
+monologue items to one voice. For the discussion, they disagreed on 38/785 jointly
+assigned word items; Community-1 left three of 788 unassigned, Nemotron zero.
+After label permutation, agreement on common single-voice 10-ms frames was 97.42%;
+old Scribe fixed-two / automatic-0.9 agreed with Community-1 on 89.74%, differing
+on 99/785 jointly assigned word items. These compare model consistency, not human
+accuracy or DER. Different silence/overlap coverage remains visible for review.
+All 59 baseline files retained hashes/mtimes. Production code/dependencies were
+preserved; no default replacement was selected during that experiment. The local HTML has two primary
+model columns, two recording choices, optional old Scribe baselines, highlighted
+label differences, and local audio seeking. Text/structure and JavaScript syntax
+checks passed; browser visual QA was blocked by its file-URL policy. Exact model
+revisions, parameters, intervals and checks: [comparison](../data/comparison/diarization-comparison/comparison.html),
+[report](../data/comparison/diarization-comparison/REPORT.txt).
+
+SCR-059 selected Nemotron 3 for production. Setup anonymously downloads pinned
+public model weights and NVIDIA's macOS ARM64 CPU release, verifies hashes, and
+installs only allowlisted archive members with bundled libraries/licenses under
+`data/models`. Executable/library hashes are always checked; model hashes remain
+controlled by `--verify-models`. Damaged runtime repair stages a checked replacement
+and preserves the prior directory. No HF account, GPU toolkit, global runtime,
+or native compilation is needed. The old sherpa dependency and ONNX manifest
+entries are removed; previously downloaded ONNX files are preserved but unused.
+
+Voice checkpoints now identify the pinned backend/revisions/preset; old sherpa
+intervals cannot satisfy them. Compatible legacy Whisper words and GPT audio
+responses remain reusable. Completed pairs still skip, old partial local outputs
+remain protected against a backend change, and existing API-only logs can resume
+despite their obsolete unused speaker-count setting. README owns the migration
+and removed-option instructions. These decisions follow two controls, not a
+general accuracy benchmark or a claim that eight voices always separate correctly.
 
 ### Honest uncertainty and language preservation
 
@@ -80,6 +204,12 @@ regeneration is the economical way to compare summarizers; force regeneration ca
 repeat recognition charges. This is a deliberate tradeoff, including when the
 saved log came from a fallback. Consult README before changing resume semantics.
 
+The public shell launcher is `scribe.sh`; source invocation through `src/scribe.py`
+delegates to it when environment preparation is needed. Launcher naming does not
+change working-directory handling, model locations, or resume behavior.
+The rename passed the 113 mocked tests, shell syntax validation, launcher help/version,
+and direct source-invocation delegation, without API calls or model downloads.
+
 The source repository must stay small and portable: downloaded assets and private
 experiment files stay outside Git. A separately installed Python plus a disposable
 virtual environment replaced distributing an entire Python runtime. The launcher
@@ -99,7 +229,7 @@ non-recursive MKV batch, while `--output-dir` selects where its logs and reports
 are written; both default to the working directory's `data` folder. Explicit `-f`
 selection is mutually exclusive with `--input-dir` and retains its existing name
 search rules. This supports keeping OBS recordings and results together without
-changing default behavior or adding a watcher. Completed-pair protection still
+changing default batch behavior. Completed-pair protection still
 applies when input and output folders coincide. README owns the usage details.
 
 ### Multiple reading depths share one report
@@ -165,12 +295,18 @@ share a preference across different paths because file-origin storage behavior i
 browser-dependent. Storage errors must not break switching or tab navigation.
 There is no server, external asset, or transcript data in preference storage.
 
-### OBS integration investigation (SCR-046)
+### OBS integration and folder monitoring (SCR-046, SCR-049)
 
-The user prefers a watched recording folder: after OBS finishes writing an MKV,
-Scribe would queue it and open the successfully generated HTML in the default
-browser. This is a proposed user journey, not implemented behavior. The current
-scope is research only; there was no live OBS integration or timing experiment.
+The user selected `--monitor-dir` as a separate foreground mode, independent of
+batch `--input-dir`. Its selection criterion is observed size growth, regardless
+of whether the MKV existed at startup. Stationary files never enter readiness
+checks; a timestamp change or a newly appearing complete file alone is insufficient.
+Very short recordings can finish between polls without observed growth. Polling
+uses the standard library without filesystem hooks or new dependencies. Processing
+is serial, with the existing batch pipeline and protection rules. There is no
+persistent queue, automatic browser opening, or automatic retry of unchanged failed
+files. Manual `-f` processing remains the recovery path; restarting the monitor
+requires fresh observed growth. README owns exact options and timing.
 
 OBS supports [launch parameters](https://obsproject.com/kb/launch-parameters),
 [Lua/Python scripts](https://docs.obsproject.com/scripting), and a
@@ -180,31 +316,11 @@ provides RecordStateChanged with the saved path on stop. These are alternatives
 to a native plugin; launch parameters alone do not configure capture devices or
 provide the complete post-recording workflow.
 
-The follow-up also considers an OBS stop event as a primary trigger. An in-OBS
-Lua bridge is a candidate for a small OBS-only integration: it would handle
-RECORDING_STOPPED, obtain the last recording path (frontend API, OBS 29+), and hand
-work to an independent process or persistent queue without blocking OBS. Python
-scripting adds OBS-specific interpreter/architecture configuration; Scribe's own
-Python environment would remain separate. A WebSocket listener instead needs
-one-time authenticated local connection setup and reconnection handling. Live
-event delivery must not be treated as a durable job queue: missed stops need a
-recovery policy, and GetRecordStatus does not return the last recording path.
-Both candidates need path-safe launching with an explicit output directory,
-deduplication, bounded retries, and opening only the intended completed report.
-Folder recovery can complement an event trigger, but is not an approved design
-requirement. No integration approach has been finally selected or implemented.
-
-For a macOS folder watcher, file notifications and stable size/mtime alone do not
-establish completion. Apple's documented [kqueue vnode events](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html)
-do not provide a close-write event. A candidate design combines a settling period,
-writer-descriptor inspection, media checks, and a final source-change check before
-paid processing. Writer-inspection errors must remain unknown, not mean ready.
-These checks need testing with pause/resume, copies, sleep, crashes, and file splits;
-they cannot prove that a closed segment represents the entire meeting. OBS notes
-that [unfinished MKV files can remain playable](https://obsproject.com/kb/audio-video-formats-guide),
-so successful decoding alone is not proof of a complete recording. A persistent
-queue, explicit backlog policy, and bounded retries would be needed for unattended
-use. No new dependency or background service has been selected or installed.
+Lua and WebSocket triggers remain unimplemented alternatives. A Lua bridge would
+hand work to an independent process; Python scripting needs OBS-specific interpreter
+configuration. A WebSocket listener needs authentication and reconnection, and its
+live events would still need durable recovery if missed. GetRecordStatus does not
+return the last recording path. No background service has been installed.
 
 Matroska/EBML has no mandatory fixed EOF byte marker. The
 [EBML specification](https://www.rfc-editor.org/rfc/rfc8794.html#section-6.2)
@@ -214,11 +330,14 @@ is recommended rather than mandatory and need not be at the end. OBS's FFmpeg
 mux helper calls av_write_trailer; FFmpeg's
 [Matroska trailer](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/matroskaenc.c)
 can write Cues and patch Segment size, SeekHead, and Duration at earlier offsets.
-For a tested OBS recording configuration, a finite Segment size matching the
-file boundary plus stable size/mtime is a candidate finalization signal. It is
-not a general integrity check or proof of a complete meeting. This could simplify
-an OBS-focused watcher, but needs validation on the installed version with active,
-paused, stopped, crashed, and copied files; no such experiment has been run.
+`obs_mkv_readiness()` combines observed metadata stability with a finite Segment
+matching the file boundary and bounded metadata, Duration, Cluster, and audio
+CodecID checks. It skips media payloads rather than claiming full integrity.
+Source snapshots are checked around inspection and audio extraction. This is an
+OBS-oriented finalization heuristic: valid recovered/streaming MKVs can fail it,
+file splits are not joined, and a later writer reopening cannot be ruled out.
+Synthetic FFmpeg writing/finalization has been checked; real OBS active, paused,
+stopped, crashed, and copied-file scenarios still need manual validation.
 
 Scribe currently extracts only the first audio stream (`extract_audio()`). OBS
 must include both microphone and remote audio in that stream; its
@@ -326,6 +445,27 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.11.0 passed 122 mocked tests and dependency consistency, launcher
+  syntax/help/version, live setup downloads (113,908,104 new bytes; existing
+  Whisper reused), and offline full model/runtime verification. An isolated
+  integrated offline batch reused cached MLX words, detected one/two voices,
+  and exactly reproduced the prior native experiment's intervals in 10.48 s.
+  The next batch reused final logs without extraction/diarization. No API calls,
+  returned API usage, fusion validation, or fresh Whisper inference occurred;
+  all 59 private baseline files retained hashes/mtimes. A first test correctly
+  refused word-cache reuse for a copied file with a 311-ns mtime difference;
+  only the isolated fixture cache was rebound after full SHA equality checks.
+  Production source-signature checks remain strict. Evidence:
+  [integration](../data/comparison/nemotron3-integration/REPORT.txt).
+- Version 2.10.0 passed 113 mocked tests, including selection of an existing growing
+  recording among 100 stationary files, two growing recordings, rejection of new
+  stationary files and timestamp-only changes, reset on truncation/replacement,
+  simulated stability/finalization, error isolation, offline boundaries, and normal
+  output generation. A synthetic three-second FFmpeg video with AAC audio was
+  rejected while writing (unknown Segment size) and accepted after finalization
+  (29,537 bytes). That structural smoke check supplied the elapsed-stability value;
+  it did not wait 30 seconds or run recognition, fusion, or text API calls. Real
+  OBS compatibility remains a manual validation item, not a measured result.
 - Version 2.9.0 passed 97 mocked tests, including custom input-folder discovery,
   same-folder log/HTML generation, and completed-pair preservation on a repeated
   batch scan. No live audio or API processing was needed for this change.

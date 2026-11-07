@@ -20,8 +20,8 @@ class ModeTests(unittest.TestCase):
 
     def test_offline_launcher_cannot_bootstrap_a_missing_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
-            launcher = Path(tmp) / "run.sh"
-            shutil.copy2(app.APP_DIR / "run.sh", launcher)
+            launcher = Path(tmp) / "scribe.sh"
+            shutil.copy2(app.APP_DIR / "scribe.sh", launcher)
             result = subprocess.run(["/bin/bash", str(launcher), "--offline"], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertNotIn("Installing", result.stdout + result.stderr)

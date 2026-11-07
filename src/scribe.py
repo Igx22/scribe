@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """scribe: MKV → GPT + local voice anchors (or Whisper only) → log and summary.
 
-Run with ./run.sh; SUMMARIZATION_PROMPT below is intentionally editable.
+Run with ./scribe.sh; SUMMARIZATION_PROMPT below is intentionally editable.
 API mode uploads audio; local mode uploads only text if a summary is requested.
 Offline mode uses only local recognition and never creates a summary.
 """
@@ -17,6 +17,7 @@ import os
 import platform
 import re
 import ssl
+import struct
 import subprocess
 import sys
 import tarfile
@@ -35,7 +36,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.9.0"
+VERSION = "2.11.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -45,6 +46,8 @@ API_URL = "https://api.openai.com/v1/responses"
 AUDIO_API_URL = "https://api.openai.com/v1/audio/transcriptions"
 DEFAULT_TRANSCRIPTION_MODEL = "all"
 AUDIO_CHUNK_SECONDS = 600
+MONITOR_SETTLE_SECONDS = 30
+MONITOR_POLL_SECONDS = 5
 
 FUSION_PROMPT = """Reconcile two automatic transcripts of the same conversation.
 The conversation can be English, Russian, or mixed. Preserve original languages.
@@ -352,10 +355,85 @@ def ssl_context():
         return ssl.create_default_context()
 
 
-def ensure_models(models_dir, offline=False, verify=False):
+def model_manifest():
     manifest = read_json(RESOURCE_DIR / "models-manifest.json")
     if not manifest:
         raise AppError("src/resources/models-manifest.json is missing. Restore it from the repository.")
+    return manifest
+
+
+def ensure_diarization_runtime(models_dir, manifest, offline=False):
+    """Install only pinned archive members, preserving the vendor's local layout."""
+    spec = manifest.get("diarization", {}).get("runtime")
+    if not spec:
+        return
+    target = models_dir / spec["directory"]
+    def ready():
+        for item in spec["members"]:
+            path = target / item["path"]
+            if "symlink" in item:
+                if not path.is_symlink() or os.readlink(path) != item["symlink"]:
+                    return False
+            elif (path.is_symlink() or not path.is_file() or path.stat().st_size != item["size"]
+                  or digest_file(path) != item["sha256"]
+                  or (item.get("executable") and not os.access(path, os.X_OK))):
+                return False
+        return True
+    # Always check executable/library hashes, even without --verify-models.
+    if ready():
+        return
+    if offline:
+        raise AppError("Nemotron 3 runtime is missing or damaged. Run ./scribe.sh --setup online first.")
+    archive_path = models_dir / spec["archive"]
+    archive_item = next(i for i in manifest["files"] if i["path"] == spec["archive"])
+    if digest_file(archive_path) != archive_item["sha256"]:
+        raise AppError("Nemotron 3 runtime archive is damaged. Run --setup --verify-models to download it again.")
+    say("Preparing the local Nemotron 3 runtime...")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".nemo-install-", dir=target.parent) as tmp:
+        stage = Path(tmp) / "runtime"
+        stage.mkdir()
+        # A static allowlist avoids tar extraction paths, link traversal, devices,
+        # and permissions from the downloaded archive. Unlisted members are ignored.
+        with tarfile.open(archive_path, "r:*") as archive:
+            for item in spec["members"]:
+                relative = Path(item["path"])
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise AppError("Invalid runtime member path in the model manifest.")
+                member = archive.getmember(spec["archive_root"] + "/" + relative.as_posix())
+                path = stage / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if "symlink" in item:
+                    link = item["symlink"]
+                    if (not member.issym() or member.linkname != link or Path(link).is_absolute()
+                            or not (path.parent / link).resolve().is_relative_to(stage.resolve())):
+                        raise AppError("Unexpected runtime archive link.")
+                    path.symlink_to(link)
+                else:
+                    if not member.isfile() or member.size != item["size"]:
+                        raise AppError("Unexpected runtime archive contents.")
+                    with archive.extractfile(member) as src, path.open("wb") as out:
+                        while block := src.read(4 * 1024 * 1024):
+                            out.write(block)
+                    if digest_file(path) != item["sha256"]:
+                        raise AppError("Extracted runtime SHA-256 verification failed.")
+                    path.chmod(0o755 if item.get("executable") else 0o644)
+        previous = None
+        if target.exists() or target.is_symlink():
+            previous = target.with_name(target.name + ".previous-" + uuid.uuid4().hex)
+            os.replace(target, previous)
+        try:
+            os.replace(stage, target)
+        except OSError:
+            if previous is not None:
+                os.replace(previous, target)
+            raise
+        if previous is not None:
+            say(f"  Previous runtime preserved at {previous}")
+
+
+def ensure_models(models_dir, offline=False, verify=False):
+    manifest = model_manifest()
     for item in manifest["files"]:
         target = models_dir / item["path"]
         valid = target.is_file() and target.stat().st_size == item["size"]
@@ -412,6 +490,7 @@ def ensure_models(models_dir, offline=False, verify=False):
             raise AppError(f"Could not download {item['path']}: {exc}") from None
         finally:
             partial.unlink(missing_ok=True)
+    ensure_diarization_runtime(models_dir, manifest, offline)
 
 
 def extract_audio(source, wav_path):
@@ -424,35 +503,55 @@ def extract_audio(source, wav_path):
         raise AppError("FFmpeg could not extract the first audio track:\n" + result.stderr[-2500:])
 
 
-def diarize(audio, models_dir, speakers):
-    import sherpa_onnx as sh
-    config = sh.OfflineSpeakerDiarizationConfig(
-        segmentation=sh.OfflineSpeakerSegmentationModelConfig(
-            pyannote=sh.OfflineSpeakerSegmentationPyannoteModelConfig(
-                model=str(models_dir / "diarization/segmentation.onnx"), window_shift_ratio=0.1),
-            num_threads=4),
-        embedding=sh.SpeakerEmbeddingExtractorConfig(
-            model=str(models_dir / "diarization/embedding.onnx"), num_threads=4),
-        clustering=sh.FastClusteringConfig(num_clusters=speakers),
-        min_duration_on=0.2, min_duration_off=0.3)
-    if not config.validate():
-        raise AppError("Could not initialize speaker diarization models.")
-    engine = sh.OfflineSpeakerDiarization(config)
-    last = [-1]
-    def progress(n, total):
-        tenth = n * 10 // max(1, total)
-        if tenth != last[0]:
-            say(f"  Speaker diarization: {min(100, tenth * 10)}%")
-            last[0] = tenth
-        return 0
-    intervals = [{"start": float(s.start), "end": float(s.end), "speaker": int(s.speaker)}
-                 for s in engine.process(audio, callback=progress).sort_by_start_time()]
+def diarize(wav_path, models_dir):
+    """Run pinned native Nemotron 3 locally, with automatic count and bounded memory."""
+    spec = model_manifest()["diarization"]
+    binary = models_dir / spec["runtime"]["directory"] / spec["runtime"]["executable"]
+    model = models_dir / spec["model"]
+    if not binary.is_file() or not os.access(binary, os.X_OK) or not model.is_file():
+        raise AppError("Nemotron 3 model/runtime is not ready. Run ./scribe.sh --setup first.")
+    with wave.open(str(wav_path)) as reader:
+        duration = reader.getnframes() / reader.getframerate()
+    say("  Speaker diarization: Nemotron 3, automatic count (up to 8 voices), CPU...")
+    started = time.monotonic()
+    env = dict(os.environ, NEMO_SPEECH_MODEL_DIR=str(models_dir),
+               HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "OPENAI_API_KEY"):
+        env.pop(name, None)
+    with tempfile.TemporaryDirectory(prefix="scribe-diarization-", dir=wav_path.parent) as tmp:
+        result_path = Path(tmp) / "intervals.json"
+        command = [str(binary.resolve()), "diarize", str(wav_path.resolve()),
+                   "--model", str(model.resolve()), "--device", "cpu", "--preset", "v3-offline",
+                   "--format", "json", "--output", str(result_path)]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, env=env)
+        except OSError as exc:
+            raise AppError(f"Could not run Nemotron 3: {exc}. Run --setup --verify-models.") from None
+        if result.returncode:
+            raise AppError("Nemotron 3 diarization failed:\n" + (result.stderr or result.stdout)[-2500:])
+        payload = read_json(result_path)
+    if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
+        raise AppError("Nemotron 3 returned invalid diarization JSON.")
+    intervals = []
+    for row in payload["segments"]:
+        if not isinstance(row, dict):
+            raise AppError("Nemotron 3 returned an invalid speaker interval.")
+        start, end, speaker = (row.get(k) for k in ("start", "end", "speaker"))
+        if (type(start) not in (int, float) or type(end) not in (int, float)
+                or not math.isfinite(start) or not math.isfinite(end)
+                or not 0 <= start < end <= duration + .05
+                or type(speaker) is not int or not 1 <= speaker <= 8):
+            raise AppError("Nemotron 3 returned an invalid speaker interval.")
+        intervals.append({"start": float(start), "end": float(end), "speaker": speaker})
+    intervals.sort(key=lambda s: (s["start"], s["end"], s["speaker"]))
     # Stable numbers are ordered by first appearance, not the cluster's arbitrary ID.
     mapping = {}
     for interval in intervals:
         mapping.setdefault(interval["speaker"], len(mapping) + 1)
     for interval in intervals:
         interval["speaker"] = mapping[interval["speaker"]]
+    say(f"  Nemotron 3 detected {len(mapping)} voice(s), {len(intervals)} speech interval(s) "
+        f"in {time.monotonic() - started:.2f}s.")
     return intervals
 
 
@@ -1300,27 +1399,35 @@ def local_recognition(wav_path, cache, settings, args):
     """Reuse the local stages independently of the chosen final transcript model."""
     voice_path, word_path = cache / "voices-stage.json", cache / "words-stage.json"
     voices, words = read_json(voice_path, {}), read_json(word_path, {})
-    voices_ready = not args.force and voices.get("settings") == settings
-    words_ready = not args.force and words.get("settings") == settings
+    voice_settings = {k: settings[k] for k in ("source", "models", "diarization")}
+    word_settings = {k: v for k, v in settings.items() if k != "diarization"}
+    # Legacy word checkpoints also included the old fixed-count voice settings.
+    # Word decoding did not use those fields; old voice intervals are NOT reused.
+    saved_word_settings = words.get("settings")
+    if isinstance(saved_word_settings, dict):
+        saved_word_settings = {k: v for k, v in saved_word_settings.items()
+                               if k not in ("speakers", "diarization")}
+    voices_ready = not args.force and voices.get("settings") == voice_settings
+    words_ready = not args.force and saved_word_settings == word_settings
     with wave.open(str(wav_path)) as reader:
         duration = reader.getnframes() / reader.getframerate()
         if not reader.getnframes():
             raise AppError("The audio track is empty.")
-        if not (voices_ready and words_ready):
+        if not words_ready:
             import numpy as np
             audio = np.frombuffer(reader.readframes(reader.getnframes()), dtype=np.int16).astype(np.float32) / 32768
     if voices_ready:
         intervals = voices["intervals"]
-        say("  Reusing saved speaker diarization.")
+        say(f"  Reusing Nemotron 3 automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
     else:
-        intervals = diarize(audio, args.models_dir, args.speakers)
-        save_json(voice_path, {"settings": settings, "intervals": intervals})
+        intervals = diarize(wav_path, args.models_dir)
+        save_json(voice_path, {"settings": voice_settings, "intervals": intervals})
     if words_ready:
         recognized = words["words"]
         say("  Reusing saved local words.")
     else:
         recognized = recognize(audio, args.models_dir, args.language, args.vocabulary) if intervals else []
-        save_json(word_path, {"settings": settings, "duration": duration, "words": recognized})
+        save_json(word_path, {"settings": word_settings, "duration": duration, "words": recognized})
     turns = assign_speakers(recognized, intervals)
     result = {"duration": duration, "words": recognized, "voices": intervals, "turns": turns}
     save_json(cache / "recognition.json", result)
@@ -1365,6 +1472,243 @@ def collect_files(file_args, cwd, input_dir=None):
         if path.suffix.lower() != ".mkv":
             raise AppError(f"Expected an MKV file: {path}")
     return unique
+
+
+def _ebml_vint(reader, *, element_id=False):
+    """Read an EBML ID or size without scanning media payloads."""
+    first = reader.read(1)
+    if not first or first[0] == 0:
+        raise ValueError("Missing or invalid EBML integer")
+    width = 9 - first[0].bit_length()
+    if width > (4 if element_id else 8):
+        raise ValueError("Invalid EBML integer width")
+    tail = reader.read(width - 1)
+    if len(tail) != width - 1:
+        raise ValueError("Truncated EBML integer")
+    value = int.from_bytes(first + tail, "big")
+    if element_id:
+        return value
+    value &= (1 << (7 * width)) - 1
+    return None if value == (1 << (7 * width)) - 1 else value
+
+
+def _ebml_element(reader, boundary):
+    element_id = _ebml_vint(reader, element_id=True)
+    length = _ebml_vint(reader)
+    start = reader.tell()
+    end = None if length is None else start + length
+    if start > boundary or (end is not None and end > boundary):
+        raise ValueError("EBML element extends beyond its container or file")
+    return element_id, start, end
+
+
+def _ebml_children(reader, end):
+    # Bound work on malformed inputs; Cluster payloads are skipped with seek().
+    count = 0
+    while reader.tell() < end:
+        count += 1
+        if count > 100000:
+            raise ValueError("Too many EBML metadata elements")
+        element_id, start, child_end = _ebml_element(reader, end)
+        if child_end is None:
+            raise ValueError("An element still has unknown size")
+        yield element_id, start, child_end
+        reader.seek(child_end)
+
+
+def _ebml_value(reader, start, end, limit):
+    if not 0 < end - start <= limit:
+        raise ValueError("Invalid EBML metadata length")
+    reader.seek(start)
+    value = reader.read(end - start)
+    if len(value) != end - start:
+        raise ValueError("Truncated EBML metadata")
+    return value
+
+
+def inspect_obs_mkv(source):
+    """Inspect OBS-style finalization metadata, not media integrity or writer state."""
+    with source.open("rb") as reader:
+        size = os.fstat(reader.fileno()).st_size
+        element_id, start, header_end = _ebml_element(reader, size)
+        if element_id != 0x1A45DFA3 or header_end is None:
+            raise ValueError("Missing finite EBML header")
+        doc_type = None
+        for element_id, start, end in _ebml_children(reader, header_end):
+            if element_id == 0x4282:
+                doc_type = _ebml_value(reader, start, end, 32)
+        if doc_type != b"matroska":
+            raise ValueError("EBML document type is not matroska")
+        # Global Void/CRC elements may precede the Segment.
+        while True:
+            element_id, segment_start, segment_end = _ebml_element(reader, size)
+            if element_id == 0x18538067:
+                break
+            if element_id not in (0xEC, 0xBF) or segment_end is None:
+                raise ValueError("Missing Matroska Segment")
+            reader.seek(segment_end)
+        if segment_end is None:
+            raise ValueError("Segment size is unknown; OBS finalization has not been established")
+        if segment_end != size:
+            raise ValueError(f"Segment ends at byte {segment_end:,}, but file size is {size:,}")
+        duration, audio_codec, has_cluster = None, None, False
+        for element_id, start, end in _ebml_children(reader, segment_end):
+            if element_id == 0x1549A966:  # Info
+                for field, value_start, value_end in _ebml_children(reader, end):
+                    if field == 0x4489:  # Duration, in Segment ticks
+                        value = _ebml_value(reader, value_start, value_end, 8)
+                        if len(value) not in (4, 8):
+                            raise ValueError("Invalid Duration encoding")
+                        duration = struct.unpack(">f" if len(value) == 4 else ">d", value)[0]
+            elif element_id == 0x1654AE6B:  # Tracks
+                for field, track_start, track_end in _ebml_children(reader, end):
+                    if field != 0xAE:  # TrackEntry
+                        continue
+                    track_type, codec = None, None
+                    for field, value_start, value_end in _ebml_children(reader, track_end):
+                        if field == 0x83:
+                            track_type = int.from_bytes(_ebml_value(reader, value_start, value_end, 8), "big")
+                        elif field == 0x86:
+                            codec = _ebml_value(reader, value_start, value_end, 256).decode("ascii")
+                    if track_type == 2 and audio_codec is None:
+                        if not codec or not codec.startswith("A_"):
+                            raise ValueError("The first audio track has no valid CodecID")
+                        audio_codec = codec
+            elif element_id == 0x1F43B675:  # Cluster
+                has_cluster |= end > start
+        if duration is None or not math.isfinite(duration) or duration <= 0:
+            raise ValueError("A positive finalized Duration is missing")
+        if audio_codec is None:
+            raise ValueError("No audio track found")
+        if not has_cluster:
+            raise ValueError("No nonempty media Cluster found")
+    return {"segment_end": segment_end, "audio_codec": audio_codec, "size": size}
+
+
+def monitor_snapshot(source):
+    stat = source.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def obs_mkv_readiness(source, stable_seconds, expected_snapshot):
+    """Require observed stability plus finite, bounded OBS-style MKV metadata."""
+    if stable_seconds < MONITOR_SETTLE_SECONDS:
+        return False, f"Waiting for stability: {stable_seconds:.0f}/{MONITOR_SETTLE_SECONDS} seconds"
+    try:
+        if monitor_snapshot(source) != expected_snapshot:
+            return False, "File changed before the metadata check; waiting again"
+        details = inspect_obs_mkv(source)
+        if monitor_snapshot(source) != expected_snapshot:
+            return False, "File changed during the metadata check; waiting again"
+    except (OSError, ValueError) as exc:
+        return False, f"Not ready: {exc}"
+    return True, (f"Stable for {stable_seconds:.0f}s; finite Segment ends at byte {details['segment_end']:,} "
+                  f"and matches file size; metadata bounds, Duration, media Cluster, "
+                  f"and first audio track ({details['audio_codec']}) checked")
+
+
+def monitor_directory(args):
+    """Watch size growth, then process a stable finalized candidate once per version."""
+    directory = args.monitor_dir.expanduser().resolve()
+    if not directory.is_dir():
+        raise AppError(f"Input directory not found or not a directory: {directory}")
+    observed = {}
+    try:
+        for path in directory.iterdir():
+            if path.is_file() and path.suffix.lower() == ".mkv":
+                source = path.resolve()
+                try:
+                    observed[source] = {"snapshot": monitor_snapshot(source), "since": time.monotonic(),
+                                        "grew": False, "handled": False, "message": None}
+                except FileNotFoundError:
+                    pass
+    except OSError as exc:
+        raise AppError(f"Cannot establish the monitor's startup file list: {exc}") from exc
+    say(f"Monitoring MKV recordings in: {directory}")
+    say(f"Output directory: {args.output_dir}")
+    say(f"Polling every {MONITOR_POLL_SECONDS}s; requiring {MONITOR_SETTLE_SECONDS}s of observed stability.")
+    say(f"Tracking initial sizes of {len(observed)} MKV file(s). Stationary files are ignored until size growth is observed.")
+    say("Files already being recorded can qualify. New files also require observed growth between polls.")
+    say("Completed output pairs are skipped. Stop with Ctrl+C.")
+    say("Readiness is an OBS finalization heuristic, not a full media-integrity check.")
+    folder_error = None
+    while True:
+        try:
+            sources = list(dict.fromkeys(path.resolve() for path in sorted(directory.iterdir())
+                           if path.is_file() and path.suffix.lower() == ".mkv"))
+            folder_error = None
+        except OSError as exc:
+            message = f"Cannot scan input directory; will retry: {exc}"
+            if message != folder_error:
+                say(message)
+                folder_error = message
+            # Preserve observations until the directory can be read again, but
+            # restart stability timing because its contents were not observable.
+            for entry in observed.values():
+                entry["since"] = time.monotonic()
+            time.sleep(MONITOR_POLL_SECONDS)
+            continue
+        destinations = {}
+        for source in sources:
+            destinations.setdefault(output_paths(source, args.output_dir)[0], []).append(source)
+        observed = {path: entry for path, entry in observed.items() if path in sources}
+        for source in sources:
+            try:
+                snapshot = monitor_snapshot(source)
+                now = time.monotonic()
+                entry = observed.get(source)
+                if entry is None or entry["snapshot"][:2] != snapshot[:2] or snapshot[2] < entry["snapshot"][2]:
+                    entry = {"snapshot": snapshot, "since": now, "grew": False, "handled": False, "message": None}
+                    observed[source] = entry
+                    say(f"Observed MKV: {source} ({snapshot[2]:,} bytes); waiting for size growth.")
+                elif entry["snapshot"] != snapshot:
+                    previous_size = entry["snapshot"][2]
+                    if snapshot[2] > previous_size:
+                        entry["grew"] = True
+                        entry["handled"] = False
+                        say(f"\nGrowth detected: {source}\n  Size: {previous_size:,} -> {snapshot[2]:,} bytes "
+                            f"(+{snapshot[2] - previous_size:,}; {snapshot[2] / 1048576:.2f} MiB)")
+                    elif entry["grew"]:
+                        say(f"  {source.name}: metadata changed; restarting the stability timer.")
+                    entry.update(snapshot=snapshot, since=now, message=None)
+                if not entry["grew"]:
+                    continue
+                if entry["handled"]:
+                    continue
+                collisions = destinations[output_paths(source, args.output_dir)[0]]
+                if len(collisions) > 1:
+                    message = "Waiting: colliding output names: " + ", ".join(str(path) for path in collisions)
+                elif completed_pair(source, args):
+                    say(f"Skipping {source.name}: the log and a summary (.md or .html) already exist.")
+                    entry["handled"] = True
+                    continue
+                else:
+                    ready, message = obs_mkv_readiness(source, now - entry["since"], snapshot)
+                    if ready:
+                        say(f"Ready MKV: {source}\n  Size: {snapshot[2]:,} bytes ({snapshot[2] / 1048576:.2f} MiB)"
+                            f"\n  Criteria: {message}\n  Starting normal Scribe processing...")
+                        # Reuse normal mode selection, output protection, caches,
+                        # model preparation, and error reporting.
+                        args.monitor_expected_snapshot = snapshot
+                        try:
+                            result = process_files([source], args)
+                        except (AppError, OSError, RuntimeError, ValueError, ImportError) as exc:
+                            key = os.getenv("OPENAI_API_KEY", "").strip()
+                            say("ERROR: " + (str(exc).replace(key, "[key redacted]") if key else str(exc)))
+                            result = 1
+                        entry["handled"] = True
+                        say(f"Monitor: {'processing failed' if result else 'processing finished'} for {source.name}.")
+                        if result:
+                            say("This unchanged file will not be retried automatically; use an ordinary -f run to retry it.")
+                        continue
+                if message != entry["message"]:
+                    say(f"  {source.name}: {message}")
+                    entry["message"] = message
+            except OSError as exc:
+                # A recorder can rename or remove a file between listing and stat.
+                say(f"Cannot inspect {source.name}; will check again: {exc}")
+                observed.pop(source, None)
+        time.sleep(MONITOR_POLL_SECONDS)
 
 
 def output_paths(source, output_dir=None):
@@ -1438,15 +1782,24 @@ def process_file(source, args, key):
         return _process_file(source, args, "" if args.offline else key)
 
 
+def recognition_settings(source, args):
+    settings = {"version": CACHE_VERSION, "source": source_signature(source),
+                "language": args.language, "vocabulary": args.vocabulary,
+                "models": portable_model_path(args.models_dir)}
+    if args.transcription_model != "gpt-transcribe":
+        settings["diarization"] = model_manifest()["diarization"]["identity"]
+    return settings
+
+
 def _process_file(source, args, key):
+    if args.monitor_dir is not None and monitor_snapshot(source) != args.monitor_expected_snapshot:
+        raise AppError("Source changed after the monitor readiness check; waiting for a new stable version.")
     log_path, summary_path = output_paths(source, args.output_dir)
     all_summaries = summary_paths(source, args.output_dir)
     cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
     cache = args.cache_dir / cache_id
     cache.mkdir(parents=True, exist_ok=True)
-    settings = {"version": CACHE_VERSION, "source": source_signature(source), "speakers": args.speakers,
-                "language": args.language, "vocabulary": args.vocabulary,
-                "models": portable_model_path(args.models_dir)}
+    settings = recognition_settings(source, args)
     selection = {"transcription_model": args.transcription_model}
     fusion_model, fusion_effort = args.summarize_model or (DEFAULT_MODEL, DEFAULT_EFFORT)
     if args.transcription_model == "all":
@@ -1460,7 +1813,13 @@ def _process_file(source, args, key):
         legacy = read_json(cache / "state.json", {})
         if legacy:
             state = {**legacy, "selection": {"transcription_model": "whisper-local"}, "pipeline_complete": True}
-    owned = state.get("settings") == settings
+    saved_settings = state.get("settings")
+    if (args.transcription_model == "gpt-transcribe" and isinstance(saved_settings, dict)
+            and state.get("selection", {}).get("transcription_model") == "gpt-transcribe"):
+        # The old shared settings carried a count even for API-only outputs.
+        # Discard that unused field only when ownership proves an API-only log.
+        saved_settings = {k: v for k, v in saved_settings.items() if k != "speakers"}
+    owned = saved_settings == settings
     reusable = (owned and state.get("selection") == selection and log_path.is_file()
                 and state.get("pipeline_complete", True))
     if args.summary_only:
@@ -1492,6 +1851,9 @@ def _process_file(source, args, key):
             wav_path = Path(tmp) / "audio.wav"
             say("  Extracting audio (first audio track)...")
             extract_audio(source, wav_path)
+            if args.monitor_dir is not None and (monitor_snapshot(source) != args.monitor_expected_snapshot
+                                                or source_signature(source) != settings["source"]):
+                raise AppError("Source changed during audio extraction; no recognition request was started.")
             if args.transcription_model in ("gpt-transcribe", "all"):
                 gpt_settings = {"source": settings["source"], "language": args.language,
                                 "vocabulary": args.vocabulary, "model": "gpt-transcribe", "request_version": 1}
@@ -1616,7 +1978,8 @@ def build_parser():
         prog="scribe.py",
         allow_abbrev=False,
         description="scribe: MKV to a speaker-labeled transcript and an OpenAI summary. "
-                    "Without -f, scan --input-dir (default: ./data). Bare -f names search ./data and ~/Movies. "
+                    "Scan --input-dir (default: ./data), select -f files, or watch growing MKVs with --monitor-dir. "
+                    "Bare -f names search ./data and ~/Movies. "
                     "Outputs default to ./data relative to the launch directory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     inputs = p.add_mutually_exclusive_group()
@@ -1624,11 +1987,12 @@ def build_parser():
                         help="MKV filename or explicit path; repeat -f to process multiple files")
     inputs.add_argument("--input-dir", type=Path, metavar="DIR",
                         help="Scan MKV files in this directory without subfolders; defaults to ./data; cannot combine with -f")
+    inputs.add_argument("--monitor-dir", type=Path, metavar="DIR",
+                        help="Monitor MKVs whose size grows in this folder, including existing files; wait for OBS finalization and 30s stability")
     p.add_argument("--transcription-model", choices=("gpt-transcribe", "whisper-local", "all"),
                    default=DEFAULT_TRANSCRIPTION_MODEL,
                    help="gpt-transcribe: API only; whisper-local: local voices/text; all: both sources + GPT fusion")
     p.add_argument("--output-dir", type=Path, help="Output directory; defaults to ./data in the launch directory")
-    p.add_argument("--speakers", type=int, default=2, help="Known number of speakers")
     p.add_argument("--language", default="auto", help="Language code; auto detects local chunks and gives GPT en/ru hints")
     p.add_argument("--vocabulary", default="", help="Optional domain-specific terms/names for Whisper")
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
@@ -1648,7 +2012,7 @@ def build_parser():
     group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from existing .log.md files in the output directory")
     p.add_argument("--offline", action="store_true", help="Force whisper-local and no summary; prohibit API calls and model downloads")
     p.add_argument("--setup", "--download-models", dest="download_models", action="store_true",
-                   help="Prepare local models and exit; run.sh also prepares data/.venv. No MKV files or API key required")
+                   help="Prepare local models and exit; scribe.sh also prepares data/.venv. No MKV files or API key required")
     p.add_argument("--verify-models", action="store_true", help="Verify model SHA-256 hashes as well as sizes")
     p.add_argument("--show-prompt", action="store_true", help="Print the summary prompt and exit")
     p.add_argument("--version", action="version", version=VERSION)
@@ -1658,6 +2022,8 @@ def build_parser():
 def main(argv=None):
     load_env()
     args = build_parser().parse_args(argv)
+    if args.monitor_dir is not None and (args.summary_only or args.force or args.download_models or args.show_prompt):
+        raise AppError("--monitor-dir cannot be combined with --summary-only, --force, --setup, or --show-prompt.")
     if args.show_prompt:
         levels = summary_levels(args.report_tabs)
         for level in levels:
@@ -1665,8 +2031,6 @@ def main(argv=None):
         if not levels:
             say("No summary tabs selected; the transcript is embedded without summarization.")
         return 0
-    if args.speakers < 1:
-        raise AppError("--speakers must be a positive integer.")
     configure_mode(args)
     args.models_dir = args.models_dir.expanduser().resolve()
     args.cache_dir = args.cache_dir.expanduser().resolve()
@@ -1678,7 +2042,14 @@ def main(argv=None):
         ensure_models(args.models_dir, args.offline, args.verify_models)
         say("Models are ready.")
         return 0
+    if args.monitor_dir is not None:
+        return monitor_directory(args)
     files = collect_files(args.file, Path.cwd(), args.input_dir)
+    return process_files(files, args)
+
+
+def process_files(files, args):
+    """Run the ordinary batch pipeline for explicitly selected source paths."""
     pending = []
     for source in files:
         if completed_pair(source, args):
@@ -1731,7 +2102,7 @@ if __name__ == "__main__":
     # prefixes, not resolved executables: venv interpreters can be symlinks.
     managed = {APP_DATA / ".venv", APP_DATA / "runtime/python", APP_DATA / "runtime/venv"}
     if Path(sys.prefix).resolve() not in {path.resolve() for path in managed}:
-        os.execv("/bin/bash", ["bash", str(APP_DIR / "run.sh"), *sys.argv[1:]])
+        os.execv("/bin/bash", ["bash", str(APP_DIR / "scribe.sh"), *sys.argv[1:]])
     try:
         raise SystemExit(main())
     except AppError as exc:
