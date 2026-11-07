@@ -2,7 +2,7 @@
 
 macOS command-line tool for detailed conversation logs and summaries with selectable
 detail. It accepts MKV recordings, extracts the first audio track, and supports
-Russian, English, and mixed conversations. Input recordings are never modified.
+English, Russian, and mixed conversations. Input recordings are never modified.
 
 ## Setup from GitHub: start here
 
@@ -111,8 +111,9 @@ For `meeting.mkv`, the default outputs are:
 
 Both contain plain text despite the `.md` extension. There are no Markdown
 headings, tables, emphasis, or code fences. Speaker labels and approximate times
-are available in local and combined modes. API-only logs have chunk time ranges
-and no invented A/B speaker labels.
+are available in local and combined modes. Combined mode can replace anonymous
+display labels with names supported by the conversation; see below. API-only logs
+have chunk time ranges and no invented A/B speaker labels.
 
 If **both files already exist**, ordinary processing skips the recording, even
 if the model, prompt, source, or settings have changed. Existing results are not
@@ -136,7 +137,7 @@ source/settings match.
 | --- | --- | --- | --- |
 | `gpt-transcribe` | OpenAI GPT-Transcribe only | No | Yes, extracted audio |
 | `whisper-local` | Local Whisper and local diarization only | A, B, C, D, etc. | No |
-| `all` (default) | GPT-Transcribe + local Whisper/voices + GPT text reconciliation | A, B, C, D, etc. | Yes, extracted audio |
+| `all` (default) | GPT-Transcribe + local Whisper/voices + GPT text reconciliation | A, B, C, D, etc.; supported names when available | Yes, extracted audio |
 
 The default `all` preserves the earlier two-source pipeline. GPT-Transcribe runs
 first, local recognition supplies voice/time anchors, and a text model combines
@@ -150,6 +151,63 @@ If summaries are enabled, the text model then summarizes that available log.
 The source transcripts and error state remain cached for inspection and retries.
 A fallback log plus a successful summary counts as a completed pair on the next
 ordinary run; use explicit regeneration if you want another attempt at fusion.
+
+## Speaker names from the conversation
+
+In combined `all` mode, the existing GPT reconciliation request also proposes names
+for fixed local voice IDs. No separate name-recognition request is made. Evidence
+can be a direct self-introduction, an unambiguous named address and response, or
+an introduction confirmed by subsequent interaction. For example, "I'm Alice,
+and this is Bob" identifies Alice, but Bob's voice needs a reliable connection to
+later speech. A list of names or the next voice alone is insufficient.
+
+Formal introductions are not required. With two observed participants, a direct
+named request and a coherent response can identify the other voice. For example,
+A says "Bob, please send the report" and B replies "Alice, thanks. I'll send it
+now": the reciprocal exchange can establish both names. With three participants,
+the answer must clearly connect to the named request or conversational handoff;
+turn order and assigning a leftover name by elimination are insufficient.
+Ambiguous interruptions, overlap, and unattributed speech require caution rather
+than assuming that only two people are involved. Each request receives the
+observed voice roster for the entire recording, including later voices, plus
+already established names; no manual name list or host narration is needed.
+
+Established human names take precedence over casual nicknames or handles. If no
+human name is supported, a stable neutral nickname can be used. The prompt rejects
+insults, mocking addresses, and generic terms such as "buddy" as identity evidence;
+it must not invent a nicer substitute. It returns the preferred label with a
+`name_type` of `human_name` or `nickname`. The application preserves a supported
+human name even if later claims offer a nickname. Classifying a name or judging
+an address's appropriateness still depends on the model, not a dictionary of
+English names; actual participant names can come from any language or culture.
+
+The log uses confirmed display names consistently, including earlier turns, while
+internal voice IDs and timestamps stay unchanged. Unnamed voices keep letters;
+unassigned speech stays unknown. Shared names are distinguished as `Alice (A)` and
+`Alice (B)`. An explicit voice-to-name table remains in the log. Summaries and
+long-input notes preserve these supplied names without identifying anyone anew.
+Actual names retain their source language and script; documentation examples use
+conventional English names.
+
+The prompt excludes quoted/hypothetical introductions, absent people, guessing by
+role or elimination, and uncertain voice attribution as sole evidence. Each
+proposed mapping includes its evidence kind and quoted anchor references. The
+application checks the IDs, quote support, and participation of the named voice;
+invalid name evidence is ignored without discarding otherwise valid fused text.
+Unresolved name conflicts keep the letter unless a later explicit self-correction
+resolves them. Name recognition remains model-based: these checks do not prove
+that the model interpreted an address correctly or that diarization is accurate.
+
+Each fusion chunk receives read-only local anchors from neighboring chunks for
+boundary-spanning exchanges. Validated claims are resolved across all chunks
+before rendering the final log. Claims remain in fusion checkpoints for inspection
+and are revalidated on cache reuse.
+
+Local-only, offline, API-only, and failed-fusion fallback logs do not run this
+name-recognition step. Existing completed output pairs still skip processing;
+upgrading does not rename them automatically. `--summary-only` preserves the log
+and therefore does not discover new names. Full regeneration with `--force` can
+repeat recognition and paid calls, as described above.
 
 ## Summary and fusion model
 
@@ -171,8 +229,8 @@ This selection controls final summaries and, in `all`, the text reconciliation.
 recognition, choose `gpt-transcribe --summarize-model none`. To avoid every cloud
 call, use `--offline`.
 
-The summary follows the predominant language of the conversation: mostly Russian
-speech produces a Russian summary; mostly English speech produces an English one.
+The summary follows the predominant language of the conversation: mostly English
+speech produces an English summary; mostly Russian speech produces a Russian one.
 If neither language clearly predominates, both may be used as appropriate to the
 topics. Names and technical terms can retain their original language. Intermediate
 notes preserve the source languages and their approximate proportions. Application
@@ -275,6 +333,8 @@ scribe/
   run.sh
   README.md
   LICENSE
+  AGENTS.md
+  TASKS.md
   .env
   .env.example
   .gitignore
@@ -290,6 +350,9 @@ scribe/
     test_modes.py
     test_summary_detail.py
     test_setup.py
+    test_speaker_names.py
+  docs/
+    PROJECT_CONTEXT.md
   data/
     recording.mkv
     recording.log.md
@@ -400,7 +463,7 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
 | `--output-dir DIR` | Working directory's `data` | Destination for logs and summaries. |
 | `--speakers N` | `2` | Positive known speaker count for local diarization. |
-| `--language CODE` | `auto` | Local per-chunk detection; GPT receives Russian/English hints. An explicit code guides either recognizer. |
+| `--language CODE` | `auto` | Local per-chunk detection; GPT receives English/Russian hints. An explicit code guides either recognizer. |
 | `--vocabulary TEXT` | Empty | Domain terms/names for local Whisper and GPT keyword hints. |
 | `--models-dir DIR` | Application's `data/models` | Explicit local model directory. |
 | `--cache-dir DIR` | Application's `data/.cache` | Explicit checkpoint/library/temp cache directory. |
@@ -432,7 +495,9 @@ detail is also recorded in the summary cache settings.
 
 Transcript content is treated as untrusted data, never executable instructions.
 The prompts prohibit invented facts, speech, speakers, decisions, and deadlines.
-Fusion can change text but cannot change anchor IDs, speaker labels, or times.
+Fusion can change text but cannot change anchor IDs, internal speaker IDs, or times.
+Transcript-supported display names are returned separately as `speaker_names`;
+the caller applies them to the fixed voices after resolving the whole recording.
 The application rejects responses that omit or duplicate anchors or remove existing
 speaker-uncertainty markers; it saves the usable local log instead.
 
@@ -517,8 +582,12 @@ The checks use mocks and local fixtures, without paid API calls. They cover inpu
 paths, voice labels, uncertainty spans, all modes, offline isolation, completed-pair
 skipping, API failures, ownership, retries, cache reuse, prompt chunk coverage,
 model verification, detail propagation, output budgets, and detail-aware long-input
-notes. Setup checks cover a ready virtual environment without a bundled runtime,
-offline rejection of outdated dependencies, and Git exclusions for generated files.
+notes. Name checks cover introductions, cross-chunk address/response evidence,
+conflicts and corrections, invalid citations, shared names, checkpoint reuse, and
+two-/three-person address evidence, human-name preference over nicknames, and names
+reaching the final log and summary. Setup checks cover a ready virtual
+environment without a bundled runtime, offline rejection of outdated dependencies,
+and Git exclusions for generated files.
 The original seven-minute recording has also been used
 for real API comparisons. In the original local installation, preserved Sol
 results, controlled Sol/Luna outputs, rejected candidate diagnostics, and usage/cost

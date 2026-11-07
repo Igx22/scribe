@@ -13,6 +13,9 @@
 ## Development agreements
 
 - Keep code, comments, CLI messages, and repository documentation in English.
+- When listing supported languages, put English before Russian. Use Alice, Bob,
+  or other conventional English names in examples; actual recordings keep the
+  participants' names in their original language and script.
 - Keep this portable application simple: the entry point is `src/scribe.py`, the
   launcher is `run.sh`, static model metadata is in `src/resources`, and tests are
   in `tests`. Do not introduce packaging or dependencies without a task-related need.

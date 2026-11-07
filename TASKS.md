@@ -58,7 +58,7 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-006 | Default input discovery and result output to the working directory's data folder | Done | — | — |
 | SCR-007 | Search both ./data and ~/Movies for bare input filenames | Done | — | — |
 | SCR-008 | Translate project text to English and consolidate usage documentation in README.md | Done | — | — |
-| SCR-009 | Support Russian/English conversations and uppercase Latin speaker labels | Done | — | — |
+| SCR-009 | Support English/Russian conversations and uppercase Latin speaker labels | Done | — | — |
 | SCR-010 | Compare GPT-Transcribe recognition with the local pipeline on the same recording | Done | — | — |
 | SCR-011 | Apply speech-confidence and speaker-uncertainty markers only to affected spans | Done | — | — |
 | SCR-012 | Add explicit cloud-only and local-only transcription choices | Done | — | — |
@@ -85,3 +85,5 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-033 | Preserve verified project decisions and development guidance for future chats | Done | 2026-11-07 | 2026-11-07 |
 | SCR-034 | Add a numbered task register and agent rules for maintaining it | Done | 2026-11-07 | 2026-11-07 |
 | SCR-035 | Rename the task register to TASKS.md and commit agent/task guidance | Done | 2026-11-07 | 2026-11-07 |
+| SCR-036 | Recognize transcript-supported speaker names during fusion | Done | 2026-11-07 | 2026-11-07 |
+| SCR-037 | Put English before Russian and use English example names throughout project documentation | Done | 2026-11-07 | 2026-11-07 |

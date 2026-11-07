@@ -126,7 +126,8 @@ class BackendTests(unittest.TestCase):
         calls = []
         def fake(*args, **kwargs):
             calls.append(kwargs)
-            return json.dumps({"turns": [{"id": 0, "text": "Correct term."}], "unassigned_text": ""})
+            return json.dumps({"turns": [{"id": 0, "text": "Correct term."}], "unassigned_text": "",
+                               "speaker_names": []})
         with tempfile.TemporaryDirectory() as tmp:
             for _ in range(2):
                 fused, extra = app.fuse_transcripts(chunks, turns, Path(tmp), "k", "m", "medium", call=fake)
@@ -141,8 +142,8 @@ class BackendTests(unittest.TestCase):
         turns = [{"start": 0, "end": 2, "speaker": 1, "uncertain": True,
                   "text": "[speaker uncertain: words]"}]
         chunks = [{"index": 0, "start": 0, "end": 3, "text": "Words"}]
-        for result in [{"turns": [], "unassigned_text": ""},
-                       {"turns": [{"id": 0, "text": "Words"}], "unassigned_text": ""}]:
+        for result in [{"turns": [], "unassigned_text": "", "speaker_names": []},
+                       {"turns": [{"id": 0, "text": "Words"}], "unassigned_text": "", "speaker_names": []}]:
             with self.subTest(result=result), tempfile.TemporaryDirectory() as tmp:
                 with self.assertRaises(app.AppError):
                     app.fuse_transcripts(chunks, turns, Path(tmp), "k", "m", "medium",
@@ -180,8 +181,10 @@ class BackendTests(unittest.TestCase):
                 self.assertEqual(app.gpt_audio_request(part, "test-key", "auto", "dstack, control plane")["text"], "Transcript")
             self.assertEqual(seen[0].full_url, app.AUDIO_API_URL)
             body = seen[0].data.decode()
-            self.assertIn('name="languages[]"\r\n\r\nru', body)
             self.assertIn('name="languages[]"\r\n\r\nen', body)
+            self.assertIn('name="languages[]"\r\n\r\nru', body)
+            self.assertLess(body.index('name="languages[]"\r\n\r\nen'),
+                            body.index('name="languages[]"\r\n\r\nru'))
             self.assertIn('name="keywords[]"\r\n\r\ndstack', body)
             self.assertNotIn('name="language"', body)
 
