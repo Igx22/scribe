@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.18.0"
+VERSION = "2.19.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1262,13 +1262,21 @@ def final_transcript_badge(transcript):
     return match[1] + " Turbo" if match else ""
 
 
-def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None):
+def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None,
+                 summary_model=None):
     """Render model text as escaped data in a self-contained, offline report."""
     selection = tabs if tabs is not None else [*summaries, "transcript"]
-    buttons, panels, transcript_items = [], [], []
-    transcript_index = None
+    buttons, transcript_items, detail_items = [], [], []
+    panel_groups = {"detail": [], "transcript": []}
+    group_order = []
+    transcript_index = detail_index = None
+    model_label = re.sub(r"^gpt-", "GPT-", summary_model) if summary_model else ""
+    summary_badge = f'<span class="processing-badge">{html.escape(model_label)}</span>' if model_label else ""
     for index, detail in enumerate(selection):
         active = index == 0
+        group = "transcript" if detail == "transcript" else "detail"
+        if group not in group_order:
+            group_order.append(group)
         if detail == "transcript":
             transcript_index = len(buttons)
             buttons.append("")
@@ -1280,7 +1288,7 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                         '<span class="tab-title"><span class="icon-slot">'
                         '<i class="transcript-icon" aria-hidden="true"></i></span>Final transcript</span>'
                         f'<span class="option-meta"><span class="tab-description">Selected pipeline result</span>{badge}</span></button>')
-            panels.append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
+            panel_groups["transcript"].append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
                           f'tabindex="0"{"" if active else " hidden"}>'
                           '<div class="panel-heading"><h2>Final transcript</h2>'
                           f'<span>{len(transcript.split()):,} words · Full transcript</span></div>'
@@ -1290,14 +1298,18 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
         description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(detail, "Summary")
         dots = (f'<span class="detail-dots" data-count="{detail}" aria-hidden="true">'
                 + '<i class="dot"></i>' * detail + '</span>')
-        buttons.append(f'<button type="button" role="tab" id="tab-{detail}" '
+        if detail_index is None:
+            detail_index = len(buttons)
+            buttons.append("")
+        detail_items.append(f'<button type="button" role="tab" id="tab-{detail}" '
+                    f'data-title="Detail {detail}" data-description="{description}" '
                     f'aria-controls="panel-{detail}" aria-selected="{str(active).lower()}" '
                     f'tabindex="{0 if active else -1}"><span class="tab-title">{dots}Detail {detail}</span>'
-                    f'<span class="tab-description">{description}</span></button>')
+                    f'<span class="option-meta"><span class="tab-description">{description}</span>{summary_badge}</span></button>')
         paragraphs = "\n".join(f'<p>{html.escape(part.strip())}</p>'
                                for part in re.split(r"\n\s*\n", answer.strip()) if part.strip())
         heading = {1: "Brief summary", 3: "Conversation overview", 5: "Expanded summary", 10: "Detailed summary"}.get(detail, "Conversation summary")
-        panels.append(f'<section role="tabpanel" id="panel-{detail}" aria-labelledby="tab-{detail}" '
+        panel_groups["detail"].append(f'<section role="tabpanel" id="panel-{detail}" aria-labelledby="tab-{detail}" '
                       f'tabindex="0"{ "" if active else " hidden"}>'
                       f'<div class="panel-heading"><h2>{heading}</h2>'
                       f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span></div>'
@@ -1324,19 +1336,26 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                        f'{title} · <small class="model-name">{label}</small></span>'
                        f'<span class="option-meta"><span class="tab-description">{description}</span>'
                        f'<span class="processing-badge">{badge}</span></span></button>')
-        panels.append(f'<section role="tabpanel" id="panel-source-{identifier}" '
+        panel_groups["transcript"].append(f'<section role="tabpanel" id="panel-source-{identifier}" '
                       f'aria-labelledby="tab-source-{identifier}" tabindex="0" hidden>'
                       f'<div class="panel-heading"><h2>{title} · {label}</h2>'
                       f'<span>{description}</span></div>'
                       f'<div class="transcript-content" dir="auto">{text}</div></section>')
-    if transcript_index is not None:
-        buttons[transcript_index] = ('<div class="transcript-picker" id="transcript-picker">'
-            '<button type="button" id="transcript-toggle" aria-expanded="false" '
-            'aria-controls="transcript-options" hidden><span class="picker-copy">'
-            '<span id="transcript-choice-title">Final transcript</span>'
-            '<span id="transcript-choice-description">Selected pipeline result</span></span>'
+    def picker(identifier, title, description, items):
+        return (f'<div class="report-picker" id="{identifier}-picker">'
+            f'<button class="picker-toggle" type="button" id="{identifier}-toggle" aria-expanded="false" '
+            f'aria-controls="{identifier}-options" hidden><span class="picker-copy">'
+            f'<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span>'
+            f'<span class="picker-choice-description" id="{identifier}-choice-description">{description}</span></span>'
             '<span class="picker-arrow" aria-hidden="true">⌄</span></button>'
-            '<div id="transcript-options">' + "\n".join(transcript_items) + '</div></div>')
+            f'<div class="picker-options" id="{identifier}-options">' + "\n".join(items) + '</div></div>')
+    if transcript_index is not None:
+        buttons[transcript_index] = picker("transcript", "Final transcript", "Selected pipeline result", transcript_items)
+    if detail_index is not None:
+        first = next(level for level in selection if level != "transcript")
+        description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(first, "Summary")
+        buttons[detail_index] = picker("detail", f"Detail {first}", description, detail_items)
+    panels = [panel for group in group_order for panel in panel_groups[group]]
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
     metadata = metadata or report_header(source, "", {})
@@ -2386,7 +2405,7 @@ def _process_file(source, args, key):
     extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
     content = summary_html(source, summaries, report_header(source, transcript, extracted),
                            transcript=transcript, tabs=args.report_tabs,
-                           source_reports=saved_source_reports(state, transcript))
+                           source_reports=saved_source_reports(state, transcript), summary_model=model)
     if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:
         # Once generation succeeds, do not leave the other format describing an old log.
         archive_summaries([path for path in all_summaries if path != summary_path], state_path)

@@ -3,7 +3,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import scribe as app
 from tests.test_summary_html import Elements
@@ -59,9 +61,51 @@ class ReportDropdownTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(app.final_transcript_badge(text), '')
 
+    def test_detail_menu_has_only_configured_levels_and_the_actual_summary_model(self):
+        log = app.transcript_text(Path('meeting.mkv'), 1, [], provenance=
+            'GPT-Transcribe text + WhisperX / nemotron voice/time anchors; reconciled by gpt-6-luna')
+        content = app.summary_html(Path('meeting.mkv'), {10: 'Detailed.', 1: 'Brief.', 5: 'Expanded.'},
+            transcript=log, tabs=[10, 1, 5, 'transcript'], summary_model='gpt-6.1-sol')
+        menu = content.split('id="detail-options">')[1].split('</div></div>')[0]
+        elements = Elements(menu).elements
+        self.assertEqual([a['id'] for _, a in elements if a.get('role') == 'tab'],
+                         ['tab-10', 'tab-1', 'tab-5'])
+        self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', menu), ['GPT-6.1-sol'] * 3)
+        self.assertNotIn('GPT-6-luna', menu)
+        self.assertIn('aria-controls="detail-options" hidden', content)
+        self.assertEqual(content.count('id="detail-toggle"'), 1)
+
+    def test_detail_badges_do_not_guess_unknown_provenance_and_escape_model_labels(self):
+        for model, expected in [(None, None), ('<img src=x>', '&lt;img src=x&gt;')]:
+            content = self.render(tabs=[1], summary_model=model)
+            menu = content.split('id="detail-options">')[1].split('</div></div>')[0]
+            badges = re.findall(r'class="processing-badge">([^<]+)', menu)
+            self.assertEqual(badges, [] if expected is None else [expected])
+            self.assertNotIn('<img', content)
+
+    def test_pipeline_passes_the_summary_model_and_grouped_selections_keep_their_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'meeting.mkv'; source.write_bytes(b'fixture')
+            args = app.build_parser().parse_args(['--summary-only', '--report-tabs', '10,transcript,1',
+                '--summarize-model', 'gpt-6-luna:low', '--output-dir', str(root / 'out'),
+                '--cache-dir', str(root / 'cache')])
+            log, report = app.output_paths(source, args.output_dir)
+            app.atomic_write(log, 'Saved final log.')
+            with patch.object(app, 'summarize', return_value='Summary.'), \
+                    patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
+                app.process_file(source, args, 'fixture-key')
+            content = report.read_text()
+            elements = Elements(content).elements
+            tabs = [a for _, a in elements if a.get('role') == 'tab']
+            panels = [a for _, a in elements if a.get('role') == 'tabpanel']
+            self.assertEqual([a['id'] for a in tabs], ['tab-10', 'tab-1', 'tab-transcript'])
+            self.assertEqual([a['aria-controls'] for a in tabs], [a['id'] for a in panels])
+            self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', content), ['GPT-6-luna'] * 2)
+
     @unittest.skipUnless(shutil.which('node'), 'Node.js is optional for offline JavaScript checks')
     def test_keyboard_and_theme_work_for_transcript_first_and_summary_only(self):
-        for selection in [['transcript'], ['transcript', 1], [1]]:
+        for selection in [['transcript'], ['transcript', 1], [1], [1, 'transcript']]:
             with self.subTest(selection=selection):
                 content = self.render(tabs=selection)
                 result = subprocess.run([shutil.which('node'), str(Path(__file__).with_name('report_theme_check.cjs'))],

@@ -25,17 +25,22 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   const root = {dataset: {}};
   const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(m => element(m[0]));
   const panels = [...html.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map(m => element(m[0]));
-  const transcriptTabs = tabs.filter(tab => tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'));
-  const extra = new Map(['transcript-picker', 'transcript-toggle', 'transcript-options',
-    'transcript-choice-title', 'transcript-choice-description'].map(id => {
+  const extra = new Map(['detail', 'transcript'].flatMap(name =>
+    ['picker', 'toggle', 'options', 'choice-title', 'choice-description'].map(suffix => {
+      const id = name + '-' + suffix;
       const tag = html.match(new RegExp('<[^>]+id="' + id + '"[^>]*>'));
       return [id, tag ? element(tag[0]) : null];
-    }));
-  const picker = extra.get('transcript-picker'), choice = extra.get('transcript-toggle'), options = extra.get('transcript-options');
-  if (picker) {
-    picker.contains = item => item === choice || transcriptTabs.includes(item);
-    options.contains = item => transcriptTabs.includes(item);
-  }
+    })));
+  const groupFixtures = ['detail', 'transcript'].map(name => ({name,
+    picker: extra.get(name + '-picker'), choice: extra.get(name + '-toggle'),
+    options: extra.get(name + '-options'),
+    tabs: tabs.filter(tab => name === 'detail' ? /^tab-\d+$/.test(tab.id) :
+      tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'))
+  })).filter(group => group.choice);
+  groupFixtures.forEach(group => {
+    group.picker.contains = item => item === group.choice || group.tabs.includes(item);
+    group.options.contains = item => group.tabs.includes(item);
+  });
   const documentListeners = {};
   const document = {
     documentElement: root,
@@ -81,7 +86,8 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   function active(index) {
     tabs.forEach((tab, i) => {
       assert.equal(tab.attrs['aria-selected'], String(i === index));
-      assert.equal(tab.tabIndex, i === index && !(options?.hidden && transcriptTabs.includes(tab)) ? 0 : -1);
+      const group = groupFixtures.find(item => item.tabs.includes(tab));
+      assert.equal(tab.tabIndex, i === index && !group.options.hidden ? 0 : -1);
     });
     panels.forEach(panel => assert.equal(panel.hidden, panel.id !== tabs[index].attrs['aria-controls']));
   }
@@ -94,33 +100,46 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       tabs[start].listeners.keydown({key, preventDefault() { prevented = true; }});
       assert.ok(prevented); active(expected); assert.equal(focused, tabs[expected]);
     }
-    if (choice) {
-      const ids = transcriptTabs.map(tab => tab.id);
+    for (const group of groupFixtures) {
+      const {name, picker, choice, options, tabs: groupTabs} = group;
+      const ids = groupTabs.map(tab => tab.id);
       choice.listeners.click();
       assert.equal(options.hidden, false);
       assert.equal(choice.attrs['aria-expanded'], 'true');
-      const last = transcriptTabs[transcriptTabs.length - 1];
+      const last = groupTabs[groupTabs.length - 1];
       last.listeners.click();
       assert.equal(options.hidden, true);
       assert.equal(focused, choice);
-      assert.equal(extra.get('transcript-choice-title').textContent, last.attrs['data-title']);
+      assert.equal(extra.get(name + '-choice-title').textContent, last.attrs['data-title']);
       choice.listeners.click();
-      assert.deepEqual(transcriptTabs.map(tab => tab.id), ids, 'Menu items must stay in place');
+      assert.deepEqual(groupTabs.map(tab => tab.id), ids, 'Menu items must stay in place');
       assert.equal(last.attrs['data-current'], 'true');
       picker.listeners.keydown({key: 'Escape', preventDefault() {}});
       assert.equal(options.hidden, true);
       picker.listeners.keydown({key: 'ArrowDown', target: choice, preventDefault() {}});
       assert.equal(options.hidden, false); assert.equal(focused, last);
       last.listeners.keydown({key: 'ArrowDown', preventDefault() {}});
-      assert.equal(focused, transcriptTabs[0]);
-      transcriptTabs[0].listeners.click();
-      assert.equal(extra.get('transcript-choice-title').textContent, 'Final transcript');
+      assert.equal(focused, groupTabs[0]);
+      groupTabs[0].listeners.click();
+      assert.equal(extra.get(name + '-choice-title').textContent, groupTabs[0].attrs['data-title']);
       choice.listeners.click();
       documentListeners.pointerdown({target: toggle});
       assert.equal(options.hidden, true);
       choice.listeners.click();
       picker.listeners.focusout({relatedTarget: toggle});
       assert.equal(options.hidden, true);
+    }
+    if (groupFixtures.length === 2) {
+      const [detail, transcript] = groupFixtures;
+      const title = extra.get('detail-choice-title').textContent;
+      detail.choice.listeners.click();
+      assert.equal(detail.options.hidden, false);
+      transcript.choice.listeners.click();
+      assert.equal(detail.options.hidden, true);
+      assert.equal(transcript.options.hidden, false);
+      assert.equal(extra.get('detail-choice-title').textContent, title);
+      documentListeners.pointerdown({target: toggle});
+      assert.ok(groupFixtures.every(group => group.options.hidden));
     }
   }
   return {theme, beforeReady, toggle, storage, cookieWrites, checkNavigation, stamp, intervals,

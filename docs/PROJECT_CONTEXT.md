@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.18.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.19.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -381,6 +381,13 @@ must not acquire a GPT badge. Unknown provenance omits it. The change affects on
 HTML rendering, preserves full escaped text and source snapshots, and adds no API
 calls. Existing reports require explicit regeneration to gain the new navigation.
 
+SCR-074 adds a matching Detail dropdown. Summary model badges come from the
+actual summary-generation configuration, never inferred from the final log's
+reconciliation model. Each menu keeps its own last selection; only one popup is
+open at a time. Configured detail levels retain their order inside the menu,
+while menus follow their first appearance in the selection. No summary text,
+prompt or API behavior changes; unknown model provenance omits the badge.
+
 Each output ownership state freezes its source texts before reconciliation and
 binds them to the source signature and final-log hash. Summary-only regeneration
 never borrows current shared checkpoints or reruns recognition to populate tabs.
@@ -566,6 +573,16 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.19.0 passed 178 mocked tests, including shared Detail/Transcript popup
+  navigation, remembered choices, mutual dismissal, configured level order,
+  summary-model provenance and escaping, summary-only/transcript-only selections,
+  and model plumbing through actual report generation. Launcher syntax/version
+  passed. A real-data preview reused previously saved summaries and source texts
+  without new model or audio calls; Brave confirmed four model-tagged Detail
+  entries, selection of Detail 5, updated content/title and selected styling.
+  The preview is under ignored `data/comparison/detail-menu-preview/`; existing
+  report/log outputs were preserved. Narrow layouts and print were not visually
+  retested; only the selected view still prints.
 - Version 2.18.0 passed 175 mocked tests, including final GPT processing in every
   ordinary mode, global supported names from later introductions, immutable raw
   snapshots, API-only unknown speakers, text-only local modes, offline isolation,

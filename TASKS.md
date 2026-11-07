@@ -123,6 +123,7 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-071 | Parse recording dates from filenames with descriptive text and suffixes | Done | 2026-11-07 | 2026-11-07 |
 | SCR-072 | Make GPT reconciliation a common final stage across transcription modes | Done | 2026-11-07 | 2026-11-07 |
 | SCR-073 | Evaluate a compact local text model for offline summaries and reconciliation | Planned | 2026-11-07 | — |
+| SCR-074 | Group summary detail levels in a dropdown with their generating model badge | Done | 2026-11-07 | 2026-11-07 |
 
 ### SCR-073
 
