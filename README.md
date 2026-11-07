@@ -58,6 +58,12 @@ Monitor the OS-specific default video folder and save results there:
 ./scribe.sh --monitor-dir
 ```
 
+Normal quality is achieved by using WhisperX Turbo + Nemotron 3 (local model, default option).
+Optional: use and additional GPT Transcribe API : 
+A higher quality can be achieved with GPT transcribe api.
+
+WhisperX Turbo + Nemotron 3
+
 ## Report example
 
 TBD
