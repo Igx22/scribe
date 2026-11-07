@@ -204,7 +204,8 @@ class SpeakerNameTests(unittest.TestCase):
             args = app.build_parser().parse_args(["--transcription-model", app.COMBINED_MODE, "--output-dir", str(root / "data"),
                                                  "--cache-dir", str(root / "cache"), "--report-tabs", "1"])
             turns = [self.turn(0, 1, "I'm Alice."), self.turn(2, 2, "I'm Bob.")]
-            local = {"duration": 4, "turns": turns}
+            local = {"duration": 4, "turns": turns, "voices": [
+                {"start": t["start"], "end": t["end"], "speaker": t["speaker"]} for t in turns]}
             chunks = [{"index": 0, "start": 0, "end": 4, "text": "I'm Alice. I'm Bob."}]
             response = {"turns": [{"id": i, "text": t["text"]} for i, t in enumerate(turns)],
                         "unassigned_text": "", "speaker_names": [

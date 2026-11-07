@@ -348,8 +348,8 @@ owners and deadlines only when explicitly present.
 ## Report tabs and summary detail
 
 `--report-tabs TAB [TAB ...]` selects the contents of the HTML report. The default
-is `1,3,5,10,transcript`: four independent summary levels and the original
-conversation transcript. Set `SCRIBE_REPORT_TABS` in `.env` to choose different
+is `1,3,5,10,transcript`: four independent summary levels, the final
+conversation transcript, and available source views. Set `SCRIBE_REPORT_TABS` in `.env` to choose different
 defaults; an explicit `--report-tabs` replaces the whole configured selection.
 
 Use summary levels from 1 to 10 and/or `transcript`, separated by spaces or commas,
@@ -358,7 +358,8 @@ Duplicates are removed, tabs follow the requested order, and at least one tab is
 required. `--report-tabs 5` creates HTML with one summary tab; add `transcript` to
 include the source conversation. `--report-tabs transcript` creates a transcript-only
 HTML report, without summary requests; the common header still uses text API
-requests. Transcript is included only when selected.
+requests. The final transcript and its source views are included only when
+`transcript` is selected; its CLI/configuration name is unchanged.
 
 Numeric detail controls substantive coverage independently of the model's
 reasoning effort: higher detail requests more coverage, not a different reasoning
@@ -393,7 +394,7 @@ Detail 1, three for Detail 3, five for Detail 5, and two rows of five for Detail
 The same count rule applies to intermediate levels. These decorative icons are
 drawn with inline HTML/CSS and require no image files.
 
-The **Transcript** tab follows Detail 10 with the default selection. It contains a
+The **Final transcript** tab follows Detail 10 with the default selection. It contains a
 complete copy of the final `.log.md` text,
 including its metadata, speaker labels, times, uncertainty markers, and whitespace.
 Long transcripts are not truncated. The document icon is drawn with inline CSS;
@@ -401,7 +402,37 @@ transcript content is escaped plain text, so markup or URLs in speech do not bec
 external links. The `.log.md` is still written for local inspection and resume,
 but the HTML never loads or links to it. To share a report, send just the HTML
 file: the recipient needs no accompanying log, stylesheets, scripts, images, or
-server. Embedding the transcript makes no additional API requests.
+server. Embedding the transcript makes no additional API requests. "Final" means
+the selected pipeline's saved result: local-only and fallback results are not
+described as successfully reconciled.
+
+Smaller gray source tabs follow the selected main tabs automatically:
+
+- **Transcript · GPT-Transcribe** shows the original API text with audio-chunk
+  time ranges and without invented speaker labels.
+- **Transcript · WhisperX Turbo** or **Transcript · MLX Turbo** shows the local
+  word/voice log before text reconciliation, preserving uncertainty markers.
+- **Diarization · Nemotron 3** or **Diarization · Community-1** shows detected
+  voices and speech intervals in seconds with millisecond precision. Voice labels
+  are anonymous; overlapping intervals remain visible.
+
+Only successful source results from that recognition run appear. API-only mode
+has the GPT source; local-only mode has the selected local source and diarization;
+combined mode normally has all three. If cloud recognition fails, there is no GPT
+source tab. If reconciliation fails, both successful inputs remain inspectable
+beside the local final fallback. Local final/source text can be identical when
+no reconciliation ran. Source tabs do not run extra recognizers or API requests.
+
+New recognition runs save source snapshots in the output's ownership state,
+separately from shared stage caches. Regenerating summaries reuses those snapshots
+even if different recognition options were supplied or shared caches have changed.
+Old logs without snapshots, or logs edited after recognition, show the saved
+final text without borrowing unverified source files from another run. Generate
+into a separate output folder to record new snapshots while preserving old
+results; compatible recognition caches remain reusable. Completed report pairs
+still skip automatically. All source text is escaped and embedded in the HTML
+body without truncation, so sharing the single HTML also shares these diagnostics.
+Omit `transcript` from `--report-tabs` to exclude final and source transcript views.
 
 The common report header shows Topic, Participants, Duration, and Date in that
 order. A separate structured text request derives one short topic sentence and
@@ -854,6 +885,8 @@ and CLI precedence, single-tab HTML overrides and transcript-only selections, an
 checks cover multi-level parsing, escaping, tab associations, completed
 output protection in either format, interrupted-level reuse, invalidation, and
 preservation of existing results on failure. Transcript checks cover exact embedded text,
+per-output source snapshots, raw inputs after fusion/fallback, mode-specific source
+tabs, edited/legacy-log isolation, and source-tab keyboard/theme interactions,
 long-log completeness, escaped markup, the inline icon, and copying the HTML
 without its source log. Header checks cover role citations,
 unknown participants, date/duration provenance, long-log coverage, conflicting

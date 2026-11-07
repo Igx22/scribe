@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.12.0"
+VERSION = "2.13.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1215,7 +1215,7 @@ def report_header(source, transcript, metadata):
             "duration": duration, "date": date, "date_note": date_note}
 
 
-def summary_html(source, summaries, metadata=None, *, transcript, tabs=None):
+def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=()):
     """Render model text as escaped data in a self-contained, offline report."""
     selection = tabs if tabs is not None else [*summaries, "transcript"]
     buttons, panels = [], []
@@ -1225,11 +1225,11 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None):
             buttons.append('<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
                         f'aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}">'
                         '<span class="tab-title"><span class="icon-slot">'
-                        '<i class="transcript-icon" aria-hidden="true"></i></span>Transcript</span>'
-                        '<span class="tab-description">Original conversation</span></button>')
+                        '<i class="transcript-icon" aria-hidden="true"></i></span>Final transcript</span>'
+                        '<span class="tab-description">Selected pipeline result</span></button>')
             panels.append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
                           f'tabindex="0"{"" if active else " hidden"}>'
-                          '<div class="panel-heading"><h2>Conversation transcript</h2>'
+                          '<div class="panel-heading"><h2>Final transcript</h2>'
                           f'<span>{len(transcript.split()):,} words · Full transcript</span></div>'
                           f'<div class="transcript-content" dir="auto">{html.escape(transcript)}</div></section>')
             continue
@@ -1249,6 +1249,26 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None):
                       f'<div class="panel-heading"><h2>{heading}</h2>'
                       f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span></div>'
                       f'<div class="prose" dir="auto">{paragraphs}</div></section>')
+    # Source views accompany the transcript selection; omitting it continues to
+    # exclude all transcript text from shared summary-only reports.
+    included_sources = source_reports if "transcript" in selection else ()
+    for report in included_sources:
+        identifier = report["id"]
+        if identifier not in ("gpt", "whisperx", "mlx", "diarization"):
+            raise AppError("Unknown report source identifier.")
+        title = "Diarization" if identifier == "diarization" else "Transcript"
+        label, description, text = (html.escape(report[key]) for key in ("label", "description", "text"))
+        buttons.append(f'<button class="source-tab" type="button" role="tab" id="tab-source-{identifier}" '
+                       f'aria-controls="panel-source-{identifier}" aria-selected="false" tabindex="-1">'
+                       '<span class="tab-title"><span class="icon-slot">'
+                       '<i class="transcript-icon" aria-hidden="true"></i></span>'
+                       f'{title} <small class="model-name">{label}</small></span>'
+                       f'<span class="tab-description">{description}</span></button>')
+        panels.append(f'<section role="tabpanel" id="panel-source-{identifier}" '
+                      f'aria-labelledby="tab-source-{identifier}" tabindex="0" hidden>'
+                      f'<div class="panel-heading"><h2>{title} · {label}</h2>'
+                      f'<span>{description}</span></div>'
+                      f'<div class="transcript-content" dir="auto">{text}</div></section>')
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
     metadata = metadata or report_header(source, "", {})
@@ -1259,6 +1279,8 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None):
     if summaries:
         contents = f"{len(summaries)} summary " + ("level" if len(summaries) == 1 else "levels")
         contents += " · Full transcript included." if "transcript" in selection else "."
+    if included_sources:
+        contents += f" {len(included_sources)} source views included."
     values = {"TITLE": html.escape(metadata["topic"]), "SOURCE": html.escape(source.name),
               "TOPIC": html.escape(metadata["topic"]), "PARTICIPANTS": participants,
               "DURATION": html.escape(metadata["duration"]), "DATE": html.escape(metadata["date"]),
@@ -1951,6 +1973,53 @@ def gpt_transcript_text(source, chunks):
     return "\n".join(lines).rstrip() + "\n"
 
 
+def recognition_source_reports(source, *, local=None, gpt_chunks=None,
+                               recognizer="whisperx", diarizer="nemotron"):
+    """Freeze actual upstream results before reconciliation changes the final log."""
+    reports = []
+    if gpt_chunks is not None:
+        reports.append({"id": "gpt", "label": "GPT-Transcribe",
+            "description": "Original API text", "text": gpt_transcript_text(source, gpt_chunks)})
+    if local is not None:
+        label = "MLX Turbo" if recognizer == "mlx" else "WhisperX Turbo"
+        voice_label = "Community-1" if diarizer == "community-1" else "Nemotron 3"
+        reports.append({"id": recognizer, "label": label, "description": "Before reconciliation",
+            "text": transcript_text(source, local["duration"], local["turns"],
+                provenance=f"{label} + {voice_label} voice/time anchors; before reconciliation")})
+        voices = local["voices"]
+        count = len({v["speaker"] for v in voices})
+        lines = ["SPEAKER DIARIZATION", f"Source file: {source.name}",
+                 f"Model: {voice_label}", f"Duration: {local['duration']:.3f} seconds",
+                 f"Detected voices: {count}", f"Speech intervals: {len(voices)}", "",
+                 "Automatic voice labels, not participant identities.",
+                 "Intervals may overlap; silence is not assigned to a voice.",
+                 "Times below are seconds from the start of the recording.", ""]
+        lines.extend(f"[{v['start']:.3f}–{v['end']:.3f}] {speaker_label(v['speaker'])}" for v in voices)
+        reports.append({"id": "diarization", "label": voice_label,
+            "description": "Voice intervals", "text": "\n".join(lines) + "\n"})
+    return reports
+
+
+def saved_source_reports(state, transcript):
+    """Only show snapshots belonging to this output's unchanged final log."""
+    snapshot = state.get("source_reports", {})
+    if (not isinstance(snapshot, dict) or snapshot.get("version") != 1
+            or snapshot.get("source") != state.get("settings", {}).get("source")
+            or snapshot.get("transcript_sha256") != hashlib.sha256(transcript.encode()).hexdigest()):
+        return []
+    reports = snapshot.get("reports")
+    if not isinstance(reports, list):
+        return []
+    seen = set()
+    for report in reports:
+        if (not isinstance(report, dict) or report.get("id") not in ("gpt", "whisperx", "mlx", "diarization")
+                or report["id"] in seen
+                or not all(isinstance(report.get(key), str) for key in ("label", "description", "text"))):
+            return []
+        seen.add(report["id"])
+    return reports
+
+
 def process_file(source, args, key):
     configure_mode(args)
     if completed_pair(source, args):
@@ -2046,7 +2115,7 @@ def _process_file(source, args, key):
         state = {"settings": settings, "selection": selection, "pipeline_complete": False}
         if old_summary:
             state["summary"] = old_summary
-        gpt_chunks, gpt_error = None, None
+        gpt_chunks, gpt_error, local = None, None, None
         temporary = cache / "tmp"
         temporary.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="scribe-audio-", dir=temporary) as tmp:
@@ -2088,6 +2157,11 @@ def _process_file(source, args, key):
             archive_summaries(all_summaries, state_path)
             state.pop("summary", None)
         state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
+        state["source_reports"] = {"version": 1, "source": settings["source"],
+            "transcript_sha256": state["transcript_sha256"],
+            "reports": recognition_source_reports(source, local=local, gpt_chunks=gpt_chunks,
+                recognizer="mlx" if args.transcription_model == "mlx" else "whisperx",
+                diarizer=args.diarization_model)}
         state["pipeline_complete"] = args.transcription_model != COMBINED_MODE
         state["source_mode"] = args.transcription_model if args.transcription_model != COMBINED_MODE else "local-fallback"
         save_json(state_path, state)
@@ -2102,6 +2176,7 @@ def _process_file(source, args, key):
                 state["pipeline_complete"] = True
                 state["source_mode"] = "gpt-plus-local"
                 state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
+                state["source_reports"]["transcript_sha256"] = state["transcript_sha256"]
                 save_json(state_path, state)
             except (AppError, OSError, ValueError) as exc:
                 message = str(exc).replace(key, "[key redacted]") if key else str(exc)
@@ -2153,7 +2228,8 @@ def _process_file(source, args, key):
         summaries[level] = answer
     extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
     content = summary_html(source, summaries, report_header(source, transcript, extracted),
-                           transcript=transcript, tabs=args.report_tabs)
+                           transcript=transcript, tabs=args.report_tabs,
+                           source_reports=saved_source_reports(state, transcript))
     if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:
         # Once generation succeeds, do not leave the other format describing an old log.
         archive_summaries([path for path in all_summaries if path != summary_path], state_path)

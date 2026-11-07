@@ -113,6 +113,9 @@
     .detail-dots .dot { display: block; width: 3.5px; height: 3.5px; border-radius: 50%; background: currentColor; }
     [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
     [role="tab"]:hover { color: var(--ink); }
+    [role="tab"].source-tab { margin: 8px 0; padding: 8px 12px; min-height: 60px; border-radius: 6px 6px 0 0; background: var(--line-soft); color: var(--secondary); font-size: 13px; }
+    [role="tab"].source-tab[aria-selected="true"] { border-bottom-color: var(--secondary); color: var(--strong); }
+    .model-name { font-size: 11px; font-weight: 500; }
     .icon-slot { display: inline-grid; place-items: center; width: 28px; height: 18px; }
     .transcript-icon { display: block; position: relative; width: 14px; height: 16px; border: 1.4px solid currentColor; border-radius: 2px; }
     .transcript-icon::after { content: ""; position: absolute; top: 4px; left: 3px; width: 6px; height: 1px; background: currentColor; box-shadow: 0 3px currentColor, 0 6px currentColor; }

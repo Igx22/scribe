@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.12.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.13.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -269,7 +269,7 @@ selection skips summarization, but retains grounded header extraction. Omitting
 transcript excludes its content from the report. An explicit CLI value
 takes precedence, and exported environment values retain precedence over `.env`.
 The built-in fallback matches `.env.example`, so absent configuration still yields
-the four summary levels and Transcript tab. Each summary level uses
+the four summary levels and Final transcript tab. Each summary level uses
 the same saved final log independently, rather than using another summary as its
 source. This preserves the existing detail guidance and language/identity rules,
 at the cost of one summarization pipeline per level. The inline template lives in
@@ -304,7 +304,7 @@ is guessed by a text model or taken from filesystem timestamps. Missing facts st
 unestablished. Header extraction now applies to every selection, including one
 summary level or transcript alone; README owns the exact formats and request/resume details.
 
-When selected, Transcript embeds the entire saved final log as escaped text;
+When selected, Final transcript embeds the entire saved final log as escaped text;
 the default puts it after all Detail tabs. A decorative document icon is drawn in
 the inline CSS. The transcript
 is inserted as escaped text with whitespace preserved; it is neither truncated nor
@@ -313,6 +313,21 @@ one file. The separate log remains part of local output/resume behavior. Embeddi
 adds no model call. Markdown summary generation has been removed; existing legacy
 Markdown files remain recognized for completion skipping, protection, and backups.
 The separate `.log.md` output and offline/disabled-report boundaries are preserved.
+
+SCR-062 adds smaller gray source views after the main tabs: original GPT audio
+text, pre-reconciliation WhisperX/MLX voice/word text, and the selected diarizer's
+anonymous intervals/count. Only sources actually produced in that run are shown;
+failed fusion retains both successful inputs alongside the local final fallback.
+The final label does not claim successful reconciliation or greater accuracy.
+The existing `transcript` selection controls final and source views together.
+
+Each output ownership state freezes its source texts before reconciliation and
+binds them to the source signature and final-log hash. Summary-only regeneration
+never borrows current shared checkpoints or reruns recognition to populate tabs.
+Old logs without snapshots and edited final logs retain final-only views. This
+avoids displaying incompatible upstream results after changing models or output
+locations. Raw views remain escaped, complete HTML body text with no external
+dependencies or additional model calls; summary/header prompts are unchanged.
 
 The report's Dark Mode switch uses inline CSS and JavaScript, with theme setup in
 the head before rendering. A saved explicit choice overrides the system preference;
@@ -472,6 +487,18 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.13.0 passed 140 mocked tests, including all recognition modes,
+  fusion/cloud fallback, exact raw/final separation, escaped long source text,
+  per-output snapshots, legacy/edited-log isolation, and actual inline-script
+  keyboard/theme checks across source tabs. Two real transcript-only HTML previews
+  reused cached WhisperX Turbo words and Nemotron intervals, preserving one/two
+  voices; no new inference, API requests, usage, fusion, summaries or header-model
+  validation ran. Preview rendering used a local descriptive header. Both reports
+  retained all text and passed script checks/completed-pair skipping. Browser
+  visual QA remains unavailable under its local-file policy. Seven two-speaker
+  cache/output files had been refreshed concurrently since the prior experiment;
+  all 59 files were unchanged against a new pre-check snapshot, without restoring
+  older user results. Evidence: [previews](../data/comparison/source-tabs-preview/verification.json).
 - Version 2.12.0 passed 133 mocked tests, dependency consistency, launcher
   syntax/help/version, selected online setup, and offline hash verification for
   the default, MLX and Community-1 selections. Fresh production WhisperX Turbo

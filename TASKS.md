@@ -111,3 +111,4 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-059 | Replace local diarization with automatic Nemotron 3 and prepare its public model/runtime during setup | Done | 2026-11-07 | 2026-11-07 |
 | SCR-060 | Make Superpowers workflows opt-in through explicit user requests | Done | 2026-11-07 | 2026-11-07 |
 | SCR-061 | Default to WhisperX Turbo with four recognition modes and independent diarization selection | Done | 2026-11-07 | 2026-11-07 |
+| SCR-062 | Embed final and source transcripts plus diarization in report tabs | Done | 2026-11-07 | 2026-11-07 |

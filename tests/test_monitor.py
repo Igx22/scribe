@@ -279,7 +279,8 @@ class MonitorTests(unittest.TestCase):
             gpt.assert_not_called()
 
     def test_offline_monitor_keeps_cloud_stages_disabled(self):
-        local = {"duration": 1, "turns": [{"start": 0, "end": 1, "speaker": 1, "text": "Local words."}]}
+        local = {"duration": 1, "voices": [{"start": 0, "end": 1, "speaker": 1}],
+                 "turns": [{"start": 0, "end": 1, "speaker": 1, "text": "Local words."}]}
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "load_env"), \
                 patch.object(app, "ensure_models") as models, patch.object(app, "extract_audio"), \
                 patch.object(app, "local_recognition", return_value=local), \
