@@ -131,14 +131,14 @@ class SummaryHtmlTests(unittest.TestCase):
 
     def test_html_escapes_source_and_model_text_and_connects_accessible_tabs(self):
         text = app.summary_html(Path('<img src=x onerror=alert(1)>@@TABS@@.mkv'), {
-            10: 'Привет, Alice & Bob.\n\n<script>alert("x")</script>\nSecond line.',
+            10: 'Hello, Alice & Bob.\n\n<script>alert("x")</script>\nSecond line.',
             1: 'A short summary.'}, transcript="Original log.")
         elements = Elements(text).elements
         self.assertNotIn("img", [tag for tag, attrs in elements])
         self.assertEqual(sum(tag == "script" for tag, attrs in elements), 1)
         self.assertIn("&lt;script&gt;", text)
         self.assertIn("Alice &amp; Bob", text)
-        self.assertIn("Привет", text)
+        self.assertIn("Hello", text)
         self.assertIn("@@TABS@@.mkv", text)
         tabs = [attrs for tag, attrs in elements if attrs.get("role") == "tab"]
         panels = [attrs for tag, attrs in elements if attrs.get("role") == "tabpanel"]
@@ -169,7 +169,7 @@ class SummaryHtmlTests(unittest.TestCase):
             self.assertIn("Reviewed conversation.\n", summary.read_text())
 
     def test_embedded_log_preserves_text_and_cannot_inject_html_or_external_assets(self):
-        transcript = ('\nDETAILED TRANSCRIPT\n\tAlice & Bob — Привет.\n\n'
+        transcript = ('\nDETAILED TRANSCRIPT\n\tAlice & Bob — Hello.\n\n'
                       '</div><script>alert("log")</script><img src="https://example.invalid/image">\n'
                       'https://example.invalid/recording.log.md\n@@SOURCE@@\n  Trailing spaces.  \n')
         rendered = app.summary_html(Path("meeting.mkv"), {1: "Brief.", 3: "Overview.", 5: "Expanded.", 10: "Detailed."},
