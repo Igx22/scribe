@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 import wave
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -38,7 +38,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.15.0"
+VERSION = "2.16.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -1218,7 +1218,7 @@ def report_header(source, transcript, metadata):
             "duration": duration, "date": date, "date_note": date_note}
 
 
-def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=()):
+def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None):
     """Render model text as escaped data in a self-contained, offline report."""
     selection = tabs if tabs is not None else [*summaries, "transcript"]
     buttons, panels = [], []
@@ -1284,12 +1284,18 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
         contents += " · Full transcript included." if "transcript" in selection else "."
     if included_sources:
         contents += f" {len(included_sources)} source views included."
+    generated_at = generated_at if generated_at is not None else datetime.now(timezone.utc)
+    if generated_at.utcoffset() is None:
+        raise AppError("Report generation time must include a timezone.")
+    generated_at = generated_at.astimezone(timezone.utc).replace(microsecond=0)
     values = {"TITLE": html.escape(metadata["topic"]), "SOURCE": html.escape(source.name),
               "TOPIC": html.escape(metadata["topic"]), "PARTICIPANTS": participants,
               "DURATION": html.escape(metadata["duration"]), "DATE": html.escape(metadata["date"]),
               "DATE_NOTE": " · " + html.escape(metadata["date_note"]) if metadata.get("date_note") else "",
-              "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": "\n".join(panels)}
-    return re.sub(r"@@(TITLE|SOURCE|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS)@@",
+              "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": "\n".join(panels),
+              "GENERATED_ISO": generated_at.isoformat(),
+              "GENERATED_FULL": generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")}
+    return re.sub(r"@@(TITLE|SOURCE|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS|GENERATED_ISO|GENERATED_FULL)@@",
                   lambda match: values[match[1]], template)
 
 

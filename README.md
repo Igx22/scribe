@@ -436,6 +436,18 @@ replaced by `--report-tabs` and `SCRIBE_REPORT_TABS`; migrate existing commands 
 The HTML report has inline CSS and JavaScript, needs no server or external assets,
 and opens directly in a browser. Tabs support clicks and Left/Right/Home/End keys;
 printing includes the selected tab. Without JavaScript, the first tab is readable.
+
+The bottom-right **Generated** timestamp records when this HTML was rendered,
+separately from the meeting's Date. In the viewer's local timezone, a report
+generated today shows only 24-hour time (`17:34`); otherwise it shows the day,
+month, year and time (`07 Nov 2026, 17:34`). Hover for the full local date/time
+and timezone. Formatting is recalculated on opening and every minute, so an open
+report gains its date after midnight. The stored generation instant never changes
+when opening, copying or switching tabs. A successful report regeneration records
+a new instant; skipped completed reports retain their original one. Without
+JavaScript, the full UTC date/time remains visible. No network request is needed.
+Existing reports gain the stamp when regenerated with `--summary-only`.
+
 The **Dark Mode On/Off** switch beside Scribe changes the entire report, including
 its header, tabs, and transcript. It supports mouse, keyboard, and screen readers.
 On first opening, the report follows the system color preference; an explicit

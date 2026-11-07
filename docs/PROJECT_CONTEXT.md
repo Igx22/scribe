@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.15.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.16.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -360,6 +360,16 @@ share a preference across different paths because file-origin storage behavior i
 browser-dependent. Storage errors must not break switching or tab navigation.
 There is no server, external asset, or transcript data in preference storage.
 
+SCR-066 adds a bottom-right Generated stamp, separate from the recording's Date.
+Rendering embeds an aware UTC instant in a time element plus a full UTC fallback.
+The browser displays HH:MM for its current local calendar day, otherwise a full
+day/month/year/time, and exposes the local timezone in a tooltip. A minute timer
+updates only the presentation across midnight; opening/copying a report does not
+alter its stored generation instant. Successful regeneration stamps the new HTML;
+completion skipping preserves old timestamps. No model, network or filesystem
+creation/mtime inference is involved. Without JavaScript the full UTC text stays
+readable. Printing retains the existing hidden-footer behavior.
+
 ### OBS integration and folder monitoring (SCR-046, SCR-049)
 
 The user selected `--monitor-dir` as a separate foreground mode, independent of
@@ -519,6 +529,16 @@ This verifies one short example, not independent metadata or summary accuracy.
 
 ## Limitations and follow-up
 
+- Version 2.16.0 passed 163 mocked tests and launcher syntax/version checks.
+  Timestamp checks execute the actual inline script with fixed clocks/timezones:
+  time-only today, full date/year on older days, midnight while open, UTC/local
+  year boundaries, and daylight-saving changes. The stored UTC instant, full
+  no-JavaScript fallback and separate recording Date are checked independently.
+  A real four-summary/source-view preview reused saved text without new model,
+  API, fusion or header-model calls; all 59 current baseline files retained
+  hashes/mtimes. HTML and inline theme/navigation checks passed; browser visual
+  QA remains unavailable under its local-file policy. Evidence:
+  [preview](../data/comparison/generated-time-preview/verification.json).
 - Version 2.15.0 passed 156 mocked tests covering three recognizers without fusion,
   one diarization even with force, independent word-cache resume and model-identity
   invalidation, cloud/local failure recovery, summary-only snapshots and historical

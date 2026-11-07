@@ -23,6 +23,21 @@
       const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
       root.dataset.theme = valid(saved) ? saved : (systemDark ? 'dark' : 'light');
       document.addEventListener('DOMContentLoaded', () => {
+        const stamp = document.getElementById('generated-at');
+        const generated = stamp && new Date(stamp.getAttribute('datetime'));
+        if (generated && Number.isFinite(generated.getTime())) {
+          const timeOptions = {hour: '2-digit', minute: '2-digit', hour12: false};
+          const fullOptions = {...timeOptions, day: '2-digit', month: 'short', year: 'numeric'};
+          function updateGenerationTime() {
+            const now = new Date();
+            const today = generated.getFullYear() === now.getFullYear() &&
+                          generated.getMonth() === now.getMonth() && generated.getDate() === now.getDate();
+            stamp.textContent = new Intl.DateTimeFormat('en-GB', today ? timeOptions : fullOptions).format(generated);
+            stamp.setAttribute('title', new Intl.DateTimeFormat('en-GB', {...fullOptions, timeZoneName: 'short'}).format(generated));
+          }
+          updateGenerationTime();
+          window.setInterval(updateGenerationTime, 60000);
+        }
         const toggle = document.getElementById('theme-toggle');
         const state = document.getElementById('theme-state');
         function apply(theme) {
@@ -131,6 +146,7 @@
     .prose p:last-child { margin-bottom: 0; }
     .transcript-content { margin-top: 24px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.85; }
     footer { display: flex; justify-content: space-between; gap: 16px; padding: 18px 3px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .generation-stamp { white-space: nowrap; }
     @media (max-width: 640px) {
       .page { margin: 20px auto; padding: 0 12px; }
       .toolbar { margin: 0 8px 16px; gap: 12px; }
@@ -183,7 +199,7 @@
       </nav>
       @@PANELS@@
     </article>
-    <footer><span>Generated from the saved conversation transcript.</span><span>Automatic summary · Review important details against the source.</span></footer>
+    <footer><span>Automatic summary · Review important details against the source.</span><span class="generation-stamp">Generated <time id="generated-at" datetime="@@GENERATED_ISO@@" title="@@GENERATED_FULL@@">@@GENERATED_FULL@@</time></span></footer>
     <noscript><p>Enable JavaScript to switch tabs. The first selected tab is shown above.</p></noscript>
   </main>
 

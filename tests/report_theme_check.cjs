@@ -7,9 +7,11 @@ const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const key = 'scribe-report-theme';
 
 function open({storage = new Map(), systemDark = false, protocol = 'file:', cookie = '',
-               blockRead = false, blockWrite = false, blockCookie = false} = {}) {
+               blockRead = false, blockWrite = false, blockCookie = false, now = Date.now()} = {}) {
   let ready, focused;
+  let currentTime = now;
   const cookieWrites = [];
+  const intervals = [];
   function element(tag) {
     const attrs = Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
     return {id: attrs.id, attrs, hidden: /\shidden\b/.test(tag), tabIndex: Number(attrs.tabindex), listeners: {},
@@ -18,12 +20,14 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   }
   const toggle = element(html.match(/<button[^>]*id="theme-toggle"[^>]*>/)[0]);
   const state = {textContent: 'Off'};
+  const stampTag = html.match(/<time[^>]*id="generated-at"[^>]*>/);
+  const stamp = stampTag ? element(stampTag[0]) : null;
   const root = {dataset: {}};
   const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(m => element(m[0]));
   const panels = [...html.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map(m => element(m[0]));
   const document = {
     documentElement: root,
-    getElementById(id) { return id === 'theme-toggle' ? toggle : state; },
+    getElementById(id) { return id === 'theme-toggle' ? toggle : id === 'theme-state' ? state : id === 'generated-at' ? stamp : null; },
     addEventListener(type, handler) { assert.equal(type, 'DOMContentLoaded'); ready = handler; },
     querySelectorAll(selector) { return selector === '[role="tab"]' ? tabs : panels; },
     get cookie() { if (blockCookie) throw Error('Cookie access denied'); return cookie; },
@@ -32,7 +36,13 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       cookieWrites.push(value); cookie = value.split(';')[0];
     }
   };
-  const context = {document, location: {protocol}, window: {matchMedia: () => ({matches: systemDark})}};
+  class ReportDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [currentTime])); }
+  }
+  const context = {document, Date: ReportDate, location: {protocol}, window: {
+    matchMedia: () => ({matches: systemDark}),
+    setInterval(callback, delay) { intervals.push({callback, delay}); }
+  }};
   Object.defineProperty(context, 'localStorage', {get() {
     if (blockRead) throw Error('SecurityError');
     return {getItem: name => storage.get(name) ?? null, setItem(name, value) {
@@ -71,7 +81,8 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       assert.ok(prevented); active(expected); assert.equal(focused, tabs[expected]);
     }
   }
-  return {theme, beforeReady, toggle, storage, cookieWrites, checkNavigation};
+  return {theme, beforeReady, toggle, storage, cookieWrites, checkNavigation, stamp, intervals,
+    advance(value) { currentTime = value; intervals.forEach(timer => timer.callback()); }};
 }
 
 const local = open();
@@ -98,4 +109,24 @@ assert.equal(web.cookieWrites[0], key + '=dark; Max-Age=31536000; Path=/; SameSi
 // Cookie fallback covers other reports on the same website when localStorage fails.
 open({protocol: 'https:', blockRead: true, cookie: 'other=1; ' + web.cookieWrites[0]}).theme('dark');
 open({protocol: 'https:', blockRead: true, cookie: key + '=invalid', systemDark: true}).theme('dark');
+
+// Optional fixed-clock scenarios exercise the actual report formatter in the
+// process's configured timezone, including midnight without reopening the file.
+if (process.argv[2]) {
+  for (const scenario of JSON.parse(process.argv[2])) {
+    const report = open({now: scenario.now});
+    assert.ok(report.stamp, 'Generated timestamp must be embedded in the HTML');
+    assert.equal(report.stamp.textContent, scenario.expected);
+    assert.equal(report.intervals.length, 1);
+    assert.equal(report.intervals[0].delay, 60000);
+    if (scenario.titleIncludes) assert.ok(report.stamp.attrs.title.includes(scenario.titleIncludes));
+    if (scenario.advance) {
+      report.advance(scenario.advance);
+      assert.equal(report.stamp.textContent, scenario.afterAdvance);
+    }
+    // Formatting must never change the embedded generation instant.
+    assert.equal(report.stamp.attrs.datetime, html.match(/<time[^>]*datetime="([^"]+)"/)[1]);
+    report.checkNavigation();
+  }
+}
 local.checkNavigation();

@@ -115,3 +115,4 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-063 | Default monitor output to its input folder and allow OS video-folder presets | Done | 2026-11-07 | 2026-11-07 |
 | SCR-064 | Run GPT-Transcribe, WhisperX and MLX independently with transcription-model all | Done | 2026-11-07 | 2026-11-07 |
 | SCR-065 | Verify force regenerates and replaces existing summary reports | Done | 2026-11-07 | 2026-11-07 |
+| SCR-066 | Display report generation time with today-aware date formatting | Done | 2026-11-07 | 2026-11-07 |
