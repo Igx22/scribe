@@ -61,10 +61,11 @@ class SetupTests(unittest.TestCase):
             shutil.copy2(app.APP_DIR / ".gitignore", root / ".gitignore")
             subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
             for name in (".env", "data/.venv/lib/dependency.py", "data/models/weights.safetensors",
-                         "data/.cache/stage.json", "data/recording.mkv", "data/comparison/usage.json"):
+                         "data/.cache/stage.json", "data/recording.mkv", "data/comparison/usage.json",
+                         "exports/meeting.summary.html"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 0, name)
             for name in (".env.example", "requirements.txt", "run.sh", "src/scribe.py",
-                         "src/resources/models-manifest.json", "tests/test_setup.py"):
+                         "src/resources/models-manifest.json", "src/resources/summary.html", "tests/test_setup.py"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 1, name)
 
 

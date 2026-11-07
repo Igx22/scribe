@@ -27,7 +27,7 @@ class ModeTests(unittest.TestCase):
         source.write_bytes(b"fixture")
         args = app.build_parser().parse_args([
             "-f", str(source), "--cache-dir", str(root / "data/.cache"),
-            "--output-dir", str(root / "data"), *options])
+            "--output-dir", str(root / "data"), "--summary-detail", "1", *options])
         local = {"duration": 2, "words": [], "voices": [], "turns": [
             {"start": 0, "end": 2, "speaker": 1, "text": "Recognized locally."}]}
         chunks = [{"index": 0, "start": 0, "end": 2, "text": "Recognized via API."}]

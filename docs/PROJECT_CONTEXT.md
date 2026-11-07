@@ -1,6 +1,6 @@
 # Scribe: durable project context
 
-Reconciled with version 2.3.0 on 2026-11-07. Historical benchmark results below
+Reconciled with version 2.4.0 on 2026-11-07. Historical benchmark results below
 refer to version 2.2.0 at commit `034b1a9616f6c152995e6950442e9670c87be08f`.
 This document preserves rationale and important evidence from the original
 development chat. [README](../README.md) owns setup, options, paths, output
@@ -87,6 +87,29 @@ still has a legacy-runtime compatibility path; it is not the new-install design.
 Docker was considered and explicitly deferred. MIT covers Scribe's own source;
 third-party assets keep their own licenses.
 
+### Multiple reading depths share one report
+
+Multiple requested summary levels produce one standalone HTML report with tabs;
+a single distinct level retains the plain-text Markdown output. The default
+selection is now 1, 3, 5, and 10, replacing the earlier level-1 default.
+`SCRIBE_SUMMARY_DETAIL` in `.env` configures that selection; an explicit CLI value
+takes precedence, and exported environment values retain precedence over `.env`.
+The built-in fallback matches `.env.example`, so absent configuration still yields
+the four-tab report. Each level uses
+the same saved final log independently, rather than using another summary as its
+source. This preserves the existing detail guidance and language/identity rules,
+at the cost of one summarization pipeline per level. The inline template lives in
+`src/resources/summary.html`; model text and filenames are escaped before insertion.
+
+An existing log plus either summary format still counts as completed, regardless
+of a changed selection. Explicit summary-only generation is required to change a
+finished result. Multi-level requests checkpoint completed levels and publish only
+after all levels succeed; failed regeneration preserves the old report. Pending
+results are invalidated by changed inputs or settings. Forced transcript changes
+archive both summary formats to avoid leaving stale results beside a new log.
+After successful summary-only generation for an edited log, a known stale summary
+in the other format is also archived. Failed generation preserves existing reports.
+
 ## Important observed results
 
 These are historical measurements, not latency guarantees or current price quotes.
@@ -143,14 +166,35 @@ intermediate notes were repeated. Calls ran concurrently, one per level:
 
 Total estimate: $0.065640 from returned usage, not an invoice. Increased detail
 retained more technical nuance without expanding this short source to ten pages.
-Level 5 was a useful balance for this sample; the default remains level 1.
+Level 5 was a useful balance for this sample; the default at the time was level 1.
 The log SHA-256 was
 `dd08a710329d7aa5fb550cad56e44e387a10292a73581cfb796d8a83112428ad`.
 The clean-install and detail-comparison reports/usage records were saved as local
 chat artifacts outside this repository and are not fresh-checkout prerequisites.
 
+### First multi-level HTML run
+
+Version 2.4.0 passed 67 mocked unit tests, plus offline JavaScript checks for tab
+selection, keyboard navigation, wrapping, and focus. A user-authorized live run
+generated levels 1, 5, and 10 with `gpt-6.1-sol:medium`, using the same saved short
+log for each level. It reused the final transcript without audio, diarization,
+fusion, or intermediate notes. All three requests completed; returned usage totaled
+8,505 input and 2,065 output tokens (76 reasoning tokens), in 38.0 seconds. No
+fusion validation was run because fusion was not repeated. This is a functionality
+check on one short source, not an independent summary-accuracy benchmark.
+
+The HTML, copied source log, returned usage, and preservation checks are local-only
+under `data/comparison/summary-tabs-preview/`. The HTML contains all three populated
+tabs and no external assets. Structural and offline interaction checks passed;
+browser visual verification was unavailable because the browser tool rejected
+local-file navigation. The actual result was selected in Finder for user review.
+
 ## Limitations and follow-up
 
+- The configurable default selection passed 71 mocked unit tests, including
+  end-to-end HTML generation with no detail flag, `.env` lists, and single-level
+  CLI overrides. This configuration change required no new paid API requests;
+  the live HTML evidence above remains the earlier three-level run.
 - Version 2.3.0 name recognition passed 56 mocked unit tests (including the prior
   44 tests). Its live model behavior has not yet been evaluated on an independently
   reviewed recording; the historical live benchmarks above predate this feature.

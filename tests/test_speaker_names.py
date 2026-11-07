@@ -197,7 +197,7 @@ class SpeakerNameTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "meeting.mkv"; source.write_bytes(b"input")
             args = app.build_parser().parse_args(["--output-dir", str(root / "data"),
-                                                 "--cache-dir", str(root / "cache")])
+                                                 "--cache-dir", str(root / "cache"), "--summary-detail", "1"])
             turns = [self.turn(0, 1, "I'm Alice."), self.turn(2, 2, "I'm Bob.")]
             local = {"duration": 4, "turns": turns}
             chunks = [{"index": 0, "start": 0, "end": 4, "text": "I'm Alice. I'm Bob."}]

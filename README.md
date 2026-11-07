@@ -107,15 +107,18 @@ Missing inputs, empty input directories, and output-name collisions are reported
 For `meeting.mkv`, the default outputs are:
 
 - `./data/meeting.log.md`: detailed conversation log.
-- `./data/meeting.summary.md`: summary at the selected detail level, when enabled.
+- `./data/meeting.summary.md`: summary when one detail level is selected.
+- `./data/meeting.summary.html`: one standalone report with tabs when several
+  detail levels are selected (by default, `1,3,5,10`). Only the selected summary
+  format is written.
 
-Both contain plain text despite the `.md` extension. There are no Markdown
+The `.md` files contain plain text despite their extension. There are no Markdown
 headings, tables, emphasis, or code fences. Speaker labels and approximate times
 are available in local and combined modes. Combined mode can replace anonymous
 display labels with names supported by the conversation; see below. API-only logs
 have chunk time ranges and no invented A/B speaker labels.
 
-If **both files already exist**, ordinary processing skips the recording, even
+If **the log and either summary format already exist**, ordinary processing skips the recording, even
 if the model, prompt, source, or settings have changed. Existing results are not
 validated as a condition of this check. Skipping happens before model preparation,
 API-key validation, audio extraction, or API calls. File contents and modification
@@ -242,10 +245,24 @@ owners and deadlines only when explicitly present.
 
 ## Summary detail: 1–10
 
-`--summary-detail N` controls how much substantive information the summary retains.
-The default is `1`, preserving the earlier brief-summary style. This option is
-independent of the model's reasoning effort: higher detail requests more coverage,
-not a different reasoning setting.
+`--summary-detail N [N ...]` controls how much substantive information the summary retains.
+The default levels are `1,3,5,10`, producing an HTML report with four tabs when the
+option is omitted. Set `SCRIBE_SUMMARY_DETAIL` in `.env` to choose different
+defaults; an explicit `--summary-detail` overrides that value. Detail is independent
+of the model's reasoning effort: higher detail requests more coverage, not a
+different reasoning setting.
+
+Select one level for the existing plain-text `.summary.md`, or multiple levels
+for a single `.summary.html` with one tab per level. Both space-separated
+(`--summary-detail 1 5 10`) and comma-separated (`--summary-detail 1,5,10`) lists
+work. Levels must be integers from 1 to 10. Duplicate levels are removed, and tabs
+follow the requested order. A list containing only one distinct level writes `.md`.
+
+The HTML report has inline CSS and JavaScript, needs no server or external assets,
+and opens directly in a browser. Tabs support clicks and Left/Right/Home/End keys;
+printing includes the selected tab. Without JavaScript, the first tab is readable.
+Model text and filenames are escaped as text, never rendered as HTML instructions.
+The interface is in English; summaries retain their conversation-driven language.
 
 | Level | Approximate length for long, information-dense discussions | Word guide |
 | --- | --- | --- |
@@ -267,19 +284,41 @@ at every level. Higher levels retain more reasoning, alternatives, dependencies,
 relevant examples, and technical nuance; they do not fill pages with quotations.
 
 ```bash
+# Use configured levels (1, 3, 5, 10 by default) in a tabbed HTML report
+./run.sh
+
 # Select the detail for unfinished recordings
 ./run.sh --summary-detail 5
 
 # Regenerate only an existing summary, preserving the log and recognition caches
 ./run.sh -f "recording.mkv" --summary-only --summary-detail 10
 
+# Generate three independent summaries in one HTML file from an existing log
+./run.sh -f "recording.mkv" --summary-only --summary-detail 1 5 10
+
+# Equivalent comma-separated syntax
+./run.sh -f "recording.mkv" --summary-only --summary-detail 1,5,10
+
 # Inspect the actual rendered prompt without making an API call
 ./run.sh --show-prompt --summary-detail 5
 ```
 
-Changing detail does not override completed-pair skipping. Use `--summary-only`
+Changing detail or selecting HTML does not override completed-pair skipping. Use `--summary-only`
 to change a finished summary without repeating transcription or fusion. Offline
 mode and `--summarize-model none` still disable summaries at every detail level.
+
+Each level is summarized independently from the same final log, rather than
+expanding or shortening another tab. Multiple levels therefore require additional
+paid text requests, including separate notes for long recordings. If a later level
+fails, completed levels are checkpointed; retry the same command to reuse them.
+The HTML is published atomically only after every requested level succeeds, so a
+failed regeneration preserves the previous report. Changes to the transcript,
+levels/order, model/effort, prompts, or HTML template invalidate that pending work;
+`--force` also bypasses it. After successful publication, an explicit
+`--summary-only` run regenerates every requested level. When the log is unchanged,
+creating one format leaves an existing summary in the other format in place.
+After successful summary-only generation for an edited log, a known summary in
+the other format is archived if it refers to the old transcript.
 
 One shortening request is made if the answer exceeds the selected word ceiling;
 there is no fixed one-page clamp at higher levels. This remains a model-guided
@@ -343,12 +382,14 @@ scribe/
     scribe.py
     resources/
       models-manifest.json
+      summary.html
   tests/
     __init__.py
     test_scribe.py
     test_backends.py
     test_modes.py
     test_summary_detail.py
+    test_summary_html.py
     test_setup.py
     test_speaker_names.py
   docs/
@@ -357,6 +398,7 @@ scribe/
     recording.mkv
     recording.log.md
     recording.summary.md
+    recording.summary.html
     models/
     .venv/
     .cache/
@@ -386,7 +428,8 @@ can use that only for compatibility when no new environment exists. `--setup`
 always creates the new environment from a separately installed Python. Once the
 new setup succeeds, `data/runtime` is no longer required and need not be retained.
 
-`src/resources/models-manifest.json` is static application metadata: model-relative
+`src/resources/summary.html` is the standalone report template; keep it with the
+source when copying the application. `src/resources/models-manifest.json` is static application metadata: model-relative
 paths, download URLs, file sizes, SHA-256 checksums, and archive extraction details.
 It is required for model preparation and verification, including offline checks;
 the actual downloaded model files belong in `data/models`. Keep this resource
@@ -443,10 +486,17 @@ variables take priority over `.env`; the file is parsed as data and never execut
 ```text
 OPENAI_API_KEY=your-api-key
 SCRIBE_SUMMARIZE_MODEL=gpt-6.1-sol:medium
+SCRIBE_SUMMARY_DETAIL=1,3,5,10
 ```
 
-`SCRIBE_SUMMARIZE_MODEL` supplies the default for `--summarize-model`; the explicit
-CLI option wins. The old `OPENAI_MODEL` and `OPENAI_REASONING` settings are no longer
+`SCRIBE_SUMMARIZE_MODEL` supplies the default for `--summarize-model`.
+`SCRIBE_SUMMARY_DETAIL` supplies the default for `--summary-detail`; it accepts
+commas or spaces, for example `SCRIBE_SUMMARY_DETAIL="1, 5, 10"`. A single value
+such as `SCRIBE_SUMMARY_DETAIL=5` selects Markdown output. `.env.example` includes
+`1,3,5,10`, and the application uses those same levels when no value is configured.
+The precedence is explicit CLI option, process environment, `.env`, then built-in
+fallback. Invalid configured levels produce an error unless a valid CLI value
+overrides them. The old `OPENAI_MODEL` and `OPENAI_REASONING` settings are no longer
 used. No API key is required to skip completed pairs or run offline.
 API requests consume the account's API credits/billing; do not infer available
 API balance from a ChatGPT subscription. See the account's API Billing page.
@@ -459,7 +509,7 @@ API balance from a ChatGPT subscription. See the account's API Billing page.
 | `-f FILE`, `--file FILE` | Scan `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. |
 | `--transcription-model gpt-transcribe\|whisper-local\|all` | `all` | API only, local only, or both plus reconciliation. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Summary model/effort; also controls all-mode fusion. |
-| `--summary-detail 1..10` | `1` | How much substantive detail to retain; guides range from half a page to up to ten pages, subject to the source content. |
+| `--summary-detail N [N ...]` | `SCRIBE_SUMMARY_DETAIL`, or `1,3,5,10` | Levels 1–10, separated by spaces or commas. CLI overrides configuration. One level writes `.md`; multiple levels write tabbed `.html`. Length remains subject to the source content. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
 | `--output-dir DIR` | Working directory's `data` | Destination for logs and summaries. |
 | `--speakers N` | `2` | Positive known speaker count for local diarization. |
@@ -523,7 +573,7 @@ have a different cache identity. Unknown existing partial outputs are protected;
 use `--summary-only` for an edited log or deliberately choose `--force`.
 
 Previous generated logs are backed up in the output's cache before replacement.
-Previous summaries are backed up before forced replacement or removal after a log
+Previous summaries in both formats are backed up before forced transcript replacement or removal after a log
 change, so a failed summary call cannot leave an old summary beside a changed log.
 Completed pairs are never touched by an ordinary run, even if their state is missing.
 
@@ -582,7 +632,11 @@ The checks use mocks and local fixtures, without paid API calls. They cover inpu
 paths, voice labels, uncertainty spans, all modes, offline isolation, completed-pair
 skipping, API failures, ownership, retries, cache reuse, prompt chunk coverage,
 model verification, detail propagation, output budgets, and detail-aware long-input
-notes. Name checks cover introductions, cross-chunk address/response evidence,
+notes. Configuration checks cover the four default tabs, `.env` lists, environment
+and CLI precedence, single-level Markdown overrides, and invalid defaults. HTML
+checks cover multi-level parsing, escaping, tab associations, completed
+output protection in either format, interrupted-level reuse, invalidation, and
+preservation of existing results on failure. Name checks cover introductions, cross-chunk address/response evidence,
 conflicts and corrections, invalid citations, shared names, checkpoint reuse, and
 two-/three-person address evidence, human-name preference over nicknames, and names
 reaching the final log and summary. Setup checks cover a ready virtual

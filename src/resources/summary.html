@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>@@TITLE@@ — Conversation summary</title>
+  <style>
+    :root { color-scheme: light; --ink: #243044; --muted: #667085; --line: #e4e7ec; --accent: #334d73; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f5f7; color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+    .page { max-width: 1040px; margin: 48px auto 32px; padding: 0 28px; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; color: #475467; font-size: 13px; font-weight: 650; letter-spacing: .03em; }
+    .mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid #d0d5dd; border-radius: 7px; background: #fff; color: var(--accent); font-family: Georgia, serif; font-size: 20px; }
+    .report { background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 4px 20px #18223004; }
+    header { padding: 40px 48px 30px; }
+    .eyebrow { margin: 0 0 13px; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 0; color: #182230; font-size: clamp(24px, 4vw, 34px); font-weight: 600; line-height: 1.25; letter-spacing: -.035em; overflow-wrap: anywhere; }
+    .source { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+    .source strong { color: #475467; font-weight: 500; }
+    .tabs-wrap { position: sticky; top: 0; z-index: 1; padding: 0 48px; background: #fff; border-top: 1px solid #f0f1f3; border-bottom: 1px solid var(--line); }
+    [role="tablist"] { display: flex; gap: 28px; overflow-x: auto; }
+    [role="tab"] { flex: 0 0 auto; min-height: 76px; padding: 14px 2px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
+    [role="tab"] span { display: block; margin-top: 4px; font-size: 11px; font-weight: 400; }
+    [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+    [role="tab"]:hover { color: var(--ink); }
+    :focus-visible { outline: 2px solid #5276a5; outline-offset: 4px; border-radius: 3px; }
+    [role="tab"]:focus-visible { outline-offset: -5px; }
+    [role="tabpanel"] { padding: 32px 48px 48px; }
+    [hidden] { display: none !important; }
+    .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 25px; padding-bottom: 18px; border-bottom: 1px solid #f0f1f3; }
+    h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+    .panel-heading > span { flex-shrink: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .prose { max-width: 76ch; font-size: 16px; line-height: 1.8; overflow-wrap: anywhere; }
+    .prose p { margin: 0 0 1.2em; white-space: pre-wrap; }
+    .prose p:last-child { margin-bottom: 0; }
+    footer { display: flex; justify-content: space-between; gap: 16px; padding: 18px 3px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    @media (max-width: 640px) {
+      .page { margin: 20px auto; padding: 0 12px; }
+      .brand { margin: 0 8px 16px; }
+      header { padding: 28px 24px 24px; }
+      .tabs-wrap { padding: 0 24px; }
+      [role="tablist"] { gap: 24px; }
+      [role="tabpanel"] { padding: 26px 24px 32px; }
+      .panel-heading { flex-direction: column; gap: 8px; }
+      .prose { font-size: 15px; line-height: 1.75; }
+      footer { padding: 16px 8px; flex-direction: column; gap: 4px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; margin: 0; padding: 0; }
+      .brand, .tabs-wrap, footer { display: none; }
+      .report { border: 0; box-shadow: none; }
+      header { padding: 0 0 20px; }
+      [role="tabpanel"] { padding: 0; }
+      .prose { max-width: none; font-size: 11pt; }
+      .panel-heading { break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="brand"><span class="mark" aria-hidden="true">s</span> Scribe</div>
+    <article class="report">
+      <header>
+        <p class="eyebrow">Conversation summary</p>
+        <h1>@@TITLE@@</h1>
+        <p class="source"><strong>Source</strong> · @@SOURCE@@<br>@@COUNT@@ levels of detail · Select a tab to change the reading depth.</p>
+      </header>
+      <nav class="tabs-wrap" aria-label="Summary navigation">
+        <div role="tablist" aria-label="Summary detail level">@@TABS@@</div>
+      </nav>
+      @@PANELS@@
+    </article>
+    <footer><span>Generated from the saved conversation transcript.</span><span>Automatic summary · Review important details against the source.</span></footer>
+    <noscript><p>Enable JavaScript to switch detail levels. The first summary is shown above.</p></noscript>
+  </main>
+  <script>
+    (() => {
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+      function select(tab) {
+        tabs.forEach(item => {
+          const active = item === tab;
+          item.setAttribute('aria-selected', String(active));
+          item.tabIndex = active ? 0 : -1;
+        });
+        panels.forEach(panel => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
+      }
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => select(tab));
+        tab.addEventListener('keydown', event => {
+          let next;
+          if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          select(tabs[next]);
+          tabs[next].focus();
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

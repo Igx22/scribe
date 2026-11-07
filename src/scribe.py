@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import gc
 import hashlib
+import html
 import json
 import math
 import os
@@ -33,11 +34,12 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
 DEFAULT_SUMMARY_DETAIL = 1
+DEFAULT_SUMMARY_DETAILS = "1,3,5,10"
 API_URL = "https://api.openai.com/v1/responses"
 AUDIO_API_URL = "https://api.openai.com/v1/audio/transcriptions"
 DEFAULT_TRANSCRIPTION_MODEL = "all"
@@ -682,6 +684,55 @@ def summary_limits(detail):
     return (200 if detail == 1 else 240 * detail), 450 * detail
 
 
+def summary_levels(detail):
+    """Keep the single-level API while accepting a normalized CLI list."""
+    return [detail] if isinstance(detail, int) else list(detail)
+
+
+def parse_summary_details(value):
+    try:
+        parts = value.split(",")
+        if any(not part.strip() for part in parts):
+            raise ValueError
+        levels = list(dict.fromkeys(int(token) for part in parts for token in part.split()))
+    except ValueError:
+        raise argparse.ArgumentTypeError("Use detail levels from 1 to 10, e.g. 1 5 10 or 1,5,10.") from None
+    if any(not 1 <= level <= 10 for level in levels):
+        raise argparse.ArgumentTypeError("Summary detail levels must be from 1 to 10.")
+    return levels[0] if len(levels) == 1 else levels
+
+
+class SummaryDetailAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        levels = list(dict.fromkeys(level for group in values for level in summary_levels(group)))
+        setattr(namespace, self.dest, levels[0] if len(levels) == 1 else levels)
+
+
+def summary_html(source, summaries):
+    """Render model text as escaped data in a self-contained, offline report."""
+    tabs, panels = [], []
+    for index, (detail, answer) in enumerate(summaries.items()):
+        active = index == 0
+        description = {1: "Brief", 5: "Expanded", 10: "Detailed"}.get(detail, "Summary")
+        tabs.append(f'<button type="button" role="tab" id="tab-{detail}" '
+                    f'aria-controls="panel-{detail}" aria-selected="{str(active).lower()}" '
+                    f'tabindex="{0 if active else -1}">Detail {detail}'
+                    f'<span>{description}</span></button>')
+        paragraphs = "\n".join(f'<p>{html.escape(part.strip())}</p>'
+                               for part in re.split(r"\n\s*\n", answer.strip()) if part.strip())
+        heading = {1: "Brief summary", 5: "Expanded summary", 10: "Detailed summary"}.get(detail, "Conversation summary")
+        panels.append(f'<section role="tabpanel" id="panel-{detail}" aria-labelledby="tab-{detail}" '
+                      f'tabindex="0"{ "" if active else " hidden"}>'
+                      f'<div class="panel-heading"><h2>{heading}</h2>'
+                      f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span></div>'
+                      f'<div class="prose" dir="auto">{paragraphs}</div></section>')
+    template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
+    # Substitute once: replacement data must not be interpreted as template syntax.
+    values = {"TITLE": html.escape(source.stem), "SOURCE": html.escape(source.name),
+              "COUNT": str(len(summaries)), "TABS": "\n".join(tabs), "PANELS": "\n".join(panels)}
+    return re.sub(r"@@(TITLE|SOURCE|COUNT|TABS|PANELS)@@", lambda match: values[match[1]], template)
+
+
 def summary_prompt(detail):
     minimum, maximum = summary_limits(detail)
     return SUMMARIZATION_PROMPT.format(summary_detail=detail,
@@ -1065,9 +1116,24 @@ def collect_files(file_args, cwd):
     return unique
 
 
-def output_paths(source, output_dir=None):
+def output_paths(source, output_dir=None, detail=DEFAULT_SUMMARY_DETAIL):
     directory = output_dir if output_dir is not None else Path.cwd() / "data"
-    return directory / (source.stem + ".log.md"), directory / (source.stem + ".summary.md")
+    extension = ".html" if len(summary_levels(detail)) > 1 else ".md"
+    return directory / (source.stem + ".log.md"), directory / (source.stem + ".summary" + extension)
+
+
+def summary_paths(source, output_dir):
+    """Both formats share one transcript and ownership lock."""
+    markdown = output_paths(source, output_dir)[1]
+    return [markdown, markdown.with_suffix(".html")]
+
+
+def archive_summaries(paths, state_path):
+    for path in paths:
+        if path.is_file():
+            atomic_write(state_path.parent / f"previous-{time.time_ns()}.summary{path.suffix}",
+                         path.read_text(encoding="utf-8"))
+            path.unlink()
 
 
 def configure_mode(args):
@@ -1084,8 +1150,8 @@ def configure_mode(args):
 def completed_pair(source, args):
     if args.force or args.summary_only:
         return False
-    log, summary = output_paths(source, args.output_dir)
-    return log.is_file() and summary.is_file()
+    log, _ = output_paths(source, args.output_dir)
+    return log.is_file() and any(path.is_file() for path in summary_paths(source, args.output_dir))
 
 
 def gpt_transcript_text(source, chunks):
@@ -1103,7 +1169,7 @@ def gpt_transcript_text(source, chunks):
 def process_file(source, args, key):
     configure_mode(args)
     if completed_pair(source, args):
-        say(f"  Skipping {source.name}: both .log.md and .summary.md already exist.")
+        say(f"  Skipping {source.name}: the log and a summary (.md or .html) already exist.")
         return
     import fcntl
     log_path, _ = output_paths(source, args.output_dir)
@@ -1122,7 +1188,8 @@ def process_file(source, args, key):
 
 
 def _process_file(source, args, key):
-    log_path, summary_path = output_paths(source, args.output_dir)
+    log_path, summary_path = output_paths(source, args.output_dir, args.summary_detail)
+    all_summaries = summary_paths(source, args.output_dir)
     cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
     cache = args.cache_dir / cache_id
     cache.mkdir(parents=True, exist_ok=True)
@@ -1153,7 +1220,7 @@ def _process_file(source, args, key):
         say("  Reusing the saved final transcript.")
         transcript = log_path.read_text(encoding="utf-8")
     else:
-        if (log_path.exists() or summary_path.exists()) and not args.force and not owned:
+        if (log_path.exists() or any(path.exists() for path in all_summaries)) and not args.force and not owned:
             raise AppError("Output files already exist, but the source/settings changed or ownership state is missing. "
                            "Use --force to replace them, or --summary-only for the existing log.")
         if log_path.exists():
@@ -1201,10 +1268,7 @@ def _process_file(source, args, key):
         # Persist the selected usable source BEFORE either text API step.
         atomic_write(log_path, transcript)
         if args.force:
-            if summary_path.is_file():
-                atomic_write(state_path.parent / (f"previous-{time.time_ns()}.summary.md"),
-                             summary_path.read_text(encoding="utf-8"))
-                summary_path.unlink()
+            archive_summaries(all_summaries, state_path)
             state.pop("summary", None)
         state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
         state["pipeline_complete"] = args.transcription_model != "all"
@@ -1230,13 +1294,11 @@ def _process_file(source, args, key):
         say(f"  Saved: {log_path}")
     transcript_hash = hashlib.sha256(transcript.encode()).hexdigest()
     prior_summary_hash = state.get("summary", {}).get("transcript")
-    if (not args.summary_only and summary_path.is_file()
+    if (not args.summary_only and any(path.is_file() for path in all_summaries)
             and prior_summary_hash != transcript_hash):
         # Preserve the previous summary, but never present it beside a different log
         # after a failed API call or a transcription-only backend switch.
-        atomic_write(state_path.parent / (f"previous-{time.time_ns()}.summary.md"),
-                     summary_path.read_text(encoding="utf-8"))
-        summary_path.unlink()
+        archive_summaries(all_summaries, state_path)
         state.pop("summary", None)
         save_json(state_path, state)
     if args.summarize_model is None:
@@ -1247,14 +1309,41 @@ def _process_file(source, args, key):
                         "prompt": hashlib.sha256(SUMMARIZATION_PROMPT.encode()).hexdigest(),
                         "notes_prompt": hashlib.sha256(PART_NOTES_PROMPT.encode()).hexdigest(),
                         "transcript": transcript_hash}
+    levels = summary_levels(args.summary_detail)
+    if len(levels) > 1:
+        summary_settings["html_template"] = digest_file(RESOURCE_DIR / "summary.html")
     if not args.force and not args.summary_only and summary_path.is_file() and state.get("summary") == summary_settings:
         say("  The summary is already up to date; no API request is needed.")
         return
-    say(f"  Summarizing the final log with OpenAI: {model}, reasoning={effort}, detail={args.summary_detail}/10...")
-    answer = summarize(transcript, key, model, effort, detail=args.summary_detail)
-    atomic_write(summary_path, f"CONVERSATION SUMMARY\nSource file: {source.name}\n\n{answer}")
+    pending_path = state_path.parent / "summary-pending.json"
+    pending = read_json(pending_path, {}) if len(levels) > 1 and not args.force else {}
+    answers = pending.get("answers", {}) if pending.get("settings") == summary_settings else {}
+    if not isinstance(answers, dict):
+        answers = {}
+    summaries = {}
+    for level in levels:
+        answer = answers.get(str(level))
+        if isinstance(answer, str) and answer.strip():
+            say(f"  Reusing completed summary detail {level}/10 from the interrupted request.")
+        else:
+            say(f"  Summarizing the final log with OpenAI: {model}, reasoning={effort}, detail={level}/10...")
+            answer = summarize(transcript, key, model, effort, detail=level)
+            if not isinstance(answer, str) or not answer.strip():
+                raise AppError(f"Summary detail {level}/10 was empty; existing summaries are preserved.")
+            if len(levels) > 1:
+                answers[str(level)] = answer
+                save_json(pending_path, {"settings": summary_settings, "answers": answers})
+        summaries[level] = answer
+    content = (summary_html(source, summaries) if len(levels) > 1 else
+               f"CONVERSATION SUMMARY\nSource file: {source.name}\n\n{summaries[levels[0]]}")
+    if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:
+        # Once generation succeeds, do not leave the other format describing an old log.
+        archive_summaries([path for path in all_summaries if path != summary_path], state_path)
+    atomic_write(summary_path, content)
     state["summary"] = summary_settings
     save_json(state_path, state)
+    if len(levels) > 1:
+        pending_path.unlink(missing_ok=True)
     say(f"  Saved: {summary_path}")
 
 
@@ -1291,9 +1380,12 @@ def build_parser():
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
                    default=os.getenv("SCRIBE_SUMMARIZE_MODEL", f"{DEFAULT_MODEL}:{DEFAULT_EFFORT}"),
                    help="Summary model/effort; also selects all-mode fusion model. none disables summary; fusion then uses Sol medium")
-    p.add_argument("--summary-detail", type=int, choices=range(1, 11), metavar="1..10",
-                   default=DEFAULT_SUMMARY_DETAIL,
-                   help="Summary detail: 1 brief (half to one page), 5 about 3-5 pages, 10 up to 10 pages; short sources stay short")
+    p.add_argument("--summary-detail", type=parse_summary_details, action=SummaryDetailAction,
+                   nargs="+", metavar="1..10[,1..10]",
+                   default=os.getenv("SCRIBE_SUMMARY_DETAIL", DEFAULT_SUMMARY_DETAILS),
+                   help="Detail levels, e.g. 1 5 10 or 1,5,10; one writes .md, multiple write tabbed .html. "
+                        "Overrides SCRIBE_SUMMARY_DETAIL from .env. "
+                        "1 brief, 5 expanded, 10 detailed; short sources stay short")
     p.add_argument("--models-dir", type=Path, default=APP_DATA / "models", help="Local model directory")
     p.add_argument("--cache-dir", type=Path, default=APP_DATA / ".cache", help="Intermediate results and state directory")
     p.add_argument("--force", action="store_true", help="Process completed pairs again; bypass recognition/API caches")
@@ -1313,7 +1405,8 @@ def main(argv=None):
     load_env()
     args = build_parser().parse_args(argv)
     if args.show_prompt:
-        say(summary_prompt(args.summary_detail))
+        for level in summary_levels(args.summary_detail):
+            say(summary_prompt(level))
         return 0
     if args.speakers < 1:
         raise AppError("--speakers must be a positive integer.")
@@ -1332,14 +1425,14 @@ def main(argv=None):
     pending = []
     for source in files:
         if completed_pair(source, args):
-            say(f"Skipping {source.name}: both .log.md and .summary.md already exist.")
+            say(f"Skipping {source.name}: the log and a summary (.md or .html) already exist.")
         else:
             pending.append(source)
     skipped = len(files) - len(pending)
     if not pending:
         say(f"Done: 0; skipped: {skipped}; failed: 0.")
         return 0
-    destinations = [p for f in pending for p in output_paths(f, args.output_dir)]
+    destinations = [p for f in pending for p in output_paths(f, args.output_dir, args.summary_detail)]
     if len(set(destinations)) != len(destinations):
         raise AppError("Input files have colliding output names. Use separate --output-dir locations or rename the inputs.")
     # Libraries must not silently download models during local inference.

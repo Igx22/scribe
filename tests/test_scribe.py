@@ -196,7 +196,7 @@ class AppTests(unittest.TestCase):
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"input")
             args = app.build_parser().parse_args(["-f", str(source), "--cache-dir", str(root / "cache"),
                                                  "--output-dir", str(root / "data"),
-                                                 "--transcription-model", "whisper-local"])
+                                                 "--transcription-model", "whisper-local", "--summary-detail", "1"])
             log, summary = app.output_paths(source, args.output_dir)
             log.parent.mkdir()
             log.write_text("Reviewed transcript", encoding="utf-8")
