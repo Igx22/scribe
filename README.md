@@ -244,13 +244,17 @@ source/settings match.
 
 `--transcription-model` accepts five values:
 
-| Value | Recognition and final log | Local voice labels | Audio uploaded |
-| --- | --- | --- | --- |
-| `gpt-transcribe-online` | OpenAI GPT-Transcribe only | No | Yes, extracted audio |
-| `whisperx` (default) | Local WhisperX large-v3-turbo with word alignment | A, B, C, etc. | No |
-| `mlx` | Local MLX Whisper large-v3-turbo | A, B, C, etc. | No |
-| `gpt-transcribe+whisperx` | GPT-Transcribe + WhisperX/voices + GPT text reconciliation | A, B, C, etc.; supported names when available | Yes, extracted audio |
-| `all` | Independent GPT-Transcribe, WhisperX and MLX; final log uses WhisperX | A, B, C, etc. | Yes, extracted audio |
+| Value | Internet during recognition | Recognition and final log | Local voice labels | Audio uploaded |
+| --- | --- | --- | --- | --- |
+| `gpt-transcribe-online` | Online | OpenAI GPT-Transcribe only | No | Yes, extracted audio |
+| `whisperx` (default) | Offline | Local WhisperX large-v3-turbo with word alignment | A, B, C, etc. | No |
+| `mlx` | Offline | Local MLX Whisper large-v3-turbo | A, B, C, etc. | No |
+| `gpt-transcribe+whisperx` | Online | GPT-Transcribe + WhisperX/voices + GPT text reconciliation | A, B, C, etc.; supported names when available | Yes, extracted audio |
+| `all` | Online | Independent GPT-Transcribe, WhisperX and MLX; final log uses WhisperX | A, B, C, etc. | Yes, extracted audio |
+
+Online/Offline describes recognition after model setup. Initial model downloads
+need internet access; summaries and report headers also use the text API unless
+report generation is disabled. Use `--offline` for a run without network requests.
 
 `all` is a comparison mode. It runs GPT-Transcribe Online, WhisperX Turbo and
 MLX Turbo once each, sequentially, with one shared diarization pass. It does not
@@ -269,13 +273,6 @@ local recognizer reports an error, preserving completed stage caches for retry.
 As with other modes, a completed log/report pair still skips on the next launch.
 `--offline` retains its existing priority: with `all`, it selects only WhisperX,
 disables summaries and makes no cloud requests.
-
-Choose the voice model independently with `--diarization-model nemotron|community-1`.
-The default is `nemotron`, which detects up to eight voices automatically.
-Community-1 also estimates the count automatically and is the gated optional
-alternative described above. No exact/minimum/maximum count hints are supplied.
-API-only recognition ignores the diarizer selection and does not load or prepare
-local recognition/voice models.
 
 The default `whisperx` uses CPU int8, batch four, four threads and beam five,
 with local pyannote VAD and forced word alignment. English, Russian and mixed
@@ -298,6 +295,21 @@ is reported without falling back to local recognition.
 `--summarize-model none` for a local-only log. Combined mode still needs text API
 reconciliation when summaries are disabled. A fallback log plus successful report
 counts as a completed pair on the next run; explicit regeneration can repeat calls.
+
+## Diarization models
+
+`--diarization-model` selects the voice model independently of the recognizer:
+
+| Value | Model | Internet during diarization | Initial model download |
+| --- | --- | --- | --- |
+| `nemotron` (default) | Nemotron 3 | Offline | Public download; no Hugging Face account or token required |
+| `community-1` | pyannote Community-1 | Offline | Hugging Face account, acceptance of model conditions, and `HF_TOKEN` required |
+
+Both models run locally and determine the number of voices automatically;
+Nemotron supports up to eight voices. No exact/minimum/maximum count hints are
+supplied. After setup, neither model needs network access or a token for inference.
+API-only recognition ignores this option and does not load or prepare local
+recognition/voice models.
 
 ## Speaker names from the conversation
 
