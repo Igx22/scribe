@@ -157,6 +157,68 @@ share a preference across different paths because file-origin storage behavior i
 browser-dependent. Storage errors must not break switching or tab navigation.
 There is no server, external asset, or transcript data in preference storage.
 
+### OBS integration investigation (SCR-046)
+
+The user prefers a watched recording folder: after OBS finishes writing an MKV,
+Scribe would queue it and open the successfully generated HTML in the default
+browser. This is a proposed user journey, not implemented behavior. The current
+scope is research only; there was no live OBS integration or timing experiment.
+
+OBS supports [launch parameters](https://obsproject.com/kb/launch-parameters),
+[Lua/Python scripts](https://docs.obsproject.com/scripting), and a
+[built-in WebSocket interface](https://obsproject.com/kb/remote-control-guide).
+Its [protocol](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md)
+provides RecordStateChanged with the saved path on stop. These are alternatives
+to a native plugin; launch parameters alone do not configure capture devices or
+provide the complete post-recording workflow.
+
+The follow-up also considers an OBS stop event as a primary trigger. An in-OBS
+Lua bridge is a candidate for a small OBS-only integration: it would handle
+RECORDING_STOPPED, obtain the last recording path (frontend API, OBS 29+), and hand
+work to an independent process or persistent queue without blocking OBS. Python
+scripting adds OBS-specific interpreter/architecture configuration; Scribe's own
+Python environment would remain separate. A WebSocket listener instead needs
+one-time authenticated local connection setup and reconnection handling. Live
+event delivery must not be treated as a durable job queue: missed stops need a
+recovery policy, and GetRecordStatus does not return the last recording path.
+Both candidates need path-safe launching with an explicit output directory,
+deduplication, bounded retries, and opening only the intended completed report.
+Folder recovery can complement an event trigger, but is not an approved design
+requirement. No integration approach has been finally selected or implemented.
+
+For a macOS folder watcher, file notifications and stable size/mtime alone do not
+establish completion. Apple's documented [kqueue vnode events](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html)
+do not provide a close-write event. A candidate design combines a settling period,
+writer-descriptor inspection, media checks, and a final source-change check before
+paid processing. Writer-inspection errors must remain unknown, not mean ready.
+These checks need testing with pause/resume, copies, sleep, crashes, and file splits;
+they cannot prove that a closed segment represents the entire meeting. OBS notes
+that [unfinished MKV files can remain playable](https://obsproject.com/kb/audio-video-formats-guide),
+so successful decoding alone is not proof of a complete recording. A persistent
+queue, explicit backlog policy, and bounded retries would be needed for unattended
+use. No new dependency or background service has been selected or installed.
+
+Matroska/EBML has no mandatory fixed EOF byte marker. The
+[EBML specification](https://www.rfc-editor.org/rfc/rfc8794.html#section-6.2)
+allows unknown-sized elements ending at EOF; the
+[Matroska index](https://www.rfc-editor.org/rfc/rfc9559.html#section-6.4)
+is recommended rather than mandatory and need not be at the end. OBS's FFmpeg
+mux helper calls av_write_trailer; FFmpeg's
+[Matroska trailer](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/matroskaenc.c)
+can write Cues and patch Segment size, SeekHead, and Duration at earlier offsets.
+For a tested OBS recording configuration, a finite Segment size matching the
+file boundary plus stable size/mtime is a candidate finalization signal. It is
+not a general integrity check or proof of a complete meeting. This could simplify
+an OBS-focused watcher, but needs validation on the installed version with active,
+paused, stopped, crashed, and copied files; no such experiment has been run.
+
+Scribe currently extracts only the first audio stream (`extract_audio()`). OBS
+must include both microphone and remote audio in that stream; its
+[multi-track guide](https://obsproject.com/kb/multiple-audio-track-recording-guide/)
+describes a combined track 1 plus optional isolated tracks. Video content is not
+analyzed by Scribe. Existing measured runtimes do not support a universal
+60-second recording-to-report promise.
+
 ## Important observed results
 
 These are historical measurements, not latency guarantees or current price quotes.
