@@ -1,7 +1,8 @@
 # Scribe: development context
 
 Keep this file focused on architectural decisions and unresolved limitations.
-[README](../README.md) owns setup and public behavior;
+[README](../README.md) owns quick start and reference tables;
+[Usage](USAGE.md) owns detailed setup, public behavior and recovery;
 [AGENTS](../AGENTS.md) owns development agreements;
 [src/scribe.py](../src/scribe.py) owns prompts, schemas and implementation.
 
@@ -105,6 +106,9 @@ before building the parser. Reuse compatible stages rather than deleting caches.
 
 Recognition supplies words; independent diarization supplies voice/time anchors.
 WhisperX Turbo is the default recognizer, with MLX and cloud alternatives.
+WhisperX uses CPU int8, batch four, four threads and beam five, with local pyannote
+VAD and forced alignment. Language detection runs per recording; MLX uses Apple
+Silicon acceleration and detects language per chunk.
 Nemotron 3 is the default diarizer, using pinned NeMo-Speech.cpp and automatic
 speaker counting; Community-1 remains optional. The pinned CPU runtime uses Q8_0
 weights and the `v3-offline` stateful chunk preset, with capacity for eight voices.
@@ -218,9 +222,12 @@ information, separately from reasoning effort. Page guidance is not a padding qu
 
 Reports are standalone HTML with inline CSS/JavaScript and escaped model text and
 filenames. Transcript selection includes the complete saved log and available raw
-sources; omitting it excludes both. Detail and Transcript dropdowns keep independent
-last choices and stable item order. Model badges must reflect actual provenance:
-summary configuration for Detail, saved-log provenance for Final transcript;
+sources; omitting it excludes both. Summary and Transcript dropdowns have fixed
+titles, independent last choices on their second lines, and stable item order.
+Summary levels use readable names and separate N/10 depth labels, never percentages;
+non-default levels retain a generic Summary label and their numeric depth. Inline
+decorative SVG icons require no external assets. Model badges reflect actual provenance:
+one shared footer badge from summary configuration, saved-log provenance for Final transcript;
 unknown provenance omits the badge. Existing HTML needs explicit regeneration
 for renderer changes. Browser storage failures must not break navigation/theme
 controls; file-origin theme persistence across paths is browser-dependent.
@@ -356,7 +363,8 @@ two-/three-person address evidence, human-name preference over nicknames, and na
 reaching the final log and summary. Setup checks cover a ready virtual
 environment without a bundled runtime, offline rejection of outdated dependencies,
 the data-folder placeholder in a fresh checkout, and Git exclusions for private
-and generated files. Detail-icon checks cover exact dot counts for all ten levels.
+and generated files. Menu checks cover names and numeric depth for all ten levels,
+fixed titles, the decorative microphone, and separate summary/transcript provenance.
 When Node.js is available, an optional offline JavaScript check executes the actual
 report script for theme restoration/toggling, cookie fallback, blocked storage,
 and tab navigation; it is skipped otherwise. Node.js is not required to run Scribe.

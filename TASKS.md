@@ -27,8 +27,9 @@
   For an open task that needs detail, add a short `### SCR-NNN` section below the
   register with scope and acceptance criteria. On completion, move durable findings
   to their canonical document and retain only a link here if needed.
-- Keep usage and public behavior in [README.md](README.md), design rationale and
-  important findings in [PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md), and working
+- Keep quick start and reference tables in [README.md](README.md), detailed usage
+  and recovery in [USAGE.md](docs/USAGE.md), design rationale and important findings
+  in [PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md), and working
   agreements in [AGENTS.md](AGENTS.md). Do not duplicate those documents, source
   prompts, chat transcripts, or test output here. Never include secrets or private
   recording contents.
@@ -124,6 +125,13 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-072 | Make GPT reconciliation a common final stage across transcription modes | Done | 2026-11-07 | 2026-11-07 |
 | SCR-073 | Evaluate a compact local text model for offline summaries and reconciliation | Planned | 2026-11-07 | — |
 | SCR-074 | Group summary detail levels in a dropdown with their generating model badge | Done | 2026-11-07 | 2026-11-07 |
+| SCR-075 | Propose clearer summary and transcript menu labels | Done | 2026-11-08 | 2026-11-08 |
+| SCR-076 | Generate two visual concepts for summary and transcript menus | Done | 2026-11-08 | 2026-11-08 |
+| SCR-077 | [Implement compact Summary and Transcript report menus](data/comparison/menu-naming-preview/IMPLEMENTATION_VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-078 | Regenerate the single-speaker recording report and open it in Chrome | In Progress | 2026-11-08 | — |
+| SCR-079 | Generate a log and summary report for the supplied July recording | In Progress | 2026-11-08 | — |
+| SCR-080 | Draft a concise GitHub README and documentation migration plan | Done | 2026-11-08 | 2026-11-08 |
+| SCR-081 | Adopt the concise README and detailed usage guide | Done | 2026-11-08 | 2026-11-08 |
 
 ### SCR-073
 
