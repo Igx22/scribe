@@ -228,6 +228,15 @@ reason/status, and reports currently give no explicit explanation for anonymous
 labels. Successful reconciliation does not guarantee name discovery. No naming
 fix is implemented; see private [SCR-089 evidence](../data/comparison/july-speaker-names-investigation/README.md).
 
+The SCR-089 investigation is complete. A later proposed prompt experiment was not
+performed: a possible follow-up could compare the current prompt with a clearer
+evidence-focused variant on saved opening GPT-Transcribe/WhisperX sources using
+`gpt-6.1-sol:medium`. Such an experiment would preserve source data, uncertainty,
+validation and ordinary outputs, retain exact prompts/responses and returned usage
+under ignored comparison data, and distinguish candidates from validated names.
+It would not require full audio recognition or report regeneration; no improved
+name recovery has been established by this unperformed proposal.
+
 ## Resume behavior and failures
 
 Word, voice, cloud-audio and final reconciliation checkpoints have independent

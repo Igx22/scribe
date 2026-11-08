@@ -139,30 +139,11 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-086 | [Save per-recording processing errors beside the HTML report](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-087 | [Regenerate the July report after fixes while preserving cloud recognition caches](data/comparison/july-recording-run/rerun-console.log) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-088 | [Add local model progress and processing time estimates](data/comparison/progress-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
-| SCR-089 | [Investigate missing speaker names after successful reconciliation](data/comparison/july-speaker-names-investigation/README.md) | In Progress | 2026-11-08 | — |
+| SCR-089 | [Investigate missing speaker names after successful reconciliation](data/comparison/july-speaker-names-investigation/README.md) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-090 | [Save complete console output in daily per-run logs under the launch directory](data/comparison/console-logging-verification/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-091 | Clarify output directory defaults and monitoring documentation | Done | 2026-11-08 | 2026-11-08 |
 | SCR-092 | [Audit recognition caches and specify reusable per-model artifacts](docs/PROJECT_CONTEXT.md#recognition-cache-artifacts) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-093 | [Key flat JSON caches by recording content and keep user exports separate](docs/USAGE.md#processing-cache-and-exports) | Done | 2026-11-08 | 2026-11-08 |
-
-### SCR-093
-
-Implemented content-keyed flat JSON artifacts, internal final/materialization JSON,
-export-independent summary-only, stage resume and conservative legacy JSON adapters.
-The canonical [cache/export contract and recovery](docs/USAGE.md#processing-cache-and-exports)
-and [architecture/verification](docs/PROJECT_CONTEXT.md#recognition-cache-artifacts)
-replace the completed design notes. Verified on 2026-11-08 with the full mocked
-suite (244 tests), without paid calls or model downloads.
-
-### SCR-089
-
-Extend the completed cache audit with a bounded live prompt experiment on the
-saved opening GPT-Transcribe/WhisperX sources. Repeat the current reconciliation
-prompt with gpt-6.1-sol:medium and compare a clearer evidence-focused prompt.
-Preserve source data, attribution uncertainty, validation and ordinary outputs.
-Record exact prompts/responses, usage and limitations under ignored comparison
-data; distinguish proposed name candidates from validated mappings. No full audio
-recognition or report regeneration is needed.
 
 ### SCR-073
 
