@@ -100,6 +100,18 @@ For `meeting.mkv`, Scribe writes `meeting.log.md` and `meeting.summary.html`.
 Reports include summary levels, the final transcript, available source views, and a dark theme.
 Input recordings are never modified.
 
+Processing errors and recovery warnings are saved beside the report in
+`meeting.summary.err`, with attempt history and credentials redacted. Reconciliation
+retries invalid parts up to twice, then retains their source text and continues;
+partial results are marked in the log and HTML. A changed speaker-uncertainty
+annotation alone does not cancel reconciliation.
+
+Local processing shows phases, elapsed time and approximate remaining time.
+WhisperX reports recognition/alignment progress; Nemotron shows activity without
+invented percentages. Before inference, a local-only time range uses comparable
+successful runs and excludes reused checkpoints. The first run explicitly reports
+missing history; API/report time is not included. [Progress and estimate details](docs/USAGE.md#progress-and-time-estimates).
+
 Batch results go to `./data` in the current directory. Monitor results go beside the
 recording. `--output-dir` overrides either location; `--input-dir` changes only the input.
 

@@ -12,6 +12,7 @@ __pycache__/
 *.log.md
 *.summary.md
 *.summary.html
+*.summary.err
 *.mkv
 *.MKV
 *.download

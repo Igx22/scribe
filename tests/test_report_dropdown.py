@@ -16,7 +16,8 @@ class ReportDropdownTests(unittest.TestCase):
         reports = [dict(id=identifier, label=label, description='Original source', text='Raw & <words>')
                    for identifier, label in [('gpt', 'GPT-Transcribe'), ('whisperx', 'WhisperX Turbo'),
                                               ('mlx', 'MLX Turbo'), ('diarization', 'Nemotron 3')]]
-        return app.summary_html(Path('meeting.mkv'), {1: 'Brief'}, transcript=transcript,
+        summaries = {level: 'Summary.' for level in app.summary_levels(options.get('tabs', [1]))}
+        return app.summary_html(Path('meeting.mkv'), summaries, transcript=transcript,
                                 source_reports=reports, **options)
 
     def test_menu_keeps_final_and_all_sources_with_processing_badges_and_sections(self):
@@ -33,6 +34,11 @@ class ReportDropdownTests(unittest.TestCase):
         self.assertEqual(content.count('id="transcript-toggle"'), 1)
         self.assertIn('aria-controls="transcript-options" hidden', content)
         self.assertIn('Raw &amp; &lt;words&gt;', content)
+        self.assertIn('id="transcript-choice-title">Transcript</span>', content)
+        self.assertIn('id="transcript-choice-description">Final version</span>', content)
+        self.assertEqual([a['data-choice-label'] for _, a in elements if a.get('role') == 'tab'],
+                         ['Final version', 'Transcript · GPT-Transcribe', 'Transcript · WhisperX Turbo',
+                          'Transcript · MLX Turbo', 'Diarization · Nemotron 3'])
 
     def test_no_transcript_selection_omits_picker_and_source_text(self):
         content = self.render(tabs=[1])
@@ -70,13 +76,14 @@ class ReportDropdownTests(unittest.TestCase):
         elements = Elements(menu).elements
         self.assertEqual([a['id'] for _, a in elements if a.get('role') == 'tab'],
                          ['tab-10', 'tab-1', 'tab-5'])
-        self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', menu), ['GPT-6.1-sol'] * 3)
+        self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', menu), ['GPT-6.1-sol'])
         self.assertNotIn('GPT-6-luna', menu)
         self.assertIn('aria-controls="detail-options" hidden', content)
         self.assertEqual(content.count('id="detail-toggle"'), 1)
         trigger = content.split('id="detail-toggle"')[1].split('id="detail-options"')[0]
-        self.assertIn('id="detail-choice-icon" data-count="10" aria-hidden="true"', trigger)
-        self.assertEqual(trigger.count('class="dot"'), 10)
+        self.assertIn('id="detail-choice-title">Summary</span>', trigger)
+        self.assertIn('id="detail-choice-description">In depth · 10/10</span>', trigger)
+        self.assertIn('<div class="menu-footer"><span class="processing-badge">GPT-6.1-sol</span></div>', content)
 
     def test_detail_badges_do_not_guess_unknown_provenance_and_escape_model_labels(self):
         for model, expected in [(None, None), ('<img src=x>', '&lt;img src=x&gt;')]:
@@ -104,11 +111,12 @@ class ReportDropdownTests(unittest.TestCase):
             panels = [a for _, a in elements if a.get('role') == 'tabpanel']
             self.assertEqual([a['id'] for a in tabs], ['tab-10', 'tab-1', 'tab-transcript'])
             self.assertEqual([a['aria-controls'] for a in tabs], [a['id'] for a in panels])
-            self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', content), ['GPT-6-luna'] * 2)
+            self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', content), ['GPT-6-luna'])
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is optional for offline JavaScript checks')
     def test_keyboard_and_theme_work_for_transcript_first_and_summary_only(self):
-        for selection in [['transcript'], ['transcript', 1], [1], [1, 'transcript']]:
+        for selection in [['transcript'], ['transcript', 1], [1], [1, 'transcript'],
+                          [10, 'transcript', 1, 3, 7, 5]]:
             with self.subTest(selection=selection):
                 content = self.render(tabs=selection)
                 result = subprocess.run([shutil.which('node'), str(Path(__file__).with_name('report_theme_check.cjs'))],

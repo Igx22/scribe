@@ -152,6 +152,17 @@ For `meeting.mkv`, outputs are plain-text `meeting.log.md` and standalone
 `meeting.summary.html`. They go to `./data`, the watched folder in monitor mode,
 or `--output-dir`. With reports disabled, only the log is written.
 
+Errors and recovery warnings also produce `meeting.summary.err`, including failures
+before a log/report is written and runs with reports disabled. This UTF-8 JSON file
+records stages, affected parts/time ranges, models/effort, rejected responses and
+available returned usage, with API/Hugging Face credentials redacted. It can contain
+private transcript excerpts. It preserves separate attempts with `running`,
+`complete`, `partial`, `failed` or `interrupted` status. A later successful run adds
+its own status; historical errors remain. Clean runs create no new error file, and
+skipped completed pairs leave existing history untouched. Unknown or symlink error
+files are protected even with `--force`. Global CLI/configuration errors without
+a started recording are reported in the console.
+
 A log plus HTML or legacy Markdown summary counts as complete: processing skips
 it without API calls or file changes, even after source/settings change. Ordinary
 resume of a lone log requires matching cached source/settings and ownership.
@@ -165,6 +176,53 @@ checkpoints:
 ./scribe.sh -f "recording.mkv" --force
 ./scribe.sh -f "recording.mkv" --summary-only --force
 ```
+
+## Progress and time estimates
+
+After audio extraction and before recognition, Scribe reports the recording's
+duration, the local stages to compute/reuse, and an approximate local-processing
+time range when matching timing history exists. Cached stages add no computation
+time. With `all`, the forecast includes both recognizers and one diarization pass.
+An estimate for only some known stages is explicitly labelled as such. Extraction,
+model setup/verification, API recognition/reconciliation and reports are excluded;
+this is not a whole-pipeline completion time.
+
+WhisperX has separate recognition and word-alignment callbacks. Their percentages
+describe processed segments of that stage, not the recording's total pipeline.
+Loading, speech/language detection and finalization have named phases and elapsed
+time. A final callback does not immediately mean success: Done/100% appears only
+after the corresponding operation returns and its stage checks finish.
+
+Nemotron keeps one stateful run. Its output is drained live with bounded failure
+diagnostics; the display shows runtime messages, an activity indicator and elapsed
+time. A heartbeat means the process is running, not proof that more audio was
+processed. No numeric Nemotron percentage is inferred from elapsed time or log text.
+
+Remaining time starts from comparable local history and can update from observed
+WhisperX callback speed, with smoothing and coarse rounding. If the estimate is
+exceeded without new progress, remaining time becomes unknown instead of negative.
+TTY output refreshes one line; redirected output emits occasional lines (about every
+15 seconds) plus phase changes and completion/failure messages.
+
+History is optional `data/.cache/timings.json`: at most 200 numeric timing/configuration
+samples, with 12 per stage/configuration. Keys distinguish machine, model/runtime,
+language/compute settings, Python and requirements. No recording paths, transcript
+text or credentials are stored. Estimates use nearby recording durations, robust
+rates and, when duration variation supports it, a fitted fixed loading overhead.
+Ranges are heuristics, not calibrated completion guarantees; system load, speech
+density, cold loading and configuration changes affect them. Cache hits, failed
+and interrupted operations do not teach a full-stage speed. Successfully completed
+sub-stages can still teach their own timings if a later stage fails.
+
+On the first comparable run, Scribe explicitly reports missing history. WhisperX
+can form a live ETA after enough callback progress. Nemotron's first run may have
+no numeric ETA because its pinned runtime has no verified progress counter; its
+first successful timing enables later history-based estimates. Corrupt/unwritable
+history is ignored, and lock contention cannot fail transcription. Deleting only
+the timing file resets forecasts without changing recognition checkpoints.
+Display/timing changes do not invalidate recognition caches or alter existing
+completed-output skipping. Already running processes retain their previous code;
+new indicators appear on subsequent launches.
 
 ## Transcription modes
 
@@ -204,7 +262,15 @@ disables summaries and makes no cloud requests.
 
 The default `whisperx` uses CPU int8, batch four, four threads and beam five,
 with local pyannote VAD and forced word alignment. English, Russian and mixed
-speech are supported; auto language detection runs per recording. Alignment
+speech are supported; auto language detection runs per recording. The language
+is selected from up to three 30-second speech probes using the already
+computed diarization intervals. Leading silence is excluded from the probes;
+recognition and alignment still use the original full waveform/time coordinates.
+A confident first probe can finish selection early; otherwise a duration-weighted
+vote chooses the language and conflicting/weak evidence is reported. This is a
+recording-wide language choice, not per-utterance language switching. Short speech
+uses available samples; no non-silent speech skips recognition. Probe spans and
+language probabilities are kept in the word checkpoint. Alignment
 assets are prepared for English and Russian; choose `mlx` or API-only recognition
 for other languages. MLX uses Apple Silicon acceleration and per-chunk detection.
 WhisperX alignment scores are not ASR confidence; low-confidence speech is marked
@@ -215,9 +281,22 @@ In combined mode, GPT-Transcribe runs first and WhisperX supplies local word/tim
 anchors, using the selected diarizer's fixed voice IDs. Text reconciliation combines
 these sources; the MKV container/video itself is never uploaded. The summary is
 made from the final log. If cloud audio recognition fails, GPT text reconciliation
-is still attempted using the local text. Failed reconciliation retains the raw
-source log, reports the failure and leaves its stage incomplete for a later retry. An API-only failure
+is still attempted using the local text. Reconciliation tolerates differences in
+language, fragmentation and source structure. Invalid returned JSON or anchor/speech
+validation gets at most two corrective retries for that part, with specific error
+feedback. Transport/authentication/quota errors keep their existing retry policy;
+they do not receive content-correction retries. Accepted parts are checkpointed.
+If a part remains unresolved, its original primary-source text is retained and
+later parts continue. The log lists unresolved part time ranges and the HTML shows
+an incomplete-reconciliation notice. Such runs can still produce summaries and
+exit successfully, but their state remains incomplete. An API-only failure
 is reported without falling back to local recognition.
+
+Speaker-uncertainty annotation loss is repaired without another API call by
+conservatively marking the entire corrected turn uncertain; the precise original
+spans remain in raw sources. Structural checks still protect voice/time anchors,
+and single-source review cannot discard speech or invent unassigned speech.
+Summary-only rendering preserves incomplete notices without repeating reconciliation.
 
 **Local recognition does not mean a fully offline run.** Ordinary runs use
 `--summarize-model gpt-6.1-sol:medium` for final text reconciliation and reports.
@@ -253,7 +332,8 @@ Confirmed names retain their original language and script and apply throughout
 the final log and summaries; internal voice IDs and timestamps stay unchanged.
 Unnamed voices keep letters, unassigned speech stays unknown, and shared names
 include the voice label, such as `Alice (A)`. Offline and failed-reconciliation
-fallback logs keep anonymous labels; API-only mode cannot assign speaker names.
+fallback logs keep anonymous labels; accepted parts of a partial reconciliation
+can establish names using the normal evidence checks. API-only mode cannot assign speaker names.
 Existing outputs are not renamed automatically, and `--summary-only` preserves
 the log without discovering names.
 

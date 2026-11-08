@@ -34,7 +34,7 @@ class AllModeTests(unittest.TestCase):
         return [{'start': .25, 'end': 1.5, 'text': f'{backend.upper()}_ORIGINAL words.', 'unclear': False}]
 
     def run_pipeline(self, source, args, *, fail_cloud=False, fail_mlx=False):
-        def recognize(audio, models, language, vocabulary, backend):
+        def recognize(audio, models, language, vocabulary, backend, **kwargs):
             if fail_mlx and backend == 'mlx':
                 raise app.AppError('MLX unavailable')
             return self.words(backend)
@@ -108,6 +108,18 @@ class AllModeTests(unittest.TestCase):
                 _, cloud, asr, diarize, *_ = self.run_pipeline(source, args)
             cloud.assert_not_called(); diarize.assert_not_called()
             self.assertEqual([c.args[-1] for c in asr.call_args_list], ['mlx'])
+
+    def test_pre_speech_detection_whisperx_cache_invalidates_only_words(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, _ = self.setup_case(Path(tmp), '--transcribe-only')
+            legacy = copy.deepcopy(app.model_manifest())
+            legacy['whisperx']['identity']['adapter_version'] = 1
+            with patch.object(app, 'model_manifest', return_value=legacy):
+                self.run_pipeline(source, args)
+            args.output_dir = Path(tmp) / 'speech-detection'
+            _, cloud, asr, diarize, *_ = self.run_pipeline(source, args)
+            cloud.assert_not_called(); diarize.assert_not_called()
+            self.assertEqual([c.args[-1] for c in asr.call_args_list], ['whisperx'])
 
     def test_both_word_caches_resume_independently_in_new_output_and_single_model_modes(self):
         with tempfile.TemporaryDirectory() as tmp:

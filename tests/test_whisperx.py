@@ -158,11 +158,14 @@ class WhisperXTests(unittest.TestCase):
         raw=raw if raw is not None else {'language':language,'segments':[{'start':0.,'end':2.,'text':'Hello there','avg_logprob':-.1}]}
         aligned=aligned if aligned is not None else {'segments':[{'start':0.,'end':2.,'words':[
             {'word':'Hello','start':.1,'end':.5,'score':.001},{'word':'there','start':.6,'end':1.2,'score':.99}]}]}
-        loader=Mock(return_value=SimpleNamespace(transcribe=Mock(return_value=raw)))
+        core=SimpleNamespace(feat_kwargs={'feature_size':128}, encode=Mock(),
+            model=SimpleNamespace(detect_language=Mock(return_value=[[('<|'+language+'|>',.99),('<|ja|>',.01)]])))
+        loader=Mock(return_value=SimpleNamespace(transcribe=Mock(return_value=raw), model=core))
         align_loader=Mock(return_value=(object(),{}));align=Mock(return_value=aligned)
         nltk=SimpleNamespace(data=SimpleNamespace(path=[],find=Mock(return_value=True)),download=Mock(side_effect=AssertionError('No NLTK downloads')))
         modules={'torch':SimpleNamespace(set_num_threads=Mock()),'nltk':nltk,'whisperx':SimpleNamespace(),
                  'whisperx.asr':SimpleNamespace(load_model=loader),
+                 'whisperx.audio':SimpleNamespace(log_mel_spectrogram=Mock()),
                  'whisperx.alignment':SimpleNamespace(load_align_model=align_loader,align=align)}
         return modules,loader,align_loader,align
 
@@ -174,7 +177,7 @@ class WhisperXTests(unittest.TestCase):
         modules,loader,alignment,_=self.fake_whisperx(aligned=aligned)
         models=Path('/models')
         with patch.dict(sys.modules,modules):
-            words=app.recognize([0.]*32000,models,'auto','Alice, Bob')
+            words=app.recognize([.1]*32000,models,'auto','Alice, Bob',voice_intervals=[dict(start=0,end=2)])
         self.assertEqual([w['text'] for w in words],[' Hello',' there'])
         self.assertFalse(any(w['unclear'] for w in words)) # Low alignment score is not low ASR confidence.
         json.dumps(words) # Native numpy scalars must not break checkpoint writes.
@@ -204,11 +207,11 @@ class WhisperXTests(unittest.TestCase):
     def test_whisperx_rejects_unsupported_language_or_invalid_times_and_handles_silence(self):
         modules,_,alignment,_=self.fake_whisperx(language='de')
         with patch.dict(sys.modules,modules), self.assertRaisesRegex(app.AppError,'English and Russian'):
-            app.recognize([0.]*32000,Path('/models'),'auto','')
+            app.recognize([.1]*32000,Path('/models'),'auto','',voice_intervals=[dict(start=0,end=2)])
         alignment.assert_not_called()
         modules,_,alignment,_=self.fake_whisperx(raw={'language':'en','segments':[]})
         with patch.dict(sys.modules,modules):
-            self.assertEqual(app.recognize([0.]*32000,Path('/models'),'auto',''),[])
+            self.assertEqual(app.recognize([.1]*32000,Path('/models'),'auto','',voice_intervals=[dict(start=0,end=2)]),[])
         alignment.assert_not_called()
         modules,*_=self.fake_whisperx(aligned={'segments':[{'start':0.,'end':2.,'words':[{'word':'bad','start':-1,'end':1}]}]})
         with patch.dict(sys.modules,modules), self.assertRaisesRegex(app.AppError,'invalid word timing'):

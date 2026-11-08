@@ -148,16 +148,18 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertIn("schema", calls[0])
 
-    def test_fusion_rejects_missing_ids_or_removed_uncertainty(self):
+    def test_fusion_retains_source_for_missing_ids_and_recovers_speaker_uncertainty(self):
         turns = [{"start": 0, "end": 2, "speaker": 1, "uncertain": True,
                   "text": "[speaker uncertain: words]"}]
         chunks = [{"index": 0, "start": 0, "end": 3, "text": "Words"}]
         for result in [{"turns": [], "unassigned_text": "", "speaker_names": []},
                        {"turns": [{"id": 0, "text": "Words"}], "unassigned_text": "", "speaker_names": []}]:
             with self.subTest(result=result), tempfile.TemporaryDirectory() as tmp:
-                with self.assertRaises(app.AppError):
-                    app.fuse_transcripts(chunks, turns, Path(tmp), "k", "m", "medium",
+                issues = []
+                fused, _ = app.fuse_transcripts(chunks, turns, Path(tmp), "k", "m", "medium", issues=issues,
                         call=lambda *a, **k: json.dumps(result))
+                self.assertIn('speaker uncertain', fused[0]['text'])
+                self.assertEqual(bool(issues), not bool(result['turns']))
 
     def test_gpt_resumes_without_rebilling_completed_chunks(self):
         with tempfile.TemporaryDirectory() as tmp:

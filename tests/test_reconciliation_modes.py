@@ -107,6 +107,9 @@ class ReconciliationModeTests(unittest.TestCase):
         for replacement, extra in [('', ''), ('Alice', ''), (turns[0]['text'], 'Invented extra speech')]:
             with self.subTest(replacement=replacement, extra=extra), tempfile.TemporaryDirectory() as tmp:
                 result = dict(turns=[dict(id=0, text=replacement)], unassigned_text=extra, speaker_names=[])
-                with self.assertRaises(app.AppError):
-                    app.fuse_transcripts(app.transcript_chunks(turns), turns, Path(tmp), 'key', 'model', 'medium',
-                                         single_source=True, call=lambda *a, **k: json.dumps(result))
+                issues = []
+                fused, extra = app.fuse_transcripts(app.transcript_chunks(turns), turns, Path(tmp), 'key', 'model', 'medium',
+                                         single_source=True, issues=issues, call=lambda *a, **k: json.dumps(result))
+                self.assertEqual(fused, turns)
+                self.assertEqual(extra, [])
+                self.assertEqual(len(issues), 1)

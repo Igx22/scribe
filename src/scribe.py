@@ -17,6 +17,8 @@ from numbers import Real
 import os
 import platform
 import re
+import selectors
+import statistics
 import ssl
 import struct
 import subprocess
@@ -24,12 +26,14 @@ import sys
 import tarfile
 import tempfile
 import time
+import threading
 import unicodedata
 import urllib.error
 import urllib.request
 import uuid
 import wave
 import zipfile
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,9 +57,17 @@ ALL_MODE = "all"
 AUDIO_CHUNK_SECONDS = 600
 MONITOR_SETTLE_SECONDS = 30
 MONITOR_POLL_SECONDS = 5
+CURRENT_RUN = ContextVar("scribe_run", default=None)
+CURRENT_TIMING = ContextVar("scribe_timing", default=None)
+OUTPUT_LOCK = threading.RLock()
+PROGRESS_LINE = False
 
 FUSION_PROMPT = """Reconcile two automatic transcripts of the same conversation.
 The conversation can be English, Russian, or mixed. Preserve original languages.
+Sources may differ in language, structure, fragmentation, repetition and completeness.
+Reconcile their meaning using supported speech, not string similarity or text length.
+If local recognition translated speech, use SOURCE A to restore its original language.
+Speaker uncertainty concerns attribution, not whether supported words can be corrected.
 SOURCE A (GPT-Transcribe) usually has clearer words but no speaker or word timing.
 SOURCE B (local Whisper) has ordered, fixed voice/time anchors and may mishear words.
 When additional_local_source is supplied, use its independent MLX words as extra
@@ -291,8 +303,19 @@ class AppError(Exception):
     pass
 
 
+def console_line(message, refresh=False):
+    global PROGRESS_LINE
+    with OUTPUT_LOCK:
+        tty = sys.stdout.isatty()
+        if tty and (refresh or PROGRESS_LINE):
+            sys.stdout.write("\r\033[2K")
+        sys.stdout.write(str(message) + ("" if tty and refresh else "\n"))
+        sys.stdout.flush()
+        PROGRESS_LINE = tty and refresh
+
+
 def say(message):
-    print(message, flush=True)
+    console_line(message)
 
 
 def load_env(path=APP_DIR / ".env"):
@@ -327,6 +350,312 @@ def atomic_write(path, text):
 
 def save_json(path, value):
     atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def redacted(value, key=""):
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    for secret in (key, os.getenv("OPENAI_API_KEY", ""), os.getenv("HF_TOKEN", "")):
+        if secret:
+            text = text.replace(json.dumps(secret)[1:-1], "[redacted]")
+    text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[redacted]", text)
+    return json.loads(text)
+
+
+class RunDiagnostics:
+    """Output-scoped, atomic error history. Clean runs create no sidecar."""
+    def __init__(self, source, report, key):
+        self.path = report.with_suffix(".err")
+        self.key = key
+        self.stage = "output validation"
+        self.details = {}
+        self.partial = False
+        self.document = {"version": 1, "source": str(source.resolve()), "runs": []}
+        if self.path.is_symlink():
+            raise AppError(f"Error file is a symlink; refusing to replace it: {self.path}")
+        if self.path.exists():
+            saved = read_json(self.path)
+            if (not isinstance(saved, dict) or saved.get("version") != 1
+                    or saved.get("source") != self.document["source"] or not isinstance(saved.get("runs"), list)):
+                raise AppError(f"Existing error file has unknown ownership; preserved: {self.path}")
+            self.document = saved
+        self.run = {"id": uuid.uuid4().hex, "started": datetime.now(timezone.utc).isoformat(),
+                    "status": "running", "events": []}
+        self.attached = False
+
+    def write(self):
+        if self.path.is_symlink():
+            raise AppError(f"Error file is a symlink; preserved: {self.path}")
+        if not self.attached:
+            self.document["runs"].append(self.run)
+            self.attached = True
+        save_json(self.path, redacted(self.document, self.key))
+
+    def event(self, stage, message, **details):
+        self.run["events"].append({"time": datetime.now(timezone.utc).isoformat(),
+                                   "stage": stage, "message": str(message), **details})
+        self.write()
+
+    def finish(self, status):
+        self.run["status"] = status
+        self.run["finished"] = datetime.now(timezone.utc).isoformat()
+        if self.attached or self.path.exists():
+            self.write()
+
+
+def processing_stage(stage, **details):
+    if CURRENT_RUN.get() is not None:
+        CURRENT_RUN.get().stage = stage
+        CURRENT_RUN.get().details = details
+
+
+def diagnostic(stage, message, **details):
+    if CURRENT_RUN.get() is not None:
+        CURRENT_RUN.get().event(stage, message, **{**CURRENT_RUN.get().details, **details})
+
+
+def timing_key(stage, identity):
+    machine = {"host": hashlib.sha256(platform.node().encode()).hexdigest()[:16],
+               "os": platform.system(), "release": platform.release(), "arch": platform.machine(),
+               "processor": platform.processor(), "cpus": os.cpu_count()}
+    threads = {name: int(os.environ[name]) for name in
+               ("OMP_NUM_THREADS", "GGML_N_THREADS", "VECLIB_MAXIMUM_THREADS")
+               if os.environ.get(name, "").isdigit() and len(os.environ[name]) < 5}
+    try:
+        requirements = digest_file(APP_DIR / "requirements.txt")
+    except OSError:
+        requirements = "unavailable"
+    return {"stage": stage, "identity": identity, "machine": machine, "threads": threads,
+            "python": platform.python_version(), "requirements": requirements}
+
+
+class TimingHistory:
+    """Optional bounded timing data. Lock/read/fit/write failures never affect work."""
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def samples(self):
+        try:
+            if self.path.stat().st_size > 2000000:
+                return []
+            value = read_json(self.path, {})
+            rows = value.get("samples", []) if value.get("version") == 1 else []
+            return [row for row in rows if isinstance(row, dict) and isinstance(row.get("key"), dict)
+                    and all(type(row.get(k)) in (int, float) and math.isfinite(row[k]) and .001 <= row[k] < 31536000
+                            for k in ("audio", "elapsed"))][-200:]
+        except (OSError, ValueError, TypeError, AttributeError):
+            return []
+
+    def estimate(self, key, duration):
+        rows = [r for r in self.samples() if r["key"] == key and .25 <= duration / r["audio"] <= 4][-12:]
+        if not rows:
+            return None
+        # Median pairwise slopes separate fixed loading overhead when observations
+        # have enough duration spread. Otherwise use a deliberately wide rate fit.
+        slopes = [(a["elapsed"] - b["elapsed"]) / (a["audio"] - b["audio"])
+                  for i, a in enumerate(rows) for b in rows[:i]
+                  if abs(a["audio"] - b["audio"]) > .2 * max(a["audio"], b["audio"])]
+        slopes = [s for s in slopes if math.isfinite(s) and s > 0]
+        rate = statistics.median(slopes) if slopes else statistics.median(r["elapsed"] / r["audio"] for r in rows)
+        overhead = max(0, statistics.median(r["elapsed"] - rate * r["audio"] for r in rows)) if slopes else 0
+        expected = max(1, overhead + rate * duration)
+        residual = statistics.median(abs(r["elapsed"] - overhead - rate * r["audio"]) for r in rows)
+        spread = max(expected * (.5 if len(rows) == 1 else .3), residual * 2)
+        return {"seconds": expected, "low": max(1, expected - spread), "high": expected + spread,
+                "samples": len(rows), "loading_overhead": overhead}
+
+    def record(self, key, duration, elapsed):
+        if not (math.isfinite(duration) and math.isfinite(elapsed) and duration > 0 and elapsed > 0):
+            return
+        try:
+            import fcntl
+            # Separate from recording locks; concurrent recordings merge samples.
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.with_suffix(".lock").open("a") as lock:
+                for attempt in range(21):
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if attempt == 20:
+                            return
+                        time.sleep(.01)
+                rows = self.samples()
+                matching = [r for r in rows if r["key"] == key][-11:]
+                other = [r for r in rows if r["key"] != key]
+                rows = other + matching + [{"key": key, "audio": duration, "elapsed": elapsed}]
+                save_json(self.path, {"version": 1, "samples": rows[-200:]})
+        except (OSError, ValueError, TypeError):
+            pass
+
+
+def approximate_time(seconds):
+    if seconds < 60:
+        return f"{max(5, math.ceil(seconds / 5) * 5)} sec"
+    return f"{math.ceil(seconds / 60)} min"
+
+
+class StageProgress:
+    """Heartbeat means activity only; callback percentages belong to this stage."""
+    def __init__(self, label, duration, key, history=None):
+        self.label, self.duration, self.key = label, duration, key
+        self.history = history if history is not None else CURRENT_TIMING.get()
+        self.forecast = self.history.estimate(key, duration) if self.history else None
+        self.started = time.monotonic()
+        self.phase_started = self.started
+        self.phase_name = "Starting"
+        self.percent = None
+        self.seen_callback = False
+        self.observations = []
+        self.rate = None
+        self.live_eta = None
+        self.last_output = -math.inf
+        self.note = ""
+        self.completed = False
+        self.learn = False
+        self.lock = threading.RLock()
+        self.stop = threading.Event()
+
+    def __enter__(self):
+        self.tick(force=True)
+        self.thread = threading.Thread(target=self.heartbeat, daemon=True)
+        self.thread.start()
+        return self
+
+    def heartbeat(self):
+        while not self.stop.wait(1):
+            self.tick()
+
+    def phase(self, name):
+        with self.lock:
+            self.phase_name = name
+            self.phase_started = time.monotonic()
+            self.percent, self.rate, self.live_eta = None, None, None
+            self.observations = []
+            self.note = ""
+            self.tick(force=True)
+
+    def callback(self, percent):
+        if not isinstance(percent, Real) or not math.isfinite(percent):
+            return
+        with self.lock:
+            percent = max(0, min(100, float(percent)))
+            if self.percent is not None and percent < self.percent:
+                return
+            self.seen_callback = True
+            now = time.monotonic()
+            if self.observations and percent > self.observations[-1][1]:
+                before, previous = self.observations[-1]
+                rate = (now - before) / (percent - previous)
+                if rate > 0:
+                    self.rate = rate if self.rate is None else .7 * self.rate + .3 * rate
+                    if now - self.phase_started >= 5 and percent >= 5:
+                        self.live_eta = (now, max(0, 100 - percent) * self.rate)
+            self.observations.append((now, percent))
+            self.observations = self.observations[-2:]
+            self.percent = percent
+            self.tick()
+
+    def runtime_message(self, line):
+        with self.lock:
+            first = not self.note
+            self.note = re.sub(r"[\x00-\x1f\x7f]", " ", redacted(line))[:160]
+            self.tick(force=first)
+
+    def tick(self, force=False, ending=None):
+        with self.lock:
+            now = time.monotonic()
+            interval = 1 if sys.stdout.isatty() else 15
+            if not force and now - self.last_output < interval:
+                return
+            elapsed = max(0, now - self.started)
+            spinner = "|/-\\"[int(elapsed) % 4] if not ending else ""
+            text = f"  {spinner + ' ' if spinner else ''}{self.label} · {ending or self.phase_name} · elapsed {clock(elapsed)}"
+            if self.percent is not None and not ending:
+                text += (f" · {int(self.percent)}% of stage segments" if self.percent < 100
+                         else " · segments processed; awaiting finalization")
+            elif ending == "Done" and self.seen_callback:
+                text += " · 100% of stage segments"
+            if not ending:
+                remaining = None
+                origin = "history"
+                if self.live_eta and (self.percent is None or self.percent < 100):
+                    last, estimate = self.live_eta
+                    remaining, origin = estimate - (now - last), "observed progress"
+                elif self.forecast:
+                    remaining = self.forecast["seconds"] - elapsed
+                if remaining is None:
+                    text += " · remaining unknown (insufficient timing evidence)"
+                elif remaining <= 0:
+                    text += " · estimate exceeded; remaining unknown"
+                else:
+                    text += f" · remaining ~{approximate_time(remaining)} ({origin})"
+                if self.note:
+                    text += " · runtime: " + self.note
+            console_line(text, refresh=not bool(ending))
+            self.last_output = now
+
+    def complete(self, record=True):
+        self.completed, self.learn = True, record
+
+    def __exit__(self, kind, error, traceback):
+        self.stop.set()
+        self.thread.join()
+        done = kind is None and self.completed
+        self.tick(force=True, ending="Done" if done else ("Interrupted" if kind is KeyboardInterrupt else "Failed"))
+        if done and self.learn and self.history:
+            self.history.record(self.key, self.duration, time.monotonic() - self.started)
+
+
+def recognition_timing_key(stage, backend, language, vocabulary):
+    return timing_key(stage, {"recognizer": model_manifest()[backend]["identity"], "language": language,
+                              "vocabulary_hash": hashlib.sha256(vocabulary.encode()).hexdigest()})
+
+
+def run_native(command, *, env, progress):
+    """Drain diagnostics live with bounded memory; terminate/reap on interruption."""
+    process = None
+    tail, pending = b"", b""
+    selector = selectors.DefaultSelector()
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, bufsize=0)
+        os.set_blocking(process.stdout.fileno(), False)
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            events = selector.select(.5)
+            if not events and process.poll() is not None:
+                break
+            for event, _ in events:
+                chunk = os.read(event.fd, 8192)
+                if not chunk:
+                    selector.unregister(event.fileobj)
+                    continue
+                tail = (tail + chunk)[-4096:]
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="replace").strip()
+                    if text:
+                        progress.runtime_message(text)
+                if len(pending) > 4096:
+                    progress.runtime_message(pending[-160:].decode("utf-8", errors="replace"))
+                    pending = pending[-160:]
+        if pending:
+            progress.runtime_message(pending.decode("utf-8", errors="replace"))
+        code = process.wait()
+        return subprocess.CompletedProcess(command, code, "", tail.decode("utf-8", errors="replace"))
+    except BaseException:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+    finally:
+        selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
 
 
 def portable_model_path(path):
@@ -610,46 +939,49 @@ def diarize(wav_path, models_dir, backend="nemotron"):
     with wave.open(str(wav_path)) as reader:
         duration = reader.getnframes() / reader.getframerate()
     say("  Speaker diarization: Nemotron 3, automatic count (up to 8 voices), CPU...")
-    started = time.monotonic()
-    env = dict(os.environ, NEMO_SPEECH_MODEL_DIR=str(models_dir),
-               HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
-    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "OPENAI_API_KEY"):
-        env.pop(name, None)
-    with tempfile.TemporaryDirectory(prefix="scribe-diarization-", dir=wav_path.parent) as tmp:
-        result_path = Path(tmp) / "intervals.json"
-        command = [str(binary.resolve()), "diarize", str(wav_path.resolve()),
-                   "--model", str(model.resolve()), "--device", "cpu", "--preset", "v3-offline",
-                   "--format", "json", "--output", str(result_path)]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, env=env)
-        except OSError as exc:
-            raise AppError(f"Could not run Nemotron 3: {exc}. Run --setup --verify-models.") from None
-        if result.returncode:
-            raise AppError("Nemotron 3 diarization failed:\n" + (result.stderr or result.stdout)[-2500:])
-        payload = read_json(result_path)
-    if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
-        raise AppError("Nemotron 3 returned invalid diarization JSON.")
-    intervals = []
-    for row in payload["segments"]:
-        if not isinstance(row, dict):
-            raise AppError("Nemotron 3 returned an invalid speaker interval.")
-        start, end, speaker = (row.get(k) for k in ("start", "end", "speaker"))
-        if (type(start) not in (int, float) or type(end) not in (int, float)
-                or not math.isfinite(start) or not math.isfinite(end)
-                or not 0 <= start < end <= duration + .05
-                or type(speaker) is not int or not 1 <= speaker <= 8):
-            raise AppError("Nemotron 3 returned an invalid speaker interval.")
-        intervals.append({"start": float(start), "end": float(end), "speaker": speaker})
-    intervals.sort(key=lambda s: (s["start"], s["end"], s["speaker"]))
-    # Stable numbers are ordered by first appearance, not the cluster's arbitrary ID.
-    mapping = {}
-    for interval in intervals:
-        mapping.setdefault(interval["speaker"], len(mapping) + 1)
-    for interval in intervals:
-        interval["speaker"] = mapping[interval["speaker"]]
-    say(f"  Nemotron 3 detected {len(mapping)} voice(s), {len(intervals)} speech interval(s) "
-        f"in {time.monotonic() - started:.2f}s.")
-    return intervals
+    with StageProgress("Nemotron 3", duration, timing_key("nemotron", spec["identity"])) as progress:
+        progress.phase("Loading / detecting speakers (stateful)")
+        started = time.monotonic()
+        env = dict(os.environ, NEMO_SPEECH_MODEL_DIR=str(models_dir),
+                   HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+        for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "OPENAI_API_KEY"):
+            env.pop(name, None)
+        with tempfile.TemporaryDirectory(prefix="scribe-diarization-", dir=wav_path.parent) as tmp:
+            result_path = Path(tmp) / "intervals.json"
+            command = [str(binary.resolve()), "diarize", str(wav_path.resolve()),
+                       "--model", str(model.resolve()), "--device", "cpu", "--preset", "v3-offline",
+                       "--format", "json", "--output", str(result_path)]
+            try:
+                result = run_native(command, env=env, progress=progress)
+            except OSError as exc:
+                raise AppError(f"Could not run Nemotron 3: {exc}. Run --setup --verify-models.") from None
+            if result.returncode:
+                raise AppError("Nemotron 3 diarization failed:\n" + (result.stderr or result.stdout)[-2500:])
+            payload = read_json(result_path)
+        if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
+            raise AppError("Nemotron 3 returned invalid diarization JSON.")
+        intervals = []
+        for row in payload["segments"]:
+            if not isinstance(row, dict):
+                raise AppError("Nemotron 3 returned an invalid speaker interval.")
+            start, end, speaker = (row.get(k) for k in ("start", "end", "speaker"))
+            if (type(start) not in (int, float) or type(end) not in (int, float)
+                    or not math.isfinite(start) or not math.isfinite(end)
+                    or not 0 <= start < end <= duration + .05
+                    or type(speaker) is not int or not 1 <= speaker <= 8):
+                raise AppError("Nemotron 3 returned an invalid speaker interval.")
+            intervals.append({"start": float(start), "end": float(end), "speaker": speaker})
+        intervals.sort(key=lambda s: (s["start"], s["end"], s["speaker"]))
+        # Stable numbers are ordered by first appearance, not the cluster's arbitrary ID.
+        mapping = {}
+        for interval in intervals:
+            mapping.setdefault(interval["speaker"], len(mapping) + 1)
+        for interval in intervals:
+            interval["speaker"] = mapping[interval["speaker"]]
+        say(f"  Nemotron 3 detected {len(mapping)} voice(s), {len(intervals)} speech interval(s) "
+            f"in {time.monotonic() - started:.2f}s.")
+        progress.complete()
+        return intervals
 
 
 def diarization_spec(backend):
@@ -682,80 +1014,176 @@ def diarize_community(wav_path, models_dir):
     return rows
 
 
-def recognize(audio, models_dir, language, vocabulary, backend="whisperx"):
+def speech_probes(audio, intervals):
+    """Up to three disjoint 30-second speech probes, with original span provenance."""
+    import numpy as np
+    spans = []
+    for row in sorted(intervals, key=lambda row: row["start"]):
+        start, end = max(0, int(row["start"] * 16000)), min(len(audio), int(row["end"] * 16000))
+        if end <= start:
+            continue
+        if spans and start <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], end)
+        else:
+            spans.append([start, end])
+    samples, provenance, size, probes = [], [], 0, []
+    for start, end in spans:
+        while start < end and len(probes) < 3:
+            stop = min(end, start + 480000 - size)
+            sample = np.asarray(audio[start:stop], dtype=np.float32)
+            if np.any(sample):
+                samples.append(sample)
+                provenance.append([start / 16000, stop / 16000])
+                size += len(sample)
+            start = stop
+            if size == 480000:
+                probes.append((np.concatenate(samples), provenance))
+                samples, provenance, size = [], [], 0
+        if len(probes) == 3:
+            break
+    if samples and len(probes) < 3:
+        probes.append((np.concatenate(samples), provenance))
+    return probes
+
+
+def detect_speech_language(pipeline, probes):
+    from whisperx.audio import log_mel_spectrogram
+    evidence = []
+    for audio, spans in probes:
+        features = log_mel_spectrogram(audio, n_mels=pipeline.model.feat_kwargs.get("feature_size", 80),
+                                      padding=480000 - len(audio))
+        probabilities = pipeline.model.model.detect_language(pipeline.model.encode(features))[0]
+        top = [(token[2:-2], float(probability)) for token, probability in probabilities[:5]]
+        evidence.append({"spans": spans, "seconds": len(audio) / 16000, "top_languages": top})
+        # Operational thresholds, not calibrated correctness probabilities.
+        if len(evidence) == 1 and len(audio) >= 160000 and top[0][1] >= .8 and top[0][1] - top[1][1] >= .2:
+            break
+    totals = {}
+    for row in evidence:
+        for language, probability in row["top_languages"]:
+            totals[language] = totals.get(language, 0) + probability * row["seconds"]
+    language = max(totals, key=totals.get)
+    disagreement = len({row["top_languages"][0][0] for row in evidence}) > 1
+    weak = disagreement or max(row["top_languages"][0][1] for row in evidence) < .8
+    result = {"language": language, "weak_or_mixed": weak, "probes": evidence}
+    say("  WhisperX speech language: " + json.dumps(result, ensure_ascii=False))
+    if weak:
+        diagnostic("language detection", "Weak or conflicting speech-language evidence; using weighted language vote.",
+                   evidence=result)
+    return result
+
+
+def recognize(audio, models_dir, language, vocabulary, backend="whisperx", *, voice_intervals=None, evidence=None):
+    started = time.monotonic()
     if backend == "mlx":
-        return recognize_mlx(audio, models_dir, language, vocabulary)
-    return recognize_whisperx(audio, models_dir, language, vocabulary)
+        with StageProgress("MLX", len(audio) / 16000,
+                           recognition_timing_key("mlx.total", backend, language, vocabulary)) as progress:
+            progress.phase("Loading / transcribing")
+            words = recognize_mlx(audio, models_dir, language, vocabulary)
+            progress.complete(record=bool(words))
+        return words
+    words = recognize_whisperx(audio, models_dir, language, vocabulary, voice_intervals=voice_intervals, evidence=evidence)
+    if words and CURRENT_TIMING.get():
+        CURRENT_TIMING.get().record(recognition_timing_key("whisperx.total", backend, language, vocabulary),
+                                    len(audio) / 16000, time.monotonic() - started)
+    return words
 
 
-def recognize_whisperx(audio, models_dir, language, vocabulary):
-    import nltk
-    import torch
-    from whisperx.asr import load_model
-    from whisperx.alignment import load_align_model, align
+def recognize_whisperx(audio, models_dir, language, vocabulary, *, voice_intervals=None, evidence=None):
     spec = model_manifest()["whisperx"]
-    torch.set_num_threads(4)
-    nltk_dir = str(models_dir / spec["nltk"]["directory"])
-    if nltk_dir not in nltk.data.path:
-        nltk.data.path.insert(0, nltk_dir)
-    say("  Transcription: WhisperX large-v3-turbo, CPU int8...")
-    model = load_model(str(models_dir / spec["asr"]), "cpu", compute_type="int8",
-        language=None if language == "auto" else language, local_files_only=True,
-        threads=4, vad_method="pyannote", asr_options={"initial_prompt": vocabulary or None})
-    result = model.transcribe(audio, batch_size=4, language=None if language == "auto" else language)
-    del model
-    gc.collect()
+    probes = speech_probes(audio, voice_intervals or []) if language == "auto" else []
+    if language == "auto" and not probes:
+        say("  No non-silent speech available for WhisperX language detection.")
+        return []
+    duration = len(audio) / 16000
+    with StageProgress("WhisperX recognition", duration,
+                       recognition_timing_key("whisperx.asr", "whisperx", language, vocabulary)) as progress:
+        progress.phase("Loading libraries")
+        import nltk
+        import torch
+        from whisperx.asr import load_model
+        from whisperx.alignment import load_align_model, align
+        torch.set_num_threads(4)
+        nltk_dir = str(models_dir / spec["nltk"]["directory"])
+        if nltk_dir not in nltk.data.path:
+            nltk.data.path.insert(0, nltk_dir)
+        say("  Transcription: WhisperX large-v3-turbo, CPU int8...")
+        progress.phase("Loading model / VAD")
+        model = load_model(str(models_dir / spec["asr"]), "cpu", compute_type="int8",
+            language=None if language == "auto" else language, local_files_only=True,
+            threads=4, vad_method="pyannote", asr_options={"initial_prompt": vocabulary or None})
+        if language == "auto":
+            progress.phase("Detecting speech language")
+            processing_stage("language detection", model="WhisperX Turbo")
+            detection = detect_speech_language(model, probes)
+            language = detection["language"]
+            if evidence is not None:
+                evidence.update(detection)
+        progress.phase("Detecting speech / transcribing")
+        processing_stage("local recognition", model="WhisperX Turbo", language=language)
+        result = model.transcribe(audio, batch_size=4, language=language, task="transcribe", progress_callback=progress.callback)
+        progress.phase("Finalizing recognition")
+        del model
+        gc.collect()
+        progress.complete(record=bool(result["segments"]))
     if not result["segments"]:
         return []
     detected = result["language"]
     if detected not in spec["alignment"]:
         raise AppError(f"WhisperX word alignment is prepared for English and Russian, not '{detected}'. "
                        "Use --transcription-model mlx or gpt-transcribe-online.")
-    try:
-        nltk.data.find("tokenizers/punkt_tab/" + ("english" if detected == "en" else "russian") + "/")
-    except LookupError:
-        raise AppError("WhisperX tokenizer data is unavailable. Run --setup online first.") from None
-    say(f"  Aligning WhisperX words: {detected}...")
-    model, metadata = load_align_model(detected, "cpu",
-        model_name=str(models_dir / spec["alignment"][detected]), model_cache_only=True)
-    aligned = align(result["segments"], model, metadata, audio, "cpu", return_char_alignments=False)
-    words = []
-    duration = len(audio) / 16000
-    for segment in aligned["segments"]:
-        segment_words = segment.get("words", [])
-        previous_end = segment["start"]
-        for index, word in enumerate(segment_words):
-            text = word.get("word", "")
-            if not text.strip():
-                continue
-            uncertain = word.get("start") is None or word.get("end") is None
-            next_start = next((w["start"] for w in segment_words[index + 1:]
-                               if isinstance(w.get("start"), Real) and not isinstance(w["start"], bool)), segment["end"])
-            start = word["start"] if word.get("start") is not None else previous_end
-            if not isinstance(start, Real) or isinstance(start, bool):
-                raise AppError("WhisperX returned invalid word timing.")
-            end = word["end"] if word.get("end") is not None else max(start, next_start)
-            if not isinstance(end, Real) or isinstance(end, bool):
-                raise AppError("WhisperX returned invalid word timing.")
-            start, end = float(start), float(end)
-            if not (math.isfinite(start) and math.isfinite(end) and 0 <= start <= end <= duration + .05):
-                raise AppError("WhisperX returned invalid word timing.")
-            if words and start < words[-1]["start"]:
-                raise AppError("WhisperX returned non-monotonic word timing.")
-            previous_end = end
-            uncertain = uncertain or start == end
-            midpoint = (start + end) / 2
-            source = next((s for s in result["segments"] if s["start"] <= midpoint <= s["end"]), {})
-            # Alignment score is not ASR confidence. Only the source segment's
-            # recognition log probability can flag low-confidence speech here.
-            words.append({"start": start, "end": end, "text": " " + text,
-                "unclear": bool(source.get("avg_logprob", 0) < -1.0),
-                "timing_uncertain": uncertain,
-                "alignment_score": float(word["score"]) if word.get("score") is not None else None,
-                "repetition_suspected": False})
-    del model
-    gc.collect()
-    return words
+    with StageProgress("WhisperX alignment", duration,
+                       recognition_timing_key("whisperx.align", "whisperx", detected, vocabulary)) as progress:
+        try:
+            nltk.data.find("tokenizers/punkt_tab/" + ("english" if detected == "en" else "russian") + "/")
+        except LookupError:
+            raise AppError("WhisperX tokenizer data is unavailable. Run --setup online first.") from None
+        processing_stage("word alignment", language=detected, model="WhisperX Turbo")
+        say(f"  Aligning WhisperX words: {detected}...")
+        progress.phase("Loading alignment model")
+        model, metadata = load_align_model(detected, "cpu",
+            model_name=str(models_dir / spec["alignment"][detected]), model_cache_only=True)
+        progress.phase("Aligning words")
+        aligned = align(result["segments"], model, metadata, audio, "cpu", return_char_alignments=False, progress_callback=progress.callback)
+        progress.phase("Finalizing word timestamps")
+        words = []
+        duration = len(audio) / 16000
+        for segment in aligned["segments"]:
+            segment_words = segment.get("words", [])
+            previous_end = segment["start"]
+            for index, word in enumerate(segment_words):
+                text = word.get("word", "")
+                if not text.strip():
+                    continue
+                uncertain = word.get("start") is None or word.get("end") is None
+                next_start = next((w["start"] for w in segment_words[index + 1:]
+                                   if isinstance(w.get("start"), Real) and not isinstance(w["start"], bool)), segment["end"])
+                start = word["start"] if word.get("start") is not None else previous_end
+                if not isinstance(start, Real) or isinstance(start, bool):
+                    raise AppError("WhisperX returned invalid word timing.")
+                end = word["end"] if word.get("end") is not None else max(start, next_start)
+                if not isinstance(end, Real) or isinstance(end, bool):
+                    raise AppError("WhisperX returned invalid word timing.")
+                start, end = float(start), float(end)
+                if not (math.isfinite(start) and math.isfinite(end) and 0 <= start <= end <= duration + .05):
+                    raise AppError("WhisperX returned invalid word timing.")
+                if words and start < words[-1]["start"]:
+                    raise AppError("WhisperX returned non-monotonic word timing.")
+                previous_end = end
+                uncertain = uncertain or start == end
+                midpoint = (start + end) / 2
+                source = next((s for s in result["segments"] if s["start"] <= midpoint <= s["end"]), {})
+                # Alignment score is not ASR confidence. Only the source segment's
+                # recognition log probability can flag low-confidence speech here.
+                words.append({"start": start, "end": end, "text": " " + text,
+                    "unclear": bool(source.get("avg_logprob", 0) < -1.0),
+                    "timing_uncertain": uncertain,
+                    "alignment_score": float(word["score"]) if word.get("score") is not None else None,
+                    "repetition_suspected": False})
+        del model
+        gc.collect()
+        progress.complete(record=bool(words))
+        return words
 
 
 def recognize_mlx(audio, models_dir, language, vocabulary):
@@ -949,6 +1377,7 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
                 result = json.load(response)
             break
         except urllib.error.HTTPError as exc:
+            diagnostic("text API", f"HTTP {exc.code}", model=model, effort=effort, attempt=attempt + 1)
             try:
                 error = json.loads(exc.read()).get("error", {})
             except (ValueError, OSError):
@@ -974,6 +1403,10 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
         except (urllib.error.URLError, TimeoutError, OSError):
             raise AppError("Could not receive an OpenAI response (network/timeout). The transcript is saved. "
                            "Rerun to reuse the transcript without processing the audio again.") from None
+    if CURRENT_RUN.get() is not None:
+        CURRENT_RUN.get().run.setdefault("text_usage", []).append({
+            "stage": CURRENT_RUN.get().stage, "model": model, "effort": effort,
+            "response_id": result.get("id"), "usage": result.get("usage"), "status": result.get("status")})
     if result.get("status") != "completed":
         reason = (result.get("incomplete_details") or {}).get("reason", "unknown")
         raise AppError(f"OpenAI returned an incomplete response ({reason}); no summary was written.")
@@ -1283,10 +1716,9 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
             badge = final_transcript_badge(transcript)
             badge = f'<span class="processing-badge">{html.escape(badge)}</span>' if badge else ""
             transcript_items.append('<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
-                        'data-title="Final transcript" data-description="Selected pipeline result" '
+                        'data-choice-label="Final version" '
                         f'aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}">'
-                        '<span class="tab-title"><span class="icon-slot">'
-                        '<i class="transcript-icon" aria-hidden="true"></i></span>Final transcript</span>'
+                        '<span class="tab-title">Final transcript</span>'
                         f'<span class="option-meta"><span class="tab-description">Selected pipeline result</span>{badge}</span></button>')
             panel_groups["transcript"].append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
                           f'tabindex="0"{"" if active else " hidden"}>'
@@ -1295,17 +1727,21 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                           f'<div class="transcript-content" dir="auto">{html.escape(transcript)}</div></section>')
             continue
         answer = summaries[detail]
-        description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(detail, "Summary")
-        dots = (f'<span class="detail-dots" data-count="{detail}" aria-hidden="true">'
-                + '<i class="dot"></i>' * detail + '</span>')
+        label, description = {
+            1: ("Key points", "Essentials and decisions"),
+            3: ("Overview", "Main discussion and context"),
+            5: ("Expanded", "Reasoning and alternatives"),
+            10: ("In depth", "All substantive threads"),
+        }.get(detail, ("Summary", f"Detail level {detail} of 10"))
         if detail_index is None:
             detail_index = len(buttons)
             buttons.append("")
         detail_items.append(f'<button type="button" role="tab" id="tab-{detail}" '
-                    f'data-title="Detail {detail}" data-description="{description}" '
+                    f'data-choice-label="{label} · {detail}/10" '
                     f'aria-controls="panel-{detail}" aria-selected="{str(active).lower()}" '
-                    f'tabindex="{0 if active else -1}"><span class="tab-title">{dots}Detail {detail}</span>'
-                    f'<span class="option-meta"><span class="tab-description">{description}</span>{summary_badge}</span></button>')
+                    f'tabindex="{0 if active else -1}"><span class="tab-title">{label}</span>'
+                    f'<span class="tab-description">{description}</span>'
+                    f'<span class="detail-level">{detail}/10</span></button>')
         paragraphs = "\n".join(f'<p>{html.escape(part.strip())}</p>'
                                for part in re.split(r"\n\s*\n", answer.strip()) if part.strip())
         heading = {1: "Brief summary", 3: "Conversation overview", 5: "Expanded summary", 10: "Detailed summary"}.get(detail, "Conversation summary")
@@ -1329,10 +1765,9 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
             transcript_items.append('<div class="menu-heading">Source transcripts</div>')
         badge = "Online" if identifier == "gpt" else "Offline"
         transcript_items.append(f'<button class="source-tab" type="button" role="tab" id="tab-source-{identifier}" '
-                       f'data-title="{title} · {label}" data-description="{description}" '
+                       f'data-choice-label="{title} · {label}" '
                        f'aria-controls="panel-source-{identifier}" aria-selected="false" tabindex="-1">'
-                       '<span class="tab-title"><span class="icon-slot">'
-                       '<i class="transcript-icon" aria-hidden="true"></i></span>'
+                       '<span class="tab-title">'
                        f'{title} · <small class="model-name">{label}</small></span>'
                        f'<span class="option-meta"><span class="tab-description">{description}</span>'
                        f'<span class="processing-badge">{badge}</span></span></button>')
@@ -1341,22 +1776,32 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                       f'<div class="panel-heading"><h2>{title} · {label}</h2>'
                       f'<span>{description}</span></div>'
                       f'<div class="transcript-content" dir="auto">{text}</div></section>')
-    def picker(identifier, title, description, items, icon=""):
+    def picker(identifier, title, description, items, icon):
         return (f'<div class="report-picker" id="{identifier}-picker">'
             f'<button class="picker-toggle" type="button" id="{identifier}-toggle" aria-expanded="false" '
-            f'aria-controls="{identifier}-options" hidden><span class="picker-copy">'
-            f'<span class="picker-title-row">{icon}<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span></span>'
+            f'aria-controls="{identifier}-options" hidden>{icon}<span class="picker-copy">'
+            f'<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span>'
             f'<span class="picker-choice-description" id="{identifier}-choice-description">{description}</span></span>'
             '<span class="picker-arrow" aria-hidden="true">⌄</span></button>'
             f'<div class="picker-options" id="{identifier}-options">' + "\n".join(items) + '</div></div>')
     if transcript_index is not None:
-        buttons[transcript_index] = picker("transcript", "Final transcript", "Selected pipeline result", transcript_items)
+        icon = ('<svg class="picker-icon microphone-icon" viewBox="0 0 24 24" fill="none" '
+                'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" '
+                'aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/>'
+                '<path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>')
+        buttons[transcript_index] = picker("transcript", "Transcript", "Final version", transcript_items, icon)
     if detail_index is not None:
         first = next(level for level in selection if level != "transcript")
-        description = {1: "Brief", 3: "Overview", 5: "Expanded", 10: "Detailed"}.get(first, "Summary")
-        icon = (f'<span class="detail-dots" id="detail-choice-icon" data-count="{first}" aria-hidden="true">'
-                + '<i class="dot"></i>' * first + '</span>')
-        buttons[detail_index] = picker("detail", f"Detail {first}", description, detail_items, icon)
+        label = {1: "Key points", 3: "Overview", 5: "Expanded", 10: "In depth"}.get(first, "Summary")
+        icon = ('<svg class="picker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">'
+                '<path d="M4 6h16M4 12h12M4 18h8"/></svg>')
+        if summary_badge:
+            detail_items.append(f'<div class="menu-footer">{summary_badge}</div>')
+        buttons[detail_index] = picker("detail", "Summary", f"{label} · {first}/10", detail_items, icon)
+    warning = ""
+    if "RECONCILIATION INCOMPLETE —" in transcript:
+        warning = '<p class="reconciliation-warning" role="status">Some parts could not be reconciled. Their source text is retained; see the transcript for time ranges.</p>'
     panels = [panel for group in group_order for panel in panel_groups[group]]
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
@@ -1378,7 +1823,7 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
               "TOPIC": html.escape(metadata["topic"]), "PARTICIPANTS": participants,
               "DURATION": html.escape(metadata["duration"]), "DATE": html.escape(metadata["date"]),
               "DATE_NOTE": " · " + html.escape(metadata["date_note"]) if metadata.get("date_note") else "",
-              "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": "\n".join(panels),
+              "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": warning + "\n".join(panels),
               "GENERATED_ISO": generated_at.isoformat(),
               "GENERATED_FULL": generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")}
     return re.sub(r"@@(TITLE|SOURCE|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS|GENERATED_ISO|GENERATED_FULL)@@",
@@ -1459,9 +1904,13 @@ def gpt_audio_request(wav_path, key, language, vocabulary):
                 result = json.load(response)
             if not isinstance(result, dict) or not isinstance(result.get("text"), str):
                 raise AppError("GPT-Transcribe returned an invalid transcription response.")
+            if CURRENT_RUN.get() is not None:
+                CURRENT_RUN.get().run.setdefault("audio_usage", []).append({
+                    **CURRENT_RUN.get().details, "usage": result.get("usage")})
             say(f"  GPT-Transcribe duration usage: {result.get('usage', {}).get('seconds', '?')} seconds.")
             return result
         except urllib.error.HTTPError as exc:
+            diagnostic("cloud recognition", f"HTTP {exc.code}", model="gpt-transcribe", attempt=attempt + 1)
             try:
                 error = json.loads(exc.read()).get("error", {})
             except (ValueError, OSError):
@@ -1513,6 +1962,8 @@ def transcribe_gpt(wav_path, cache, settings, key, language, vocabulary, force=F
                         writer.setnchannels(1); writer.setsampwidth(2); writer.setframerate(rate)
                         writer.writeframes(reader.readframes(end_frame - start_frame))
                     say(f"  GPT-Transcribe: chunk {index + 1}/{count}...")
+                    processing_stage("cloud recognition", model="gpt-transcribe", part=index + 1,
+                                     start=start_frame / rate, end=end_frame / rate)
                     result = request_fn(part, key, language, vocabulary)
                 chunk = {"index": index, "start": start_frame / rate, "end": end_frame / rate,
                          "text": result["text"], "languages": result.get("languages", []),
@@ -1599,6 +2050,7 @@ def supported_speaker_names(rows, anchors, corrected, cloud_text):
             continue
         supported.append({**row, "name": name, "last_anchor": max(a["id"] for a in citations)})
     if len(supported) != len(rows):
+        diagnostic("speaker names", "Unsupported speaker-name evidence ignored; fixed voice IDs retained.", evidence=rows)
         say("  Ignoring unsupported speaker-name evidence; fixed voice IDs are retained.")
     return supported
 
@@ -1620,8 +2072,43 @@ def resolve_speaker_names(candidates):
     return resolved
 
 
+def validate_reconciliation(result, primary, single_source):
+    """Reject structural/speech loss; recover speaker-only annotation loss locally."""
+    if not isinstance(result, dict) or not isinstance(result.get("turns"), list):
+        raise AppError("Fusion returned an invalid anchor list.")
+    rows = result["turns"]
+    ids = [row.get("id") if isinstance(row, dict) else None for row in rows]
+    expected = [a["id"] for a in primary]
+    if len(rows) != len(primary) or ids != expected:
+        raise AppError(f"Fusion changed, duplicated, or omitted fixed anchor IDs: expected {expected}, received {ids}.")
+    recovered = []
+    texts = {}
+    for anchor, row in zip(primary, rows):
+        if set(row) != {"id", "text"} or type(row["id"]) is not int or not isinstance(row["text"], str):
+            raise AppError("Fusion returned unexpected anchor fields or non-text content.")
+        text = row["text"].strip()
+        if single_source and (not text and anchor["text"].strip()
+                or any(text.count(marker) < anchor["text"].count(marker)
+                       for marker in ("low-confidence speech", "unintelligible"))):
+            raise AppError(f"Single-source reconciliation removed speech or uncertainty at anchor {anchor['id']}.")
+        if text.count("speaker uncertain") < anchor["text"].count("speaker uncertain"):
+            # Exact corrected span alignment is unknown. Conservatively mark the
+            # whole corrected turn, retaining the precise original in raw sources.
+            recovered.append(anchor["id"])
+            text = "[speaker uncertain: " + (text or anchor["text"]) + "]"
+        texts[anchor["id"]] = text
+    extra = result.get("unassigned_text")
+    if not isinstance(extra, str):
+        raise AppError("Fusion returned invalid unassigned speech.")
+    if single_source and extra.strip():
+        raise AppError("Single-source reconciliation invented unassigned speech.")
+    if not isinstance(result.get("speaker_names"), list):
+        raise AppError("Fusion returned an invalid speaker-name list.")
+    return texts, recovered
+
+
 def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False, call=None,
-                     *, single_source=False, additional_turns=None):
+                     *, single_source=False, additional_turns=None, issues=None):
     """Edit text and propose display names; never change voice IDs or timestamps."""
     call = call or api_request
     prompt = SINGLE_SOURCE_PROMPT if single_source else FUSION_PROMPT
@@ -1654,45 +2141,57 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         path = cache / "fusion" / (signature + ".json")
         result = None if force else read_json(path)
-        if result is None:
-            say(f"  GPT final reconciliation: {model}, reasoning={effort}, part {position + 1}/{len(chunks)}...")
-            answer = call(key, model, effort, prompt, json.dumps(payload, ensure_ascii=False),
-                          schema=fusion_schema(), max_output_tokens=20000)
+        failure = None
+        for attempt in range(3):
+            answer = None
             try:
-                result = json.loads(answer)
-            except (ValueError, TypeError):
-                raise AppError("Fusion returned invalid JSON; local log retained.") from None
-        if not isinstance(result, dict) or not isinstance(result.get("turns"), list):
-            raise AppError("Fusion returned an invalid anchor list.")
-        expected = [a["id"] for a in primary]
-        rows = result["turns"]
-        ids = [row.get("id") for row in rows if isinstance(row, dict)]
-        if ids != expected or any(type(i) is not int for i in ids):
-            raise AppError("Fusion changed, duplicated, or omitted fixed anchor IDs.")
-        for anchor, row in zip(primary, rows):
-            if set(row) != {"id", "text"}:
-                raise AppError("Fusion returned unexpected anchor fields.")
-            text = row.get("text")
-            if not isinstance(text, str):
-                raise AppError("Fusion returned non-text content.")
-            if text.count("speaker uncertain") < anchor["text"].count("speaker uncertain"):
-                raise AppError("Fusion removed a speaker-uncertainty marker; local log retained.")
-            if single_source and (not text.strip() and anchor["text"].strip()
-                    or any(text.count(marker) < anchor["text"].count(marker)
-                           for marker in ("low-confidence speech", "unintelligible"))):
-                raise AppError("Single-source reconciliation removed speech or uncertainty.")
-            corrected[anchor["id"]] = text.strip()
-        extra = result.get("unassigned_text")
-        if not isinstance(extra, str):
-            raise AppError("Fusion returned invalid unassigned speech.")
-        if single_source and extra.strip():
-            raise AppError("Single-source reconciliation invented unassigned speech.")
-        if extra.strip():
-            supplements.append({"start": chunk["start"], "end": chunk["end"], "text": extra.strip()})
-        current_text = {row["id"]: row["text"] for row in rows}
-        name_candidates.extend(supported_speaker_names(result.get("speaker_names"), primary + context_anchors,
-            current_text, "\n\n".join(c["text"] for c in context)))
-        save_json(path, result)
+                if result is None:
+                    say(f"  GPT final reconciliation: {model}, reasoning={effort}, part {position + 1}/{len(chunks)}, attempt {attempt + 1}/3...")
+                    request = dict(payload)
+                    if failure:
+                        request["validation_feedback"] = {"error": failure,
+                            "instruction": "Correct this validation failure using the original sources. Return all primary anchors."}
+                    answer = call(key, model, effort, prompt, json.dumps(request, ensure_ascii=False),
+                                  schema=fusion_schema(), max_output_tokens=20000)
+                    try:
+                        result = json.loads(answer)
+                    except (ValueError, TypeError):
+                        raise AppError("Fusion returned invalid JSON.") from None
+                texts, recovered = validate_reconciliation(result, primary, single_source)
+                candidates = supported_speaker_names(result["speaker_names"], primary + context_anchors,
+                    texts, "\n\n".join(c["text"] for c in context))
+            except (AppError, OSError, ValueError) as exc:
+                failure = str(exc)
+                rejected = {"part": position + 1, "start": chunk["start"], "end": chunk["end"],
+                            "attempt": attempt + 1, "model": model, "effort": effort,
+                            "error": failure, "response": answer if answer is not None else result}
+                save_json(cache / "fusion-rejected" / (signature + f"-{time.time_ns()}.json"), redacted(rejected, key))
+                diagnostic("reconciliation", failure, **{k: v for k, v in rejected.items() if k != "error"})
+                # Transport/auth/quota failures already have their own policy in
+                # api_request; corrective retries are for returned content only.
+                if result is None and answer is None:
+                    break
+                result = None
+                continue
+            if recovered:
+                diagnostic("reconciliation", "Restored speaker uncertainty conservatively on corrected turns.",
+                           part=position + 1, anchors=recovered, model=model, effort=effort, response=result)
+            corrected.update(texts)
+            extra = result["unassigned_text"]
+            if extra.strip():
+                supplements.append({"start": chunk["start"], "end": chunk["end"], "text": extra.strip()})
+            name_candidates.extend(candidates)
+            save_json(path, result)
+            failure = None
+            break
+        if failure:
+            issue = {"part": position + 1, "start": chunk["start"], "end": chunk["end"], "error": redacted(failure, key)}
+            if issues is not None:
+                issues.append(issue)
+            corrected.update({a["id"]: a["text"] for a in primary})
+            if CURRENT_RUN.get() is not None:
+                CURRENT_RUN.get().partial = True
+            say(f"  WARNING: Reconciliation part {position + 1} unresolved; source text retained for this part.")
     if set(corrected) != set(range(len(local_turns))):
         raise AppError("Fusion did not cover all local anchors.")
     turns = [{**turn, "text": corrected[i]} for i, turn in enumerate(local_turns) if corrected[i]]
@@ -1721,8 +2220,8 @@ def output_state_path(cache, log_path):
     return cache / "outputs" / identity / "state.json"
 
 
-def local_recognition(wav_path, cache, settings, args, *, voice_intervals=None):
-    """Reuse the local stages independently of the chosen final transcript model."""
+def local_checkpoints(cache, settings, args):
+    """The same reuse decisions serve both the forecast and actual execution."""
     backend = settings["recognizer"]["backend"]
     voice_path = cache / "voices-stage.json"
     shared_word_path, backend_word_path = cache / "words-stage.json", cache / f"words-stage-{backend}.json"
@@ -1748,6 +2247,64 @@ def local_recognition(wav_path, cache, settings, args, *, voice_intervals=None):
             words = alternate
     voices_ready = not args.force and voices.get("settings") == voice_settings
     words_ready = not args.force and matches_words(words)
+    return backend, word_path, voices, words, voice_settings, word_settings, voices_ready, words_ready
+
+
+def forecast_local(wav_path, cache, settings, args):
+    try:
+        with wave.open(str(wav_path)) as reader:
+            duration = reader.getnframes() / reader.getframerate()
+    except (OSError, EOFError, wave.Error):
+        say("  Initial local estimate unavailable: audio duration could not be read.")
+        return
+    say(f"  Recording duration: {clock(duration)}")
+    if args.transcription_model == ONLINE_MODE:
+        say("  No local model stages; API recognition/reconciliation/report time is not estimated.")
+        return
+    plans = [(settings, args.transcription_model)]
+    if args.transcription_model == ALL_MODE:
+        mlx = {k: v for k, v in settings.items() if k != "additional_recognizers"}
+        mlx["recognizer"] = settings["additional_recognizers"]["mlx"]
+        plans.append((mlx, "mlx"))
+    jobs, reused, unestimated = [], [], []
+    for i, (configuration, _) in enumerate(plans):
+        backend, _, _, _, _, _, voices_ready, words_ready = local_checkpoints(cache, configuration, args)
+        if i == 0:
+            name = "Nemotron 3" if args.diarization_model == "nemotron" else "Community-1"
+            if voices_ready:
+                reused.append(name)
+            elif args.diarization_model == "nemotron":
+                jobs.append((name, timing_key("nemotron", diarization_spec("nemotron")["identity"])))
+            else:
+                unestimated.append(name)
+        name = "WhisperX recognition + alignment" if backend == "whisperx" else "MLX recognition"
+        if words_ready:
+            reused.append(name)
+        else:
+            jobs.append((name, recognition_timing_key(backend + ".total", backend, args.language, args.vocabulary)))
+    say("  Local stages to execute: " + (", ".join(name for name, _ in jobs) + (", " if jobs and unestimated else "") + ", ".join(unestimated) or "none"))
+    say("  Reusing local checkpoints: " + (", ".join(reused) or "none"))
+    estimates = []
+    for name, key in jobs:
+        estimate = CURRENT_TIMING.get().estimate(key, duration) if CURRENT_TIMING.get() else None
+        if estimate:
+            estimates.append(estimate)
+        else:
+            unestimated.append(name)
+    if estimates:
+        low, high = sum(e["low"] for e in estimates), sum(e["high"] for e in estimates)
+        label = "Estimated local processing time" if not unestimated else "Estimated known local stages only"
+        say(f"  {label}: ~{approximate_time(low)}–{approximate_time(high)} (comparable successful runs on this machine).")
+    if unestimated:
+        say("  No comparable timing history for: " + ", ".join(unestimated) + ". Live ETA will use observed progress when available.")
+    elif not jobs:
+        say("  No local model computation needed; reused stages add no forecast time.")
+    say("  API/reconciliation/report time and audio extraction are not included in the local estimate.")
+
+
+def local_recognition(wav_path, cache, settings, args, *, voice_intervals=None):
+    """Reuse the local stages independently of the chosen final transcript model."""
+    backend, word_path, voices, words, voice_settings, word_settings, voices_ready, words_ready = local_checkpoints(cache, settings, args)
     with wave.open(str(wav_path)) as reader:
         duration = reader.getnframes() / reader.getframerate()
         if not reader.getnframes():
@@ -1762,15 +2319,20 @@ def local_recognition(wav_path, cache, settings, args, *, voice_intervals=None):
         intervals = voices["intervals"]
         say(f"  Reusing {args.diarization_model} automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
     else:
+        processing_stage("diarization")
         intervals = diarize(wav_path, args.models_dir, args.diarization_model)
-        save_json(voice_path, {"settings": voice_settings, "intervals": intervals})
+        save_json(cache / "voices-stage.json", {"settings": voice_settings, "intervals": intervals})
     if words_ready:
         recognized = words["words"]
         say(f"  Reusing saved {backend} words.")
     else:
+        processing_stage("local recognition", model=backend)
+        evidence = {}
         recognized = recognize(audio, args.models_dir, args.language, args.vocabulary,
-                               settings["recognizer"]["backend"]) if intervals else []
-        save_json(word_path, {"settings": word_settings, "duration": duration, "words": recognized})
+                               settings["recognizer"]["backend"], voice_intervals=intervals,
+                               evidence=evidence) if intervals else []
+        save_json(word_path, {"settings": word_settings, "duration": duration, "words": recognized,
+                             "language_evidence": evidence})
     turns = assign_speakers(recognized, intervals)
     result = {"duration": duration, "words": recognized, "voices": intervals, "turns": turns}
     save_json(cache / (f"recognition-{backend}.json" if args.transcription_model == ALL_MODE else "recognition.json"), result)
@@ -2165,7 +2727,7 @@ def saved_source_reports(state, transcript):
     return reports
 
 
-def process_file(source, args, key):
+def process_file(source, args, key, *, prepare_models=False):
     configure_mode(args)
     if completed_pair(source, args):
         say(f"  Skipping {source.name}: the log and a summary (.md or .html) already exist.")
@@ -2183,7 +2745,29 @@ def process_file(source, args, key):
         if completed_pair(source, args):
             say(f"  Skipping {source.name}: both output files already exist.")
             return
-        return _process_file(source, args, "" if args.offline else key)
+        diagnostics = RunDiagnostics(source, output_paths(source, args.output_dir)[1], key)
+        diagnostics.run["transcription_model"] = args.transcription_model
+        model, effort = args.summarize_model or (DEFAULT_MODEL, DEFAULT_EFFORT)
+        diagnostics.run["text_model"] = {"model": model, "effort": effort}
+        token = CURRENT_RUN.set(diagnostics)
+        timing_token = CURRENT_TIMING.set(TimingHistory(args.cache_dir / "timings.json"))
+        try:
+            if prepare_models and not args.summary_only and args.transcription_model != ONLINE_MODE:
+                processing_stage("model preparation")
+                ensure_models(args.models_dir, args.offline, args.verify_models,
+                              transcription_model=args.transcription_model, diarization_model=args.diarization_model)
+            processing_stage("output validation")
+            result = _process_file(source, args, "" if args.offline else key)
+        except BaseException as exc:
+            diagnostics.event(diagnostics.stage, str(exc) or type(exc).__name__, **diagnostics.details)
+            diagnostics.finish("interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
+            raise
+        else:
+            diagnostics.finish("partial" if diagnostics.partial else "complete")
+            return result
+        finally:
+            CURRENT_TIMING.reset(timing_token)
+            CURRENT_RUN.reset(token)
 
 
 def recognition_settings(source, args):
@@ -2212,7 +2796,7 @@ def _process_file(source, args, key):
     if not args.offline:
         selection["fusion"] = {"model": fusion_model, "effort": fusion_effort,
                                "prompt": hashlib.sha256((FUSION_PROMPT + SINGLE_SOURCE_PROMPT).encode()).hexdigest(),
-                               "version": 2}
+                               "version": 3}
     state_path = output_state_path(cache, log_path)
     state = read_json(state_path, {})
     # Legacy state belonged to the old input-adjacent/default log. It can prove
@@ -2272,14 +2856,17 @@ def _process_file(source, args, key):
         with tempfile.TemporaryDirectory(prefix="scribe-audio-", dir=temporary) as tmp:
             wav_path = Path(tmp) / "audio.wav"
             say("  Extracting audio (first audio track)...")
+            processing_stage("audio extraction")
             extract_audio(source, wav_path)
             if args.monitor_dir is not None and (monitor_snapshot(source) != args.monitor_expected_snapshot
                                                 or source_signature(source) != settings["source"]):
                 raise AppError("Source changed during audio extraction; no recognition request was started.")
+            forecast_local(wav_path, cache, settings, args)
             if args.transcription_model in (ONLINE_MODE, COMBINED_MODE, ALL_MODE):
                 gpt_settings = {"source": settings["source"], "language": args.language,
                                 "vocabulary": args.vocabulary, "model": "gpt-transcribe", "request_version": 1}
                 try:
+                    processing_stage("cloud recognition")
                     gpt_chunks = transcribe_gpt(wav_path, cache, gpt_settings, key,
                                                 args.language, args.vocabulary, args.force)
                     if not any(c["text"].strip() for c in gpt_chunks):
@@ -2291,6 +2878,7 @@ def _process_file(source, args, key):
                     if args.transcription_model == ONLINE_MODE:
                         raise
                     gpt_error = str(exc).replace(key, "[key redacted]") if key else str(exc)
+                    diagnostic("cloud recognition", gpt_error)
                     state["gpt_error"] = gpt_error
                     action = "Using the local text for final GPT reconciliation."
                     say("  WARNING: " + gpt_error + " " + action)
@@ -2326,6 +2914,7 @@ def _process_file(source, args, key):
         state["source_mode"] = args.transcription_model if args.offline else "unreconciled-fallback"
         save_json(state_path, state)
         if not args.offline:
+            source_transcript = transcript
             try:
                 if local is None:
                     anchors = [{"start": c["start"], "end": c["end"], "speaker": None, "text": c["text"]}
@@ -2336,8 +2925,14 @@ def _process_file(source, args, key):
                 reconcile_options = {"single_source": True} if single_source else {}
                 if mlx_local is not None:
                     reconcile_options["additional_turns"] = mlx_local["turns"]
+                processing_stage("reconciliation", model=fusion_model, effort=fusion_effort)
+                issues = []
+                reconcile_options["issues"] = issues
                 turns, supplements = fuse_transcripts(gpt_chunks if gpt_chunks is not None else transcript_chunks(anchors),
                     anchors, cache, key, fusion_model, fusion_effort, args.force, **reconcile_options)
+                if issues:
+                    state["reconciliation_issues"] = issues
+                    state["fusion_error"] = "Some reconciliation parts remain unresolved."
                 if local is None:
                     final_chunks = [{"start": t["start"], "end": t["end"], "text": t["text"]} for t in turns]
                     transcript = gpt_transcript_text(source, final_chunks).replace(
@@ -2350,15 +2945,29 @@ def _process_file(source, args, key):
                         provenance += "; MLX comparison source included"
                     transcript = transcript_text(source, local["duration"], turns,
                         provenance=provenance + f"; reconciled by {fusion_model}", supplements=supplements)
+                all_failed = bool(issues) and len(issues) == len(gpt_chunks if gpt_chunks is not None else transcript_chunks(anchors))
+                if issues:
+                    warning = "RECONCILIATION INCOMPLETE — source text retained in unresolved parts:\n"
+                    warning += "\n".join(f"Part {i['part']}: {clock(i['start'])}–{clock(i['end'])}" for i in issues)
+                    if all_failed:
+                        transcript = source_transcript
+                    transcript += "\n" + warning + "\n"
                 atomic_write(log_path, transcript)
-                state["pipeline_complete"] = args.transcription_model != ALL_MODE or gpt_chunks is not None
-                state["source_mode"] = "gpt-reconciled"
+                state["pipeline_complete"] = not issues and (args.transcription_model != ALL_MODE or gpt_chunks is not None)
+                state["source_mode"] = "unreconciled-fallback" if all_failed else ("partially-reconciled" if issues else "gpt-reconciled")
                 state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
                 state["source_reports"]["transcript_sha256"] = state["transcript_sha256"]
                 save_json(state_path, state)
             except (AppError, OSError, ValueError) as exc:
                 message = str(exc).replace(key, "[key redacted]") if key else str(exc)
+                diagnostic("reconciliation", message, model=fusion_model, effort=fusion_effort)
+                if CURRENT_RUN.get() is not None:
+                    CURRENT_RUN.get().partial = True
                 state["fusion_error"] = message
+                transcript = source_transcript + "\nRECONCILIATION INCOMPLETE — source text retained for the entire recording.\n"
+                atomic_write(log_path, transcript)
+                state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
+                state["source_reports"]["transcript_sha256"] = state["transcript_sha256"]
                 save_json(state_path, state)
                 say("  WARNING: " + message + " Final GPT reconciliation failed; retaining the unreconciled source log.")
         say(f"  Saved: {log_path}")
@@ -2371,6 +2980,8 @@ def _process_file(source, args, key):
         archive_summaries(all_summaries, state_path)
         state.pop("summary", None)
         save_json(state_path, state)
+    if CURRENT_RUN.get() is not None and not state.get("pipeline_complete", True):
+        CURRENT_RUN.get().partial = True
     if args.summarize_model is None:
         return
     model, effort = args.summarize_model
@@ -2398,12 +3009,14 @@ def _process_file(source, args, key):
             say(f"  Reusing completed summary detail {level}/10 from the interrupted request.")
         else:
             say(f"  Summarizing the final log with OpenAI: {model}, reasoning={effort}, detail={level}/10...")
+            processing_stage(f"summary level {level}", model=model, effort=effort)
             answer = summarize(transcript, key, model, effort, detail=level)
             if not isinstance(answer, str) or not answer.strip():
                 raise AppError(f"Summary detail {level}/10 was empty; existing summaries are preserved.")
             answers[str(level)] = answer
             save_json(pending_path, {"settings": summary_settings, "answers": answers})
         summaries[level] = answer
+    processing_stage("report header", model=model, effort=effort)
     extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
     content = summary_html(source, summaries, report_header(source, transcript, extracted),
                            transcript=transcript, tabs=args.report_tabs,
@@ -2411,6 +3024,7 @@ def _process_file(source, args, key):
     if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:
         # Once generation succeeds, do not leave the other format describing an old log.
         archive_summaries([path for path in all_summaries if path != summary_path], state_path)
+    processing_stage("report publication")
     atomic_write(summary_path, content)
     state["summary"] = summary_settings
     save_json(state_path, state)
@@ -2528,7 +3142,7 @@ def process_files(files, args):
     if not pending:
         say(f"Done: 0; skipped: {skipped}; failed: 0.")
         return 0
-    destinations = [p for f in pending for p in output_paths(f, args.output_dir)]
+    destinations = [p for f in pending for p in (*output_paths(f, args.output_dir), output_paths(f, args.output_dir)[1].with_suffix(".err"))]
     if len(set(destinations)) != len(destinations):
         raise AppError("Input files have colliding output names. Use separate --output-dir locations or rename the inputs.")
     # Libraries must not silently download models during local inference.
@@ -2549,14 +3163,13 @@ def process_files(files, args):
         key = ""
     if args.summary_only and not key:
         raise AppError("OPENAI_API_KEY is required for --summary-only. Set it in .env.")
-    if not args.summary_only and args.transcription_model != ONLINE_MODE:
-        ensure_models(args.models_dir, args.offline, args.verify_models,
-                      transcription_model=args.transcription_model, diarization_model=args.diarization_model)
+    models_ready = False
     errors = 0
     for i, source in enumerate(pending, 1):
         say(f"\n[{i}/{len(pending)}] {source}")
         try:
-            process_file(source, args, key)
+            process_file(source, args, key, prepare_models=not models_ready)
+            models_ready = True
         except (AppError, OSError, RuntimeError, ValueError, ImportError) as exc:
             errors += 1
             # Key is never intentionally logged; redact it even from third-party errors.

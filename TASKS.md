@@ -129,9 +129,16 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-076 | Generate two visual concepts for summary and transcript menus | Done | 2026-11-08 | 2026-11-08 |
 | SCR-077 | [Implement compact Summary and Transcript report menus](data/comparison/menu-naming-preview/IMPLEMENTATION_VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-078 | Regenerate the single-speaker recording report and open it in Chrome | In Progress | 2026-11-08 | — |
-| SCR-079 | Generate a log and summary report for the supplied July recording | In Progress | 2026-11-08 | — |
+| SCR-079 | Generate a log and summary report for the supplied July recording | Done | 2026-11-08 | 2026-11-08 |
 | SCR-080 | Draft a concise GitHub README and documentation migration plan | Done | 2026-11-08 | 2026-11-08 |
 | SCR-081 | Adopt the concise README and detailed usage guide | Done | 2026-11-08 | 2026-11-08 |
+| SCR-082 | [Inspect console output and retained reconciliation failure diagnostics](data/comparison/july-recording-run/console-excerpt.txt) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-083 | [Investigate English WhisperX output for Russian audio and downstream fallback](data/comparison/july-language-investigation/README.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-084 | [Make reconciliation resilient to imperfect recognition sources](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-085 | [Detect WhisperX language from speech instead of leading silence](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-086 | [Save per-recording processing errors beside the HTML report](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-087 | Regenerate the July report after fixes while preserving cloud recognition caches | In Progress | 2026-11-08 | — |
+| SCR-088 | [Add local model progress and processing time estimates](data/comparison/progress-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
 
 ### SCR-073
 

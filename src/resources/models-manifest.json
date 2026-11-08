@@ -788,7 +788,7 @@
       "threads": 4,
       "batch_size": 4,
       "beam_size": 5,
-      "adapter_version": 1
+      "adapter_version": 2
     },
     "asr": "whisperx/turbo",
     "alignment": {

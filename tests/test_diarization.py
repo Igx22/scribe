@@ -140,7 +140,7 @@ class NemotronTests(unittest.TestCase):
                                 {"start": .5, "end": 2.5, "speaker": 7}]}
             seen = []
             with patch.dict(os.environ, {"HF_TOKEN": "secret", "OPENAI_API_KEY": "secret"}), \
-                    patch.object(app.subprocess, "run", self.native_response(raw, seen)), \
+                    patch.object(app, "run_native", self.native_response(raw, seen)), \
                     patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")):
                 intervals = app.diarize(audio, models)
             self.assertEqual(intervals, [{"start": .5, "end": 2.5, "speaker": 1},
@@ -156,17 +156,17 @@ class NemotronTests(unittest.TestCase):
     def test_native_silence_and_invalid_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             audio, models = self.native_fixture(Path(tmp))
-            with patch.object(app.subprocess, "run", self.native_response({"segments": []})):
+            with patch.object(app, "run_native", self.native_response({"segments": []})):
                 self.assertEqual(app.diarize(audio, models), [])
             invalid = [None, {}, {"segments": "bad"}, {"segments": [None]}]
             for values in ((-1,1,1), (0,0,1), (0,5,1), (float("nan"),1,1),
                            (0,float("inf"),1), (True,1,1), (0,1,9), (0,1,True)):
                 invalid.append({"segments": [dict(zip(("start","end","speaker"), values))]})
             for payload in invalid:
-                with self.subTest(payload=payload), patch.object(app.subprocess, "run", self.native_response(payload)):
+                with self.subTest(payload=payload), patch.object(app, "run_native", self.native_response(payload)):
                     with self.assertRaisesRegex(app.AppError, "invalid"):
                         app.diarize(audio, models)
-            with patch.object(app.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "bad weights")):
+            with patch.object(app, "run_native", return_value=subprocess.CompletedProcess([], 1, "", "bad weights")):
                 with self.assertRaisesRegex(app.AppError, "bad weights"):
                     app.diarize(audio, models)
 

@@ -96,6 +96,23 @@ or model directory is required.
 The CLI uses automatic language detection and no custom vocabulary prompt. Internal
 backend fields retain those default values and the existing checkpoint schema,
 so removing their CLI overrides does not invalidate default recognition caches.
+WhisperX language detection now probes speech selected from existing voice intervals,
+merging overlaps and bounding work to three disjoint 30-second speech probes. A
+first probe with at least ten seconds, top probability >=0.8 and margin >=0.2 ends
+selection early; otherwise duration-weighted probabilities select the language.
+These are operational heuristics, not calibrated accuracy guarantees. Weak or mixed
+results are reported. The original waveform is retained for ASR/alignment; explicit
+internal language selections bypass probing. Word checkpoints retain probe evidence.
+The WhisperX adapter identity changed to 2, invalidating old words but preserving
+compatible cloud/voice stages. Completed output pairs still skip unchanged.
+
+SCR-083 established that raw-first-30-second detection chose English on digital
+silence; a later speech window selected Russian. SCR-085's production detector was
+also checked locally on speech from the cached July-recording intervals: Russian
+0.9989 on 27.08 seconds of speech within the first 100 seconds of audio. This is
+one language-selection smoke check, not a full-recording accuracy benchmark.
+Private evidence: [investigation](../data/comparison/july-language-investigation/README.md)
+and [implementation checks](../data/comparison/reconciliation-resilience-preview/VERIFICATION.md).
 Tests and isolated experiments may set `args.cache_dir` and `args.models_dir` on
 the parsed namespace; CLI path overrides are no longer accepted. Main-entry tests
 use `tests.runtime_paths()` to keep temporary paths isolated while loading `.env`
@@ -125,12 +142,28 @@ the configured report model/effort controls both, with the default used when
 reports are disabled. Summary-only processing preserves the saved final log and
 never repeats recognition or reconciliation.
 
-Reconciliation cannot move anchors, change voice assignments, omit/duplicate
-anchors or erase uncertainty markers. Single-source review cannot invent
-unassigned speech. Preserve the usable source log before text API calls; failed
-reconciliation leaves an explicit fallback and an incomplete final stage for
-retry. Combined recognition can fall back to local text if cloud recognition
-fails; API-only recognition must not silently substitute a local model.
+Reconciliation cannot move anchors, change voice assignments or omit/duplicate
+anchors. Single-source review cannot erase speech/recognition uncertainty or invent
+unassigned speech. Speaker-only annotation loss is recoverable: retain corrected
+words, conservatively mark the whole affected turn uncertain, and keep the exact
+original in raw sources. Corrected uncertain spans cannot establish names alone.
+
+Returned-content validation failures receive two corrective retries per part.
+Transport/authentication/quota errors retain their own retry policy. Rejected
+responses and precise errors are saved before retry; successful parts are cached.
+After exhausted recovery, retain only the unresolved part's primary-source text
+and continue later parts. Partial logs list unresolved ranges, HTML shows a notice,
+and state remains incomplete. Accepted parts can supply citation-validated names.
+Summaries read this explicit partial log. API-only mode never substitutes local
+recognition or invents speakers. Original sources remain available.
+
+Output-scoped `meeting.summary.err` is an atomic JSON history containing failed and
+recovered attempts, diagnostics, rejected responses and available API usage. No
+sidecar is created on a clean first run; a clean rerun records completion in existing
+history. Completed-pair skips change nothing. Ownership and output locks protect
+history; unknown/symlink sidecars stay untouched. Credentials are redacted, but
+transcript excerpts remain private data. Recording-stage failures, including model
+preparation, are recorded; unassigned CLI/configuration errors stay on the console.
 
 Speaker names are display metadata, resolved across the whole recording from
 validated evidence attached to fixed voices. Supported introductions and coherent
@@ -199,8 +232,9 @@ The prompts prohibit invented facts, speech, speakers, decisions, and deadlines.
 Fusion can change text but cannot change anchor IDs, internal speaker IDs, or times.
 Transcript-supported display names are returned separately as `speaker_names`;
 the caller applies them to the fixed voices after resolving the whole recording.
-The application rejects responses that omit or duplicate anchors or remove existing
-speaker-uncertainty markers; it saves the usable local log instead.
+The application rejects responses that omit or duplicate anchors; bounded recovery
+retains source text for unresolved parts. Speaker-marker loss is repaired conservatively
+without discarding corrected words.
 
 Transcripts over 180,000 characters are processed into notes for every part, with
 further reduction layers if necessary. The end of a long recording is not simply
@@ -237,6 +271,22 @@ Names come from final-log turn labels. Duration and recording date come from log
 metadata or a valid, unambiguous ISO date/time embedded in the filename, never
 filesystem timestamps or model guesses. The separate Generated stamp stores an
 aware UTC rendering instant and is formatted in the viewer's timezone.
+
+## Local progress and timing
+
+Local progress/ETA (SCR-088) uses optional bounded `data/.cache/timings.json`,
+grouped by stage, model/runtime settings, machine fingerprint, Python/requirements.
+Only successful computed stages teach rates; cached work adds no forecast time.
+Median rates/pairwise slopes and conservative ranges model loading overhead when
+supported. Startup forecasts follow extraction and exclude setup, extraction and
+unmeasured API/report work. Missing history is explicit; the first Nemotron run
+can have no numeric ETA. WhisperX recognition/alignment callbacks supply segment
+progress; elapsed-time heartbeats never imply inference progress. Nemotron uses
+one stateful process with streamed bounded diagnostics, no inferred percentage,
+and terminate/kill/reap cleanup. Optional history is atomic, bounded-lock merged,
+and never required for success. No recognition identities/settings changed.
+See [usage](USAGE.md#progress-and-time-estimates) and private
+[verification/example](../data/comparison/progress-preview/VERIFICATION.md).
 
 ## Recording monitor
 
@@ -394,3 +444,8 @@ fusion: a lower token price does not establish equivalent transcript quality.
 Official references: [API pricing](https://developers.openai.com/api/docs/pricing),
 [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), and
 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna).
+
+SCR-084–086 checks additionally cover leading silence, overlapping/short speech
+probes, language voting and explicit decoding, bounded part retries and resume,
+nonfatal speaker-marker recovery, partial report notices/source snapshots, and
+error-file history, early failures, ownership/symlink protection and redaction.

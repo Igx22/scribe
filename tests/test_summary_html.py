@@ -43,28 +43,6 @@ class EmbeddedLog(HTMLParser):
             self.text.append(text)
 
 
-class DetailDots(HTMLParser):
-    def __init__(self, text):
-        super().__init__()
-        self.level = None
-        self.counts = {}
-        self.hidden = []
-        self.feed(text)
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "span" and attrs.get("class") == "detail-dots":
-            self.level = int(attrs["data-count"])
-            self.counts[self.level] = 0
-            self.hidden.append(attrs.get("aria-hidden"))
-        if tag == "i" and attrs.get("class") == "dot":
-            self.counts[self.level] += 1
-
-    def handle_endtag(self, tag):
-        if tag == "span":
-            self.level = None
-
-
 class SummaryHtmlTests(unittest.TestCase):
     def setUp(self):
         final = patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, []))
@@ -183,20 +161,36 @@ class SummaryHtmlTests(unittest.TestCase):
         self.assertEqual(sum(tag == "script" for tag, attrs in elements), 1)
         self.assertFalse(any(tag in ("img", "link", "iframe", "object", "embed") for tag, attrs in elements))
         self.assertFalse(any(key in attrs for tag, attrs in elements for key in ("src", "href", "srcset")))
-        icon = [attrs for tag, attrs in elements if attrs.get("class") == "transcript-icon"]
-        self.assertEqual(icon, [{"class": "transcript-icon", "aria-hidden": "true"}])
+        icons = [attrs for tag, attrs in elements if tag == "svg" and "microphone-icon" in attrs.get("class", "")]
+        self.assertEqual(len(icons), 1)
+        self.assertEqual(icons[0]["aria-hidden"], "true")
+        self.assertEqual(icons[0]["focusable"], "false")
+        self.assertEqual(icons[0]["fill"], "none")
+        trigger = rendered.split('id="transcript-toggle"')[1].split('id="transcript-options"')[0]
+        self.assertLess(trigger.index("microphone-icon"), trigger.index(">Transcript</span>"))
 
     def test_long_log_is_embedded_without_truncation(self):
         transcript = "BEGIN_LOG\n" + "Long conversation. " * 20000 + "\nEND_LOG\n"
         rendered = app.summary_html(Path("meeting.mkv"), {1: "Brief.", 10: "Detailed."}, transcript=transcript)
         self.assertEqual("".join(EmbeddedLog(rendered).text), transcript)
 
-    def test_each_detail_level_has_exactly_that_many_decorative_dots(self):
+    def test_all_detail_levels_have_clear_labels_and_separate_numeric_depth(self):
         summaries = {level: "Summary." for level in range(1, 11)}
         rendered = app.summary_html(Path("meeting.mkv"), summaries, transcript="Full log.")
-        dots = DetailDots(rendered)
-        self.assertEqual(dots.counts, {level: level for level in range(1, 11)})
-        self.assertEqual(dots.hidden, ["true"] * 11)  # Initial picker icon plus ten menu icons.
+        choices = [attrs for _, attrs in Elements(rendered).elements
+                   if attrs.get("role") == "tab" and attrs["id"] != "tab-transcript"]
+        labels = {1: ("Key points", "Essentials and decisions"),
+                  3: ("Overview", "Main discussion and context"),
+                  5: ("Expanded", "Reasoning and alternatives"),
+                  10: ("In depth", "All substantive threads")}
+        for level, choice in enumerate(choices, 1):
+            label, description = labels.get(level, ("Summary", f"Detail level {level} of 10"))
+            self.assertEqual(choice["data-choice-label"], f"{label} · {level}/10")
+            option = rendered.split(f'id="tab-{level}"')[1].split('</button>')[0]
+            self.assertIn(f'class="tab-title">{label}</span>', option)
+            self.assertIn(f'class="tab-description">{description}</span>', option)
+            self.assertIn(f'class="detail-level">{level}/10</span>', option)
+        self.assertNotIn('class="detail-dots"', rendered)
         tabs = [attrs["id"] for tag, attrs in Elements(rendered).elements if attrs.get("role") == "tab"]
         self.assertEqual(tabs, [f"tab-{level}" for level in range(1, 11)] + ["tab-transcript"])
 
