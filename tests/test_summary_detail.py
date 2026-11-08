@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths
+from tests import runtime_paths, seed_final
 
 
 class SummaryDetailTests(unittest.TestCase):
@@ -122,7 +122,9 @@ class SummaryConfigurationTests(unittest.TestCase):
                 source = root / "meeting.mkv"; source.write_bytes(b"fixture")
                 output = root / "output"
                 log, _ = app.output_paths(source, output)
-                app.atomic_write(log, "Reviewed conversation.")
+                seed_args = app.build_parser().parse_args(["--output-dir", str(output)])
+                seed_args.cache_dir = root / "cache"
+                seed_final(source, seed_args)
                 before = (log.read_bytes(), log.stat().st_mtime_ns)
                 with runtime_paths(cache_dir=root / "cache"), \
                         patch.object(app, "load_env", side_effect=lambda: load_env(env)), \

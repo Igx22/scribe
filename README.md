@@ -122,18 +122,25 @@ when `--monitor-dir` is used. Monitoring is enabled by `--monitor-dir`.
 
 A log plus a summary counts as complete and is skipped, even if settings change.
 A lone log resumes only with matching cached source/settings and ownership.
+Processing results live in `data/.cache/<full-source-sha256>/` as flat JSON stage
+artifacts. Identical recording bytes reuse them after a rename or output move;
+different model/settings variants coexist. Logs and HTML are exports: manual log
+edits are preserved but never imported into processing or summaries.
 
 ```bash
-# Replace the report from the saved log; keep the log and reuse compatible checkpoints
+# Replace the report from internal final JSON; preserve an existing log export
 ./scribe.sh -f "meeting.mkv" --summary-only
 
-# Replace the report and bypass summary/header checkpoints; keep the log
+# Replace the report and bypass summary/header reuse; preserve an existing log
 ./scribe.sh -f "meeting.mkv" --summary-only --force
 
 # Reprocess the recording and replace both outputs
 ./scribe.sh -f "meeting.mkv" --force
 ```
 
+Summary-only needs a valid selected internal final result, even if a `.log.md`
+exists. A missing log export can be recreated from that JSON. Old JSON checkpoints
+migrate only when they contain enough verifiable data; an old log alone cannot.
 Replacement backs up previous results and may repeat paid requests.
 See [resume and failure details](docs/USAGE.md#outputs-and-completed-recordings).
 
@@ -240,7 +247,7 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports and error files to DIR. Does not enable monitoring. |
 | `--force` | Off | Bypass completion skipping and recognition/API caches; may repeat paid calls. |
 | `--transcribe-only` | Off | Create only the log; equivalent to `--summarize-model none`. Final GPT reconciliation still runs unless offline. |
-| `--summary-only` | Off | Regenerate an HTML report from an existing log, without recognition/fusion. |
+| `--summary-only` | Off | Regenerate HTML from validated internal final JSON, without audio processing/reconciliation; a log export is optional. |
 | `--verify-models` | Off | Verify SHA-256 hashes as well as sizes when preparing local models. |
 | `--show-prompt` | Off | Print the rendered final summary prompt for the selected detail, without processing or API calls. |
 | `--version` | — | Print the version. |

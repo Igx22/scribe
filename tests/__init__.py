@@ -24,3 +24,39 @@ def runtime_paths(*, cache_dir=None, models_dir=None):
 
     with patch.object(scribe, "build_parser", side_effect=isolated_parser):
         yield
+
+
+def seed_final(source, args, text="Reviewed conversation."):
+    """Create a structured cache fixture from test-owned data, never an export."""
+    import hashlib
+    import scribe
+    signature = scribe.source_signature(source)
+    cache = args.cache_dir / signature["sha256"]
+    cache.mkdir(parents=True, exist_ok=True)
+    scribe.open_manifest(cache, signature, source)
+    turns = []
+    for i, turn in enumerate(scribe.report_turns(text)):
+        row = {"start": i * 2, "end": i * 2 + 2, "speaker": i + 1,
+               "text": turn["text"], "uncertain": False}
+        if turn["speaker"] != "UNKNOWN SPEAKER":
+            row["speaker_name"] = turn["speaker"]
+        turns.append(row)
+    final = {"source_name": source.name, "turns": turns, "supplements": [], "duration": len(turns) * 2,
+             "provenance": "",
+             "api_only": False, "recognizer": "whisperx", "diarizer": "nemotron",
+             "status": "complete", "pipeline_complete": True, "source_mode": "gpt-reconciled",
+             "sources": {}, "source_reports": []}
+    request = {"settings": scribe.recognition_settings(source, args, signature),
+               "selection": {"transcription_model": args.transcription_model}}
+    if not args.offline:
+        model, effort = args.summarize_model or (scribe.DEFAULT_MODEL, scribe.DEFAULT_EFFORT)
+        request["selection"]["fusion"] = {"model": model, "effort": effort, "version": 3,
+            "prompt": hashlib.sha256((scribe.FUSION_PROMPT + scribe.SINGLE_SOURCE_PROMPT).encode()).hexdigest()}
+    reference = scribe.persist_final(cache, request, final)
+    log, _ = scribe.output_paths(source, args.output_dir)
+    scribe.select_final(cache, reference, log, request)
+    transcript = scribe.materialize_final(cache, reference, final, source)
+    scribe.atomic_write(log, transcript)
+    scribe.save_json(scribe.output_state_path(cache, log), {**request, "final": reference,
+                      "pipeline_complete": True, "transcript_sha256": hashlib.sha256(transcript.encode()).hexdigest()})
+    return transcript

@@ -31,13 +31,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.language, "auto")
         self.assertEqual(args.vocabulary, "")
 
-    def test_default_cache_reuses_an_existing_log_across_working_directories(self):
+    def test_default_cache_reuses_internal_final_across_working_directories(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data = root / "application/data"
             source = root / "meeting.mkv"
             source.write_bytes(b"fixture")
-            local = {"duration": 1, "turns": [
+            local = {"duration": 1, "words": [], "turns": [
                 {"start": 0, "end": 1, "speaker": 1, "text": "Hello."}], "voices": []}
             options = ["-f", str(source), "--offline", "--output-dir", str(root / "out")]
             with patch.object(app, "APP_DATA", data), patch.object(app, "load_env"), \

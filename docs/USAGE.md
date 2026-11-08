@@ -171,14 +171,118 @@ change. Ordinary resume of a lone log requires matching cached source/settings
 and ownership.
 
 `--force` replaces the log and report, backs up previous results, and may repeat
-paid requests. `--summary-only` preserves the log and regenerates the report
-without recognition or reconciliation; add `--force` to bypass summary/header
-checkpoints:
+paid requests. `--summary-only` preserves an existing log export and regenerates
+the report from the selected internal final JSON, without extraction, recognition,
+diarization or reconciliation. The log export is optional; missing exports can be
+recreated from internal JSON. Add `--force` to bypass only summary/header reuse:
 
 ```bash
 ./scribe.sh -f "recording.mkv" --force
 ./scribe.sh -f "recording.mkv" --summary-only --force
 ```
+
+## Processing cache and exports
+
+The application stores processing artifacts in
+`data/.cache/<source-sha256>/`, independently of `--output-dir`. SHA-256 covers
+**every byte** of the original recording, once per stable recording invocation
+that needs cache access. Filename, size and timestamps do not determine this key.
+Identical bytes reuse the directory after renaming, copying or changing output
+folders. Changing bytes in the middle of a file changes the key even if its name,
+size and mtime stay unchanged. Completed-pair skipping still happens first and
+leaves existing outputs untouched, without hashing or model calls.
+
+Processing artifacts are flat JSON files. Readable filenames identify recognition
+and its backend, alignment, diarization, reconciliation parts/final transcript,
+materialization, summary levels and header responses; deterministic suffixes
+identify settings and upstream payloads. Configuration variants coexist. For example:
+
+```text
+data/.cache/<source-sha256>/
+  manifest.json
+  recognition.gpt-transcribe.part-0001.<stage-key>.json
+  recognition.whisperx-turbo.<stage-key>.json
+  alignment.whisperx-turbo.raw.<stage-key>.json
+  alignment.whisperx-turbo.<stage-key>.json
+  recognition.mlx-turbo.<stage-key>.json
+  diarization.nemotron-3.<stage-key>.json
+  reconciliation.part-0001.<stage-key>.json
+  reconciliation.final-transcript.<stage-key>.json
+  materialization.final-transcript.<stage-key>.json
+  summary.level-1.<stage-key>.json
+  summary.header.<stage-key>.json
+```
+
+Only selected backends run. `all` keeps independent GPT, WhisperX and MLX results
+with one shared diarization. Successful GPT chunks and reconciliation parts resume
+individually. Raw WhisperX recognition is saved before alignment; raw alignment
+and normalized words are separate, so downstream failures do not discard upstream
+work. JSON includes available backend payloads, language evidence, timestamps,
+uncertainty and returned API usage. Models, library caches, environments, timing
+history, console logs, output ownership/backup directories and locks retain their
+existing locations. Temporary audio is disposable and normally removed.
+
+`manifest.json` records source identity, filenames/dates, stage/payload identities
+and explicitly selected final references. An output location retains its selected
+final; a new location uses the manifest's explicitly selected latest final. Changing
+only the summary model/effort in `--summary-only` does not select another
+reconciliation variant. Missing, invalid or ambiguous final references produce a
+clear error; the application does not guess a final from arbitrary artifacts.
+
+The internal final JSON retains structured turns, validated display names,
+supplements, provenance and complete/partial/fallback/offline status. Its separate
+materialization JSON holds export-ready text and a validated final reference;
+it can be rebuilt without a model call. Reports read this internal data and frozen
+source payloads. Rendering refreshes filename-dependent display metadata after a
+rename. A reused artifact is not a new model inference.
+
+**Exported `.log.md` files are never pipeline inputs.** Editing, moving or deleting
+one does not change the internal transcript. Summary-only uses internal JSON when
+an export is present, absent or edited; existing log bytes and timestamps are
+preserved. Its report transcript may therefore differ from a manually edited log.
+Manual edits are not automatically imported. The existence of a log alone is no
+longer sufficient for `--summary-only`; this deliberately replaces the previous
+edited-log behavior. Preserve manual edits separately. Ordinary processing still
+protects edited/unknown outputs; deliberately use ordinary `--force` to reprocess
+and back up replaced exports. Symlink outputs are protected even with force.
+
+Summary levels and header parts retain independent reusable checkpoints after
+publication, so changing tabs/order/template does not discard compatible model
+work. Summary-only `--force` refreshes summary/header calls and preserves the
+selected internal final. Ordinary `--force` deliberately bypasses recognition,
+reconciliation and summary reuse. Offline mode remains local, produces no HTML
+and does not reconcile text. Partial/fallback JSON remains available for summaries;
+an ordinary retry reuses successful upstream stages and reconciliation parts.
+
+Artifacts and manifest updates use atomic replacement. Output locks prevent
+concurrent publication to the same destination; a content lock also prevents
+duplicate processing through different output directories. A busy recording fails
+clearly; retry after the other invocation finishes. Missing or corrupt stage
+artifacts are recomputed only by a mode allowed to run that stage. Summary-only
+never repairs a missing final by running upstream models. A corrupt manifest is
+an explicit recovery error: preserve it and the original cache before repairing
+its references or performing a deliberate ordinary rerun from a clean cache.
+
+### Older JSON checkpoints
+
+Migration is lazy and preserves original files. Scribe checks the old path-keyed
+cache directly for the current source path; it does not maintain a global index
+or scan dated run folders. Matching old words, voices, GPT chunks, reconciliation
+parts and pending summary/header JSON are adapted when used. Layout changes alone
+do not require repeating compatible model work. Old edge-hash/size/mtime checks
+are recorded as weaker historical provenance: today's full-file hash is **not**
+proof that an older response processed exactly those bytes. Missing raw responses
+remain explicitly unavailable; they are never fabricated.
+
+A legacy final can be reconstructed only from compatible word/voice or GPT
+checkpoints, all required valid reconciliation parts, matching output state and
+frozen source snapshots, and a reproduced final-transcript hash. No exported log
+is read to supply missing text. Missing duration, mismatched snapshots or missing
+reconciliation parts produce a prerequisite error in summary-only. Use ordinary
+processing to finish missing stages; preserve the old cache and any manual exports.
+Renamed legacy inputs may need their original source path for this direct lookup.
+Old state/log-only results without sufficient JSON cannot be migrated into a
+validated internal final automatically.
 
 ## Console logs
 
@@ -351,8 +455,8 @@ Summary-only rendering preserves incomplete notices without repeating reconcilia
 Use `--offline` to disable every cloud request. A fallback log plus a successful
 report still counts as a completed pair on the next run; it is not silently
 replaced. Existing completed reports retain their previous final text until
-explicitly reprocessed. `--summary-only` keeps the saved log and does not add
-reconciliation to it.
+explicitly reprocessed. `--summary-only` uses the internal final JSON and does not add
+reconciliation or import edited export text.
 
 ## Diarization models
 
@@ -382,7 +486,7 @@ include the voice label, such as `Alice (A)`. Offline and failed-reconciliation
 fallback logs keep anonymous labels; accepted parts of a partial reconciliation
 can establish names using the normal evidence checks. API-only mode cannot assign speaker names.
 Existing outputs are not renamed automatically, and `--summary-only` preserves
-the log without discovering names.
+the internal final and existing log export without discovering names.
 
 ## Summary and fusion model
 
@@ -437,7 +541,7 @@ These lengths are guides, not minimum quotas: short conversations stay short eve
 at level 10, without padding or invented background. Each level is generated
 independently from the same final log, so additional levels increase text API work.
 Use `--summary-only` to regenerate an existing HTML report without repeating audio
-processing or reconciliation; the saved log is preserved.
+processing or reconciliation; the internal final and existing log export are preserved.
 
 ```bash
 ./scribe.sh -f "recording.mkv" --summary-only

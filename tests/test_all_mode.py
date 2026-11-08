@@ -20,7 +20,7 @@ class AllModeTests(unittest.TestCase):
         args = app.build_parser().parse_args(['--transcription-model', 'all',
             '--output-dir', str(root / 'out'), '--report-tabs', '1,3,5,10,transcript', *extra])
         args.cache_dir = root / 'cache'
-        cache = args.cache_dir / hashlib.sha256(str(source).encode()).hexdigest()[:16]
+        cache = args.cache_dir / app.digest_file(source)
         return source, args, cache
 
     @staticmethod
@@ -67,7 +67,10 @@ class AllModeTests(unittest.TestCase):
             self.assertIn('Detected voices: 1', panels['panel-source-diarization'])
             self.assertEqual(len([a for _, a in Elements(report.read_text()).elements if a.get('role') == 'tab']), 9)
             for backend in ('whisperx', 'mlx'):
-                self.assertEqual(app.read_json(cache / f'words-stage-{backend}.json')['settings']['recognizer']['backend'], backend)
+                stage = app.backend_stage(backend)
+                saved = app.read_json(next(cache.glob(stage + '.*.json')))
+                settings = saved['settings'].get('recognition', saved['settings'])
+                self.assertEqual(settings['recognizer']['backend'], backend)
             before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in (log, report)]
             extract, cloud, asr, diarize, *_ = self.run_pipeline(source, args)
             for stage in (extract, cloud, asr, diarize):
@@ -94,7 +97,7 @@ class AllModeTests(unittest.TestCase):
             extract, cloud, asr, diarize, fuse, summary = self.run_pipeline(source, args)
             for stage in (extract, cloud, asr, diarize, fuse):
                 stage.assert_not_called()
-            self.assertEqual(summary.call_count, 4)
+            self.assertEqual(summary.call_count, 0)
             self.assertEqual(PanelText(report.read_text()).text, original)
 
     def test_changed_mlx_identity_invalidates_only_mlx_words(self):
@@ -130,22 +133,23 @@ class AllModeTests(unittest.TestCase):
                 args.transcription_model = mode
                 args.output_dir = root / mode
                 extract, cloud, asr, diarize, *_ = self.run_pipeline(source, args)
-                extract.assert_called_once()
+                self.assertEqual(extract.call_count, 0 if mode == "all" else 1)
                 cloud.assert_not_called(); asr.assert_not_called(); diarize.assert_not_called()
 
-    def test_all_can_reuse_a_compatible_old_single_model_cache(self):
+    def test_all_reuses_a_single_model_artifact_without_overwriting_it(self):
         for backend in ('whisperx', 'mlx'):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 source, args, cache = self.setup_case(root, '--transcribe-only')
                 args.transcription_model = backend
                 self.run_pipeline(source, args)
-                old = (cache / 'words-stage.json').read_bytes()
+                path = next(cache.glob(app.backend_stage(backend) + '.*.json'))
+                old = path.read_bytes()
                 args.transcription_model = 'all'; args.output_dir = root / 'all'
                 _, _, asr, diarize, *_ = self.run_pipeline(source, args)
                 self.assertEqual([c.args[-1] for c in asr.call_args_list], ['mlx' if backend == 'whisperx' else 'whisperx'])
                 diarize.assert_not_called()
-                self.assertEqual((cache / 'words-stage.json').read_bytes(), old)
+                self.assertEqual(path.read_bytes(), old)
 
     def test_failed_cloud_retains_both_local_views_and_retries_only_missing_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,7 +160,8 @@ class AllModeTests(unittest.TestCase):
             state = app.read_json(state_path)
             self.assertFalse(state['pipeline_complete'])
             self.assertEqual(state['source_mode'], 'gpt-reconciled')
-            self.assertEqual([r['id'] for r in app.saved_source_reports(state, log.read_text())],
+            final = app.final_reference(cache, state['final'], required=True)['payload']
+            self.assertEqual([r['id'] for r in app.final_sources(source, final)],
                              ['whisperx', 'mlx', 'diarization'])
             _, cloud, asr, diarize, *_ = self.run_pipeline(source, args)
             cloud.assert_called_once(); asr.assert_not_called(); diarize.assert_not_called()

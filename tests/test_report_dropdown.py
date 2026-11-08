@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import seed_final
 from tests.test_summary_html import Elements
 
 
@@ -101,7 +102,7 @@ class ReportDropdownTests(unittest.TestCase):
                 '--summarize-model', 'gpt-6-luna:low', '--output-dir', str(root / 'out')])
             args.cache_dir = root / 'cache'
             log, report = app.output_paths(source, args.output_dir)
-            app.atomic_write(log, 'Saved final log.')
+            seed_final(source, args, 'Saved final log.')
             with patch.object(app, 'summarize', return_value='Summary.'), \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'fixture-key')

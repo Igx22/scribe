@@ -63,7 +63,7 @@ class WhisperXTests(unittest.TestCase):
             with self.subTest(mode=mode), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 parser.parse_args(["--transcription-model", mode])
 
-    def test_old_mlx_final_log_resumes_only_under_explicit_mlx(self):
+    def test_old_mlx_export_without_reconstructable_json_is_not_summary_input(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / 'meeting.mkv'
@@ -80,11 +80,10 @@ class WhisperXTests(unittest.TestCase):
             cache = args.cache_dir / hashlib.sha256(str(source).encode()).hexdigest()[:16]
             app.save_json(app.output_state_path(cache, log), {'settings': settings,
                 'selection': {'transcription_model': 'whisper-local'}, 'pipeline_complete': True})
+            args.summary_only = True
+            args.offline = False
             with patch.object(app, 'extract_audio') as extract:
-                app.process_file(source, args, '')
-                extract.assert_not_called()
-                args.transcription_model = 'whisperx'
-                with self.assertRaisesRegex(app.AppError, 'settings changed'):
+                with self.assertRaisesRegex(app.AppError, 'internal final JSON|matching output state'):
                     app.process_file(source, args, '')
                 extract.assert_not_called()
             self.assertEqual((log.read_bytes(), log.stat().st_mtime_ns), before)
@@ -239,7 +238,7 @@ class WhisperXTests(unittest.TestCase):
             args.transcription_model='mlx';changed=app.recognition_settings(source,args)
             with patch.object(app,'diarize') as voice,patch.object(app,'recognize',return_value=words) as recognize:
                 app.local_recognition(audio,cache,changed,args)
-                voice.assert_not_called();self.assertEqual(recognize.call_args.args[-1],'mlx')
+                voice.assert_not_called();recognize.assert_not_called()
 
 
 if __name__=='__main__':

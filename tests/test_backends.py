@@ -116,7 +116,7 @@ class BackendTests(unittest.TestCase):
                     patch.object(app, "summarize", return_value="Summary") as summarize:
                 app.process_file(source, args, "unit-test-key")
                 self.assertIn("Local source text.", summarize.call_args.args[0])
-            self.assertTrue(any(args.cache_dir.glob("*/sources/gpt-transcribe.txt")))
+            self.assertTrue(any(args.cache_dir.glob("*/reconciliation.final-transcript.*.json")))
 
     def test_local_recognizers_reconcile_text_without_uploading_audio(self):
         for model in ["whisperx", "mlx"]:

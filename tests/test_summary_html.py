@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths
+from tests import runtime_paths, seed_final
 
 
 class Elements(HTMLParser):
@@ -61,6 +61,8 @@ class SummaryHtmlTests(unittest.TestCase):
         args.cache_dir = root / "cache"
         log, summary = app.output_paths(source, args.output_dir)
         app.atomic_write(log, "Reviewed conversation.\n")
+        if args.summary_only:
+            seed_final(source, args)
         return source, args, log, summary
 
     def test_cli_accepts_spaces_commas_and_deduplicates_in_requested_order(self):
@@ -198,7 +200,7 @@ class SummaryHtmlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
             transcript = "DETAILED TRANSCRIPT\n\n[00:00–00:02] Alice\nOriginal words & uncertainty [speaker uncertain: retained].\n"
-            app.atomic_write(log, transcript)
+            transcript = seed_final(source, args, transcript)
             with patch.object(app, "summarize", return_value="Summary.") as summarize:
                 app.process_file(source, args, "key")
             self.assertEqual(summarize.call_count, 3)
@@ -221,12 +223,12 @@ class SummaryHtmlTests(unittest.TestCase):
                 app.process_file(source, args, "key")
             self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], [5, 10])
             self.assertIn("Brief.", summary.read_text())
-            # A deliberate regeneration after successful publication starts fresh.
+            # Successful levels remain reusable after publication.
             with patch.object(app, "summarize", return_value="Fresh.") as summarize:
                 app.process_file(source, args, "key")
-            self.assertEqual(summarize.call_count, 3)
+            self.assertEqual(summarize.call_count, 0)
 
-    def test_pending_levels_are_invalidated_by_changed_settings_or_force(self):
+    def test_summary_levels_reuse_only_matching_content_model_and_prompts(self):
         for change in ("transcript", "model", "effort", "details", "transcript-tab", "order", "prompt", "force"):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
                 source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
@@ -251,9 +253,10 @@ class SummaryHtmlTests(unittest.TestCase):
                 with patch.object(app, "SUMMARIZATION_PROMPT", prompt), \
                         patch.object(app, "summarize", return_value="Fresh.") as summarize:
                     app.process_file(source, args, "key")
-                self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list],
-                                 app.summary_levels(args.report_tabs))
-                self.assertNotIn("Old brief.", summary.read_text())
+                reusable = change in ("transcript", "details", "transcript-tab", "order")
+                expected = [level for level in app.summary_levels(args.report_tabs) if not reusable or level != 1]
+                self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], expected)
+                self.assertEqual("Old brief." in summary.read_text(), reusable)
 
     def test_completed_html_or_markdown_skips_before_cache_or_network(self):
         for extension in (".md", ".html"):
@@ -342,7 +345,12 @@ class SummaryHtmlTests(unittest.TestCase):
             with patch.object(app, "summarize", return_value="Old HTML summary."):
                 app.process_file(source, args, "key")
             old_html = summary.read_bytes()
-            app.atomic_write(log, "Edited conversation.")
+            seed_final(source, args, "Changed internal conversation.")
+            # Retain prior report identity while selecting a new internal final.
+            cache = args.cache_dir / app.digest_file(source)
+            state_path = app.output_state_path(cache, log)
+            state = app.read_json(state_path); state["summary"] = {"transcript": "previous"}
+            app.save_json(state_path, state)
             with patch.object(app, "summarize", side_effect=app.AppError("timeout")):
                 with self.assertRaises(app.AppError):
                     app.process_file(source, args, "key")

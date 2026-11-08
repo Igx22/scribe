@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import seed_final
 
 
 class ReportHeaderTests(unittest.TestCase):
@@ -128,8 +129,9 @@ class ReportHeaderTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             app.extract_report_metadata(self.log(), "key", "model", "medium", cache, force=True, call=call)
             self.assertEqual(len(calls), 2)
-            path = next((cache / "report-header").glob("*.json"))
-            saved = json.loads(path.read_text()); saved["result"]["topic_evidence"] = []
+            path = next(cache.glob("summary.header.*.json"))
+            saved = json.loads(path.read_text()); saved["payload"]["result"]["topic_evidence"] = []
+            saved["payload_sha256"] = app.json_identity(saved["payload"])
             app.save_json(path, saved)
             with self.assertRaisesRegex(app.AppError, "unsupported evidence"):
                 app.extract_report_metadata(self.log(), "key", "model", "medium", cache, call=call)
@@ -202,7 +204,7 @@ class ReportHeaderTests(unittest.TestCase):
                 "--output-dir", str(root / "output")])
             args.cache_dir = root / "cache"
             log, report = app.output_paths(source, args.output_dir)
-            app.atomic_write(log, self.log()); app.atomic_write(report, "Reviewed report")
+            seed_final(source, args, self.log()); app.atomic_write(report, "Reviewed report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)
             with patch.object(app, "summarize", return_value="New summary.") as summaries, \
                     patch.object(app, "extract_report_metadata", side_effect=app.AppError("Invalid topic")):
@@ -224,7 +226,7 @@ class ReportHeaderTests(unittest.TestCase):
                 "--output-dir", str(root / "output")])
             args.cache_dir = root / "cache"
             log, summary = app.output_paths(source, args.output_dir)
-            app.atomic_write(log, self.log())
+            seed_final(source, args, self.log())
             with patch.object(app, "summarize", return_value="Plain summary."), \
                     patch.object(app, "extract_report_metadata", return_value={"topic": "Deployment planning.", "roles": {}}) as metadata:
                 app.process_file(source, args, "key")
@@ -240,7 +242,7 @@ class ReportHeaderTests(unittest.TestCase):
                 "--output-dir", str(root / "output")])
             args.cache_dir = root / "cache"
             log, report = app.output_paths(source, args.output_dir)
-            app.atomic_write(log, self.log()); app.atomic_write(report, "Previous report")
+            seed_final(source, args, self.log()); app.atomic_write(report, "Previous report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)
             with patch.object(app, "summarize", return_value="Completed summary.") as summary, \
                     patch.object(app, "extract_report_metadata", side_effect=app.AppError("header failed")):

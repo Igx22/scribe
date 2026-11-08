@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import scribe as app
+from tests import seed_final
 
 
 class LanguageProbeTests(unittest.TestCase):
@@ -86,7 +87,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(len(requests), 5)
             self.assertEqual([i['part'] for i in issues], [2])
             self.assertIn('validation_feedback', requests[2])
-            rejected = list((cache / 'fusion-rejected').glob('*.json'))
+            rejected = list(cache.glob('reconciliation.rejected.*.json'))
             self.assertEqual(len(rejected), 3)
             self.assertIn('{bad JSON', rejected[0].read_text())
             requests.clear()
@@ -134,7 +135,7 @@ class ErrorHistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, err = self.fixture(Path(tmp), '--summary-only')
             log, report = app.output_paths(source, args.output_dir)
-            app.atomic_write(log, 'Saved log')
+            seed_final(source, args, 'Saved log')
             app.atomic_write(report, 'Existing HTML')
             with patch.object(app, 'summarize', side_effect=app.AppError('failed private-api-key hf_secret')), \
                     patch.dict(app.os.environ, {'HF_TOKEN': 'hf_secret'}):
@@ -192,7 +193,7 @@ class ErrorHistoryTests(unittest.TestCase):
             self.assertEqual(app.read_json(err)['runs'][0]['events'][0]['stage'], 'model preparation')
             turns = RecoveryTests().turns()[:1]
             good = json.dumps(dict(turns=[dict(id=0, text='Recovered')], unassigned_text='', speaker_names=[]))
-            def work(*a):
+            def work(*a, **k):
                 return app.fuse_transcripts(app.transcript_chunks(turns), turns, args.cache_dir,
                                             'secret-key', 'm', 'high', call=Mock(side_effect=['secret-key', good]))
             with patch.object(app, '_process_file', side_effect=work):
@@ -231,7 +232,9 @@ class ErrorHistoryTests(unittest.TestCase):
             self.assertEqual(app.final_transcript_badge(log.read_text()), 'GPT-6.1-sol')
             self.assertEqual([run['status'] for run in app.read_json(err)['runs']], ['partial', 'partial'])
             self.assertEqual(len(app.read_json(err)['runs'][0]['events']), 3)
-            self.assertTrue(app.saved_source_reports(state, log.read_text()))
+            cache = args.cache_dir / app.digest_file(source)
+            final = app.final_reference(cache, state['final'], required=True)['payload']
+            self.assertTrue(app.final_sources(source, final))
 
     def test_all_failed_parts_keep_local_provenance_and_no_gpt_badge(self):
         with tempfile.TemporaryDirectory() as tmp:

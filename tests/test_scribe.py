@@ -15,7 +15,7 @@ import urllib.error
 import wave
 
 import scribe as app
-from tests import runtime_paths
+from tests import runtime_paths, seed_final
 
 
 class AppTests(unittest.TestCase):
@@ -153,7 +153,7 @@ class AppTests(unittest.TestCase):
                     patch.object(app, "summarize", return_value="Meeting summary.") as summary, \
                     patch.object(app, "ensure_models") as models:
                 self.assertEqual(app.main(options), 0)
-            self.assertEqual(gpt.call_count, 2); self.assertEqual(summary.call_count, 2)
+            self.assertEqual(gpt.call_count, 1); self.assertEqual(summary.call_count, 2)
             models.assert_not_called()
             outputs = [path for source in sources for path in app.output_paths(source, recordings)]
             for source in sources:
@@ -289,7 +289,7 @@ class AppTests(unittest.TestCase):
         self.assertGreater(len(note_inputs), 1)
         self.assertEqual(calls[-1][0], app.summary_prompt(1))
 
-    def test_resume_api_failure_uses_existing_log(self):
+    def test_resume_api_failure_uses_internal_final(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"input")
             args = app.build_parser().parse_args(["-f", str(source),
@@ -297,15 +297,7 @@ class AppTests(unittest.TestCase):
                                                  "--transcription-model", "mlx", "--report-tabs", "1"])
             args.cache_dir = root / "cache"
             log, summary = app.output_paths(source, args.output_dir)
-            log.parent.mkdir()
-            log.write_text("Reviewed transcript", encoding="utf-8")
-            settings = app.recognition_settings(source, args)
-            cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
-            app.save_json(app.output_state_path(args.cache_dir / cache_id, log),
-                          {"settings": settings, "selection": {"transcription_model": "mlx", "fusion": {
-                              "model": app.DEFAULT_MODEL, "effort": app.DEFAULT_EFFORT, "version": 3,
-                              "prompt": hashlib.sha256((app.FUSION_PROMPT + app.SINGLE_SOURCE_PROMPT).encode()).hexdigest()}},
-                           "pipeline_complete": True})
+            seed_final(source, args)
             with patch.object(app, "summarize", side_effect=app.AppError("network")), patch.object(app, "extract_audio") as extract:
                 with self.assertRaises(app.AppError):
                     app.process_file(source, args, "test-key")

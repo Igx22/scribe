@@ -98,39 +98,44 @@ machine online before offline use. Weights can be copied and checked with
 recognition does not need local weights. Old ONNX assets are preserved but unused;
 old diarizer intervals cannot satisfy Nemotron checkpoints.
 
-`data/.cache` holds library/pip caches, cloud audio responses, word and voice
-checkpoints, source snapshots, reconciliation/header responses, output ownership,
-locks, backups and temporary extracted/chunk audio. Temporary audio is normally
-removed, but forced termination can leave it behind. Raw source files include
-`sources/gpt-transcribe.txt`, `sources/local.log.md` and `sources/mlx.log.md`
-inside a source cache. Output names retain the recording's stem. API caches are
-optional on a fresh checkout but enable resume without repeating paid recognition.
-Application bytecode is disabled with `-B` and `sys.dont_write_bytecode`;
-dependency bytecode stays inside `data/.venv`. No root-level cache, environment
-or model directory is required.
-
 ### Recognition cache artifacts
 
-Per-recording cache folders currently use a hash of the source path; stored
-settings separately validate the recording signature and model configuration.
-Recognition is already cached beyond the exported `.log.md`:
+SCR-093 uses `data/.cache/<full-source-sha256>/`, hashing every source byte once
+per stable invocation needing cache access. Names/stat timestamps are metadata,
+not identity; renamed/copied identical recordings reuse work. There is no global
+run-folder search index. Stage keys canonically include model/settings and relevant
+upstream payload identities; variants coexist in flat JSON files. Envelopes validate
+schema, settings/key and payload hash. The manifest inventories stages and explicitly
+selects finals globally and per export location. Output ownership/backups remain
+under output-scoped state; content and output locks prevent concurrent duplicate
+processing/publication. Source-change guards precede inference and publication.
 
-| Current artifact | Stored result |
-| --- | --- |
-| `gpt-stage.json` | Completed GPT audio chunks: text, time bounds, languages and returned usage. |
-| `words-stage.json`, `words-stage-<backend>.json` | Normalized WhisperX/MLX words, timing and available language-detection evidence. |
-| `voices-stage.json` | Diarization intervals and model/settings identity, for Nemotron or Community-1. |
-| `recognition.json`, `recognition-<backend>.json` | Combined local words, voice intervals and assigned turns. |
-| `fusion/<signature>.json`, `outputs/<output-id>/state.json` | Reconciliation parts and output-bound state/source snapshots. |
+Recognition retains backend payloads and normalized data, GPT chunks, raw WhisperX
+ASR before alignment, raw alignment/words, independent MLX results and shared
+Nemotron/Community-1 intervals. Reconciliation parts remain independently resumable.
+Final JSON keeps turns/names/uncertainty/supplements, frozen sources, dependencies
+and complete/partial/fallback/offline status. Materialization is also JSON, with text
+and a validated final reference. Summary levels/header responses are flat and
+reusable after publication; renderer/tab/output changes do not invalidate ASR.
+Library/model/environment caches, timings, console logs and temporary audio keep
+their separate roles. Application bytecode stays disabled; dependency bytecode stays
+in `data/.venv`. See [layout and recovery](USAGE.md#processing-cache-and-exports).
 
-Single-recognizer modes share a word-cache slot; `all` uses separate WhisperX/MLX
-slots. Settings protect reuse, but alternating configurations can replace a shared
-slot. Raw ASR/alignment/native responses are not all retained before normalization.
-There is no single self-contained cache artifact for the complete rendered final
-transcript. `--summary-only` already skips audio extraction, recognition, diarization
-and reconciliation, but requires the exported `.log.md`; a missing export is an
-error even when upstream stage caches exist. These reuse contracts are covered by
-the mocked all-mode, source-report and HTML-summary tests.
+Exported `.log.md` and HTML are never pipeline inputs. Summary-only uses selected
+internal final JSON, even with absent or edited logs; it never extracts audio or
+runs ASR, diarization or reconciliation. It preserves existing log bytes and may
+recreate a missing export. Summary-only force refreshes summary/header only; changing
+its model does not select another reconciliation result. Missing/ambiguous/invalid
+final JSON fails clearly. Completed-pair skips and edited/unknown-output protection
+remain. This deliberately supersedes the old edited-log/log-only summary contract.
+
+Legacy JSON migrates lazily through direct old path lookup, without deleting originals
+or inventing raw responses. Historical edge hashes remain explicitly weaker provenance,
+not retroactive full-file proofs. Final reconstruction requires compatible upstream
+JSON, cached validated reconciliation, frozen snapshots and reproduced transcript hash;
+insufficient state/log-only results fail without reading exported logs. Legacy
+rename lookup and missing raw/duration/final checkpoints are recovery limitations;
+[Usage](USAGE.md#older-json-checkpoints) owns detailed prerequisites.
 
 The CLI uses automatic language detection and no custom vocabulary prompt. Internal
 backend fields retain those default values and the existing checkpoint schema,
@@ -178,7 +183,7 @@ API-only mode must not load local models or invent speaker assignments from its
 chunk text/timing. Explicit `--offline` prohibits API calls and downloads and
 produces no report. Disabling reports alone does not disable reconciliation;
 the configured report model/effort controls both, with the default used when
-reports are disabled. Summary-only processing preserves the saved final log and
+reports are disabled. Summary-only processing uses selected internal final JSON and
 never repeats recognition or reconciliation.
 
 Reconciliation cannot move anchors, change voice assignments or omit/duplicate
@@ -231,9 +236,9 @@ only the diarizer can reuse compatible words. Backend revisions, presets, source
 signatures, model/effort and prompts must invalidate the appropriate stages.
 Legacy backend caches cannot satisfy a different engine's signature.
 
-Keep `data/.cache` to retain resumability and output ownership. A moved or
-changed source can have a different cache identity; unknown partial outputs stay
-protected. Use `--summary-only` for an edited log or deliberately choose `--force`.
+Keep `data/.cache` to retain resumability and output ownership. Changed source
+bytes have a different cache identity; identical bytes after a move retain it. Unknown partial outputs stay protected. Summary-only preserves edited
+exports while using internal JSON; ordinary force deliberately replaces exports.
 
 Completion skipping deliberately depends on an existing log plus either current
 HTML or legacy Markdown summary, even after settings change. Incomplete outputs
@@ -256,9 +261,9 @@ Exit codes: `0` for success/skipped inputs, `1` for per-recording failures, `2` 
 input/configuration errors, and `130` for interruption.
 
 Source views freeze successful raw inputs before reconciliation and bind them to
-the source signature and final-log hash. Summary-only rendering must not borrow
-unrelated shared checkpoints. Edited or legacy logs without compatible snapshots
-show only their final view. Raw sources remain unchanged by reconciliation.
+the source signature and final-log hash. Summary-only rendering uses the selected
+final JSON and its frozen sources, never unrelated shared checkpoints or edited
+exports. Raw sources remain unchanged by reconciliation.
 
 ## Editable prompts and long recordings
 
@@ -304,8 +309,8 @@ Each summary level reads the same final log independently; detail controls retai
 information, separately from reasoning effort. Page guidance is not a padding quota.
 
 Reports are standalone HTML with inline CSS/JavaScript and escaped model text and
-filenames. Transcript selection includes the complete saved log and available raw
-sources; omitting it excludes both. Summary and Transcript dropdowns have fixed
+filenames. Transcript selection includes the complete internal transcript and
+available raw sources; omitting it excludes both. Summary and Transcript dropdowns have fixed
 titles, independent last choices on their second lines, and stable item order.
 Summary levels use readable names and separate N/10 depth labels, never percentages;
 non-default levels retain a generic Summary label and their numeric depth. Inline
@@ -498,3 +503,12 @@ SCR-084–086 checks additionally cover leading silence, overlapping/short speec
 probes, language voting and explicit decoding, bounded part retries and resume,
 nonfatal speaker-marker recovery, partial report notices/source snapshots, and
 error-file history, early failures, ownership/symlink protection and redaction.
+
+SCR-093 verification on 2026-11-08: the full mocked suite passed 244 tests without
+paid calls or model downloads. [Content-cache checks](../tests/test_content_cache.py)
+cover full-file/middle-byte identity, rename/output reuse, flat variants, selected
+finals with edited/missing exports, corrupt references, source changes, atomic
+writes/content locks, raw ASR/alignment resume, batch preparation, offline reuse
+and legacy final/summary/header adapters that preserve original JSON. Live model
+accuracy and historical full-file identity of legacy edge-hash data are not
+established by these mocked checks.

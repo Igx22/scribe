@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths
+from tests import runtime_paths, seed_final
 
 
 class ModeTests(unittest.TestCase):
@@ -125,6 +125,7 @@ class ModeTests(unittest.TestCase):
             source, args, _, _ = self.setup_case(Path(tmp), "--summary-only",
                 "--summarize-model", "gpt-6-luna:high", "--report-tabs", "5")
             log, summary_path = app.output_paths(source, args.output_dir)
+            seed_final(source, args)
             app.atomic_write(log, "Reviewed text")
             app.atomic_write(summary_path, "Previous summary")
             with patch.object(app, "summarize", return_value="New summary") as summary, \

@@ -42,7 +42,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.20.0"
+VERSION = "2.21.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -59,6 +59,10 @@ MONITOR_SETTLE_SECONDS = 30
 MONITOR_POLL_SECONDS = 5
 CURRENT_RUN = ContextVar("scribe_run", default=None)
 CURRENT_TIMING = ContextVar("scribe_timing", default=None)
+CURRENT_LOCAL = ContextVar("scribe_local", default=None)
+CURRENT_RESPONSES = ContextVar("scribe_responses", default=None)
+CURRENT_LEGACY = ContextVar("scribe_legacy", default=None)
+CURRENT_ARTIFACTS = ContextVar("scribe_artifacts", default=None)
 OUTPUT_LOCK = threading.RLock()
 PROGRESS_LINE = False
 
@@ -683,15 +687,170 @@ def digest_file(path):
 
 
 def source_signature(path):
+    before = source_snapshot(path)
+    signature = {"size": before[2], "sha256": digest_file(path)}
+    if source_snapshot(path) != before:
+        raise AppError("Source changed while hashing; retry with a stable recording.")
+    return signature
+
+
+def source_snapshot(path):
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def json_identity(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def artifact_path(cache, stage, settings):
+    return cache / f"{stage}.{json_identity(settings)}.json"
+
+
+def load_artifact(path, stage=None, settings=None):
+    """Validate the envelope before a stage performs its own payload validation."""
+    saved = read_json(path)
+    if not isinstance(saved, dict) or saved.get("schema") != 1:
+        return None
+    try:
+        if (saved.get("key") != json_identity(saved["settings"])
+                or saved.get("payload_sha256") != json_identity(saved["payload"])
+                or Path(path).name != f"{saved['stage']}.{saved['key']}.json"
+                or stage is not None and saved["stage"] != stage
+                or settings is not None and saved["settings"] != settings):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    if CURRENT_ARTIFACTS.get() is not None:
+        CURRENT_ARTIFACTS.get()[Path(path).name] = saved["payload_sha256"]
+    return saved
+
+
+def artifact_payload(cache, stage, settings, force=False):
+    saved = None if force else load_artifact(artifact_path(cache, stage, settings), stage, settings)
+    return saved["payload"] if saved else None
+
+
+def save_artifact(cache, stage, settings, payload, *, provenance=None):
+    def native_scalar(value):
+        # Backend payloads can contain NumPy scalars/arrays. Preserve their JSON
+        # values without importing a backend just to read or render its cache.
+        if hasattr(value, "tolist"):
+            return value.tolist()
+        if hasattr(value, "item"):
+            return value.item()
+        raise TypeError(f"Unsupported backend JSON value: {type(value).__name__}")
+    payload = json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False, default=native_scalar))
+    path = artifact_path(cache, stage, settings)
+    saved = {"schema": 1, "stage": stage, "key": json_identity(settings),
+             "settings": settings, "payload_sha256": json_identity(payload), "payload": payload,
+             "provenance": provenance or {"origin": "current"}}
+    save_json(path, saved)
+    if CURRENT_ARTIFACTS.get() is not None:
+        CURRENT_ARTIFACTS.get()[path.name] = saved["payload_sha256"]
+    manifest = read_json(cache / "manifest.json")
+    if isinstance(manifest, dict):
+        manifest.setdefault("artifacts", {})[path.name] = {
+            "stage": stage, "key": saved["key"], "payload_sha256": saved["payload_sha256"],
+            "status": payload.get("status", "complete") if isinstance(payload, dict) else "complete"}
+        manifest["updated"] = datetime.now(timezone.utc).isoformat()
+        save_json(cache / "manifest.json", manifest)
+    return {"file": path.name, "payload_sha256": saved["payload_sha256"]}
+
+
+def open_manifest(cache, signature, source):
+    path = cache / "manifest.json"
+    manifest = read_json(path)
+    if path.exists() and (not isinstance(manifest, dict) or manifest.get("schema") != 1
+            or manifest.get("source") != signature or not isinstance(manifest.get("artifacts"), dict)
+            or not isinstance(manifest.get("selected_finals"), dict)
+            or not isinstance(manifest.get("requests", {}), dict)
+            or not isinstance(manifest.get("filenames", []), list)):
+        raise AppError("Invalid content-cache manifest; preserve it for recovery before retrying.")
+    now = datetime.now(timezone.utc).isoformat()
+    if manifest is None:
+        manifest = {"schema": 1, "source": signature, "created": now, "artifacts": {}, "selected_finals": {}}
+    manifest["updated"] = now
+    manifest.setdefault("filenames", [])
+    if source.name not in manifest["filenames"]:
+        manifest["filenames"].append(source.name)
+    manifest["last_invocation"] = {"source_name": source.name, "time": now}
+    save_json(path, manifest)
+    return manifest
+
+
+def valid_rows(rows, *, text=False, speaker=False):
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if (not isinstance(row, dict) or any(type(row.get(k)) not in (int, float)
+                or not math.isfinite(row[k]) for k in ("start", "end"))
+                or not 0 <= row["start"] <= row["end"]
+                or text and not isinstance(row.get("text"), str)
+                or speaker and "speaker" not in row
+                or speaker and row.get("speaker") is not None and
+                    (type(row["speaker"]) is not int or row["speaker"] < 1)):
+            return False
+    return True
+
+
+def legacy_source_signature(path):
+    """Only for checking old checkpoints; never call this a full content hash."""
     stat = path.stat()
     h = hashlib.sha256()
-    with path.open("rb") as f:
-        h.update(f.read(1024 * 1024))
+    with path.open("rb") as reader:
+        h.update(reader.read(1024 * 1024))
         if stat.st_size > 1024 * 1024:
-            f.seek(max(0, stat.st_size - 1024 * 1024))
-            h.update(f.read())
-    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-            "edge_sha256": h.hexdigest()}
+            reader.seek(max(0, stat.st_size - 1024 * 1024))
+            h.update(reader.read())
+    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "edge_sha256": h.hexdigest()}
+
+
+def legacy_provenance(path):
+    return {"origin": "legacy-json", "file": str(path), "raw_payload": "unavailable",
+            "historical_source_identity": "edge hash/stat only; not a historical full-file hash"}
+
+
+def legacy_stage(cache, filenames, settings, *, words=False):
+    context = CURRENT_LEGACY.get()
+    directory = context["directory"] if context else cache
+    for filename in filenames:
+        path = directory / filename
+        saved = read_json(path)
+        if not isinstance(saved, dict) or not isinstance(saved.get("settings"), dict):
+            continue
+        previous, expected = dict(saved["settings"]), dict(settings)
+        if context and previous.get("source") == context["signature"]:
+            previous["source"] = expected.get("source")
+        if words:
+            previous = {k: v for k, v in previous.items() if k not in ("speakers", "diarization", "additional_recognizers")}
+            if "recognizer" not in previous and expected.get("recognizer", {}).get("backend") == "mlx":
+                previous["recognizer"] = expected["recognizer"]
+        if previous == expected:
+            return saved, legacy_provenance(path)
+    return None, None
+
+
+def word_stage_settings(cache, settings):
+    words = {k: v for k, v in settings.items() if k not in ("diarization", "additional_recognizers")}
+    backend = settings["recognizer"]["backend"]
+    if backend == "whisperx":
+        words = asr_stage_settings(words)
+        raw = load_artifact(artifact_path(cache, "recognition.whisperx-turbo", words))
+        return {"recognition": words, "asr": raw["payload_sha256"] if raw else None,
+                "aligners": {"paths": model_manifest()["whisperx"]["alignment"],
+                             "revisions": model_manifest()["whisperx"]["identity"].get("alignment_revisions")}, "normalizer": 1}
+    return words
+
+
+def asr_stage_settings(settings):
+    return {**settings, "recognizer": {k: v for k, v in settings["recognizer"].items()
+                                      if k != "alignment_revisions"}}
+
+
+def backend_stage(backend):
+    return "alignment.whisperx-turbo" if backend == "whisperx" else "recognition.mlx-turbo"
 
 
 def ssl_context():
@@ -960,6 +1119,8 @@ def diarize(wav_path, models_dir, backend="nemotron"):
             payload = read_json(result_path)
         if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
             raise AppError("Nemotron 3 returned invalid diarization JSON.")
+        if CURRENT_LOCAL.get() is not None:
+            CURRENT_LOCAL.get()["raw_diarization"] = payload
         intervals = []
         for row in payload["segments"]:
             if not isinstance(row, dict):
@@ -1000,6 +1161,8 @@ def diarize_community(wav_path, models_dir):
     started = time.monotonic()
     pipeline = DiarizationPipeline(model_name=str(models_dir / spec["model"]), device="cpu")
     frame = pipeline(audio)  # No exact, minimum, or maximum count hint.
+    if CURRENT_LOCAL.get() is not None:
+        CURRENT_LOCAL.get()["raw_diarization"] = frame.to_dict(orient="records")
     rows = sorted(({"start": float(r.start), "end": float(r.end), "speaker": str(r.speaker)}
                    for r in frame.itertuples()), key=lambda r: (r["start"], r["end"], r["speaker"]))
     mapping = {}
@@ -1083,7 +1246,7 @@ def recognize(audio, models_dir, language, vocabulary, backend="whisperx", *, vo
             progress.complete(record=bool(words))
         return words
     words = recognize_whisperx(audio, models_dir, language, vocabulary, voice_intervals=voice_intervals, evidence=evidence)
-    if words and CURRENT_TIMING.get():
+    if words and CURRENT_TIMING.get() and (CURRENT_LOCAL.get() is None or CURRENT_LOCAL.get().get("inference")):
         CURRENT_TIMING.get().record(recognition_timing_key("whisperx.total", backend, language, vocabulary),
                                     len(audio) / 16000, time.monotonic() - started)
     return words
@@ -1091,8 +1254,14 @@ def recognize(audio, models_dir, language, vocabulary, backend="whisperx", *, vo
 
 def recognize_whisperx(audio, models_dir, language, vocabulary, *, voice_intervals=None, evidence=None):
     spec = model_manifest()["whisperx"]
+    context = CURRENT_LOCAL.get()
+    asr_settings = asr_stage_settings(context["word_settings"]) if context else None
+    saved = artifact_payload(context["cache"], "recognition.whisperx-turbo", asr_settings,
+                             context["force"]) if context else None
+    if not isinstance(saved, dict) or not isinstance(saved.get("result"), dict) or not isinstance(saved["result"].get("segments"), list):
+        saved = None
     probes = speech_probes(audio, voice_intervals or []) if language == "auto" else []
-    if language == "auto" and not probes:
+    if language == "auto" and not probes and not saved:
         say("  No non-silent speech available for WhisperX language detection.")
         return []
     duration = len(audio) / 16000
@@ -1109,10 +1278,15 @@ def recognize_whisperx(audio, models_dir, language, vocabulary, *, voice_interva
             nltk.data.path.insert(0, nltk_dir)
         say("  Transcription: WhisperX large-v3-turbo, CPU int8...")
         progress.phase("Loading model / VAD")
-        model = load_model(str(models_dir / spec["asr"]), "cpu", compute_type="int8",
+        model = None if saved else load_model(str(models_dir / spec["asr"]), "cpu", compute_type="int8",
             language=None if language == "auto" else language, local_files_only=True,
             threads=4, vad_method="pyannote", asr_options={"initial_prompt": vocabulary or None})
-        if language == "auto":
+        if saved:
+            say("  Reusing raw WhisperX recognition before alignment.")
+            result = saved["result"]
+            if evidence is not None:
+                evidence.update(saved.get("language_evidence", {}))
+        elif language == "auto":
             progress.phase("Detecting speech language")
             processing_stage("language detection", model="WhisperX Turbo")
             detection = detect_speech_language(model, probes)
@@ -1121,11 +1295,17 @@ def recognize_whisperx(audio, models_dir, language, vocabulary, *, voice_interva
                 evidence.update(detection)
         progress.phase("Detecting speech / transcribing")
         processing_stage("local recognition", model="WhisperX Turbo", language=language)
-        result = model.transcribe(audio, batch_size=4, language=language, task="transcribe", progress_callback=progress.callback)
+        if not saved:
+            if context:
+                context["inference"] = True
+            result = model.transcribe(audio, batch_size=4, language=language, task="transcribe", progress_callback=progress.callback)
+            if context:
+                save_artifact(context["cache"], "recognition.whisperx-turbo", asr_settings,
+                              {"result": result, "language_evidence": evidence or {}})
         progress.phase("Finalizing recognition")
         del model
         gc.collect()
-        progress.complete(record=bool(result["segments"]))
+        progress.complete(record=bool(result["segments"]) and not saved)
     if not result["segments"]:
         return []
     detected = result["language"]
@@ -1141,10 +1321,24 @@ def recognize_whisperx(audio, models_dir, language, vocabulary, *, voice_interva
         processing_stage("word alignment", language=detected, model="WhisperX Turbo")
         say(f"  Aligning WhisperX words: {detected}...")
         progress.phase("Loading alignment model")
-        model, metadata = load_align_model(detected, "cpu",
-            model_name=str(models_dir / spec["alignment"][detected]), model_cache_only=True)
-        progress.phase("Aligning words")
-        aligned = align(result["segments"], model, metadata, audio, "cpu", return_char_alignments=False, progress_callback=progress.callback)
+        alignment_settings = word_stage_settings(context["cache"], asr_settings) if context else None
+        raw_alignment = artifact_payload(context["cache"], "alignment.whisperx-turbo.raw", alignment_settings,
+                                         context["force"]) if context else None
+        model = None
+        if isinstance(raw_alignment, dict) and isinstance(raw_alignment.get("result", {}).get("segments"), list):
+            aligned = raw_alignment["result"]
+            say("  Reusing raw WhisperX alignment.")
+        else:
+            if context:
+                context["inference"] = True
+            model, metadata = load_align_model(detected, "cpu",
+                model_name=str(models_dir / spec["alignment"][detected]), model_cache_only=True)
+            progress.phase("Aligning words")
+            aligned = align(result["segments"], model, metadata, audio, "cpu", return_char_alignments=False, progress_callback=progress.callback)
+            if context:
+                save_artifact(context["cache"], "alignment.whisperx-turbo.raw", alignment_settings, {"result": aligned})
+        if context:
+            context["raw_alignment"] = aligned
         progress.phase("Finalizing word timestamps")
         words = []
         duration = len(audio) / 16000
@@ -1182,7 +1376,7 @@ def recognize_whisperx(audio, models_dir, language, vocabulary, *, voice_interva
                     "repetition_suspected": False})
         del model
         gc.collect()
-        progress.complete(record=bool(words))
+        progress.complete(record=bool(words) and not raw_alignment)
         return words
 
 
@@ -1203,6 +1397,8 @@ def recognize_mlx(audio, models_dir, language, vocabulary):
             verbose=None, word_timestamps=True, condition_on_previous_text=False,
             initial_prompt=vocabulary or None, temperature=(0.0, 0.2, 0.4),
             hallucination_silence_threshold=2.0)
+        if CURRENT_LOCAL.get() is not None:
+            CURRENT_LOCAL.get().setdefault("raw_recognition", []).append({"start": lo, "end": hi, "result": result})
         for segment in result["segments"]:
             suspicious = segment.get("compression_ratio", 0) > 2.8
             if segment.get("no_speech_prob", 0) > 0.8 and segment.get("avg_logprob", 0) < -0.7:
@@ -1407,6 +1603,8 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
         CURRENT_RUN.get().run.setdefault("text_usage", []).append({
             "stage": CURRENT_RUN.get().stage, "model": model, "effort": effort,
             "response_id": result.get("id"), "usage": result.get("usage"), "status": result.get("status")})
+    if CURRENT_RESPONSES.get() is not None:
+        CURRENT_RESPONSES.get().append(result)
     if result.get("status") != "completed":
         reason = (result.get("incomplete_details") or {}).get("reason", "unknown")
         raise AppError(f"OpenAI returned an incomplete response ({reason}); no summary was written.")
@@ -1576,17 +1774,36 @@ def extract_report_metadata(transcript, key, model, effort, cache, force=False, 
             current.append(entry); size += length
     if current:
         parts.append(current)
+    responses_by_path = {}
+    provenance_by_path = {}
     def request(prompt, payload, schema):
         signature = hashlib.sha256(json.dumps({"prompt": prompt, "payload": payload,
             "schema": schema, "model": model, "effort": effort}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        path = cache / "report-header" / (signature + ".json")
-        saved = read_json(path, {}) if not force else {}
-        if isinstance(saved, dict) and saved.get("signature") == signature:
-            return saved.get("result"), path, signature
-        text = call(key, model, effort, prompt, json.dumps(payload, ensure_ascii=False),
-                    schema=schema, max_output_tokens=8000)
+        settings = {"prompt": prompt, "payload": payload, "schema": schema, "model": model, "effort": effort}
+        path = artifact_path(cache, "summary.header", settings)
+        saved = artifact_payload(cache, "summary.header", settings, force)
+        if isinstance(saved, dict) and saved.get("signature") == json_identity(settings):
+            responses_by_path[path.name] = saved.get("responses", [])
+            provenance_by_path[path.name] = load_artifact(path).get("provenance")
+            return saved.get("result"), path, settings
+        legacy = CURRENT_LEGACY.get()
+        if legacy and not force:
+            old_path = legacy["output"] / "report-header" / (signature + ".json")
+            old = read_json(old_path)
+            if isinstance(old, dict) and old.get("signature") == signature:
+                provenance_by_path[path.name] = legacy_provenance(old_path)
+                return old.get("result"), path, settings
+        responses = []
+        token = CURRENT_RESPONSES.set(responses)
         try:
-            return json.loads(text), path, signature
+            text = call(key, model, effort, prompt, json.dumps(payload, ensure_ascii=False),
+                        schema=schema, max_output_tokens=8000)
+        finally:
+            CURRENT_RESPONSES.reset(token)
+        responses_by_path[path.name] = responses
+
+        try:
+            return json.loads(text), path, settings
         except (TypeError, ValueError):
             raise AppError("Report header returned invalid JSON; existing summaries are preserved.") from None
     topics, candidates = [], []
@@ -1598,7 +1815,8 @@ def extract_report_metadata(transcript, key, model, effort, cache, force=False, 
         raw, path, signature = request(REPORT_HEADER_PROMPT, payload, report_header_schema())
         supplied_ids = {turn["id"] for turn in part + context}
         validated = validate_report_metadata(raw, [turn for turn in turns if turn["id"] in supplied_ids], roster)
-        save_json(path, {"signature": signature, "result": raw})
+        save_artifact(cache, "summary.header", signature, {"signature": json_identity(signature), "result": raw,
+                      "responses": responses_by_path.get(path.name, [])}, provenance=provenance_by_path.get(path.name))
         if validated["topic"]:
             topics.append(validated["topic"])
         candidates.extend(validated["roles"])
@@ -1611,7 +1829,8 @@ def extract_report_metadata(transcript, key, model, effort, cache, force=False, 
             raw, path, signature = request(REPORT_TOPIC_PROMPT, {"topics": topics[group:group + 100]}, topic_schema)
             if not isinstance(raw, dict) or set(raw) != {"topic"} or not header_text(raw["topic"], 240):
                 raise AppError("Report header returned an invalid combined topic.")
-            save_json(path, {"signature": signature, "result": raw})
+            save_artifact(cache, "summary.header", signature, {"signature": json_identity(signature), "result": raw,
+                          "responses": responses_by_path.get(path.name, [])}, provenance=provenance_by_path.get(path.name))
             if raw["topic"].strip():
                 combined.append(raw["topic"].strip())
         topics = combined
@@ -1933,23 +2152,29 @@ def gpt_audio_request(wav_path, key, language, vocabulary):
 def transcribe_gpt(wav_path, cache, settings, key, language, vocabulary, force=False,
                    request_fn=None):
     request_fn = request_fn or gpt_audio_request
-    stage_path = cache / "gpt-stage.json"
-    stage = read_json(stage_path, {})
-    if force or stage.get("settings") != settings:
-        stage = {"settings": settings, "chunks": []}
+    legacy, provenance = legacy_stage(cache, ["gpt-stage.json"], settings)
+    cached = {c["index"]: c for c in (legacy or {}).get("chunks", [])
+              if isinstance(c, dict) and type(c.get("index")) is int}
     with wave.open(str(wav_path)) as reader:
         rate, total = reader.getframerate(), reader.getnframes()
         if reader.getnchannels() != 1 or reader.getsampwidth() != 2 or rate != 16000:
             raise AppError("GPT input must be mono 16 kHz PCM16 WAV.")
         chunk_frames = rate * AUDIO_CHUNK_SECONDS  # <= 19.2 MB per WAV at the production default.
         count = (total + chunk_frames - 1) // chunk_frames
-        cached = {c["index"]: c for c in stage.get("chunks", [])}
         complete = []
         for index in range(count):
             start_frame = index * chunk_frames
             end_frame = min(total, start_frame + chunk_frames)
-            chunk = cached.get(index)
-            if (chunk and chunk.get("start") == start_frame / rate
+            part_settings = {**settings, "chunk_seconds": AUDIO_CHUNK_SECONDS, "index": index,
+                             "start": start_frame / rate, "end": end_frame / rate}
+            stage = f"recognition.gpt-transcribe.part-{index + 1:04d}"
+            stored = artifact_payload(cache, stage, part_settings, force)
+            chunk = stored.get("chunk") if isinstance(stored, dict) else None
+            if chunk is None and not force:
+                chunk = cached.get(index)
+                if chunk and valid_rows([chunk], text=True):
+                    save_artifact(cache, stage, part_settings, {"chunk": chunk, "raw": None}, provenance=provenance)
+            if (isinstance(chunk, dict) and chunk.get("index") == index and chunk.get("start") == start_frame / rate
                     and chunk.get("end") == end_frame / rate and isinstance(chunk.get("text"), str)):
                 say(f"  Reusing GPT-Transcribe chunk {index + 1}/{count}.")
             else:
@@ -1968,9 +2193,7 @@ def transcribe_gpt(wav_path, cache, settings, key, language, vocabulary, force=F
                 chunk = {"index": index, "start": start_frame / rate, "end": end_frame / rate,
                          "text": result["text"], "languages": result.get("languages", []),
                          "usage": result.get("usage", {})}
-                cached[index] = chunk
-                stage["chunks"] = [cached[i] for i in sorted(cached)]
-                save_json(stage_path, stage)
+                save_artifact(cache, stage, part_settings, {"chunk": chunk, "raw": result})
             complete.append(chunk)
     return complete
 
@@ -2107,18 +2330,14 @@ def validate_reconciliation(result, primary, single_source):
     return texts, recovered
 
 
-def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False, call=None,
-                     *, single_source=False, additional_turns=None, issues=None):
-    """Edit text and propose display names; never change voice IDs or timestamps."""
-    call = call or api_request
-    prompt = SINGLE_SOURCE_PROMPT if single_source else FUSION_PROMPT
+def reconciliation_inputs(chunks, local_turns, additional_turns, name_candidates):
+    """Describe fixed anchors and context identically for inference and JSON adapters."""
     anchors = [{"id": i, "start": t["start"], "end": t["end"],
                 "speaker": speaker_label(t["speaker"]) if t["speaker"] else "UNKNOWN SPEAKER",
                 "text": t["text"]} for i, t in enumerate(local_turns)]
     speaker_ids = list(dict.fromkeys(a["speaker"] for a in anchors if a["speaker"] != "UNKNOWN SPEAKER"))
     speaker_context = {"speaker_ids": speaker_ids, "observed_speaker_count": len(speaker_ids),
                        "has_unattributed_speech": any(a["speaker"] == "UNKNOWN SPEAKER" for a in anchors)}
-    corrected, supplements, name_candidates = {}, [], []
     for position, chunk in enumerate(chunks):
         primary = [a for a in anchors if chunk["start"] <= (a["start"] + a["end"]) / 2 < chunk["end"]]
         # A padded diarization anchor can extend a few milliseconds past the WAV end.
@@ -2136,11 +2355,32 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
             payload["additional_local_source"] = [t for t in additional_turns
                 if context[0]["start"] <= (t["start"] + t["end"]) / 2 < context[-1]["end"]]
             payload["additional_source_note"] = "Independent MLX words for comparison only; never change fixed SOURCE B anchors."
+        yield position, chunk, primary, context_anchors, context, payload
+
+
+def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False, call=None,
+                     *, single_source=False, additional_turns=None, issues=None):
+    """Edit text and propose display names; never change voice IDs or timestamps."""
+    call = call or api_request
+    prompt = SINGLE_SOURCE_PROMPT if single_source else FUSION_PROMPT
+    corrected, supplements, name_candidates = {}, [], []
+    for position, chunk, primary, context_anchors, context, payload in reconciliation_inputs(
+            chunks, local_turns, additional_turns, name_candidates):
         signature = hashlib.sha256(json.dumps(
             {"payload": payload, "model": model, "effort": effort, "prompt": prompt},
             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        path = cache / "fusion" / (signature + ".json")
-        result = None if force else read_json(path)
+        settings = {"payload": payload, "model": model, "effort": effort, "prompt": prompt, "validator": 3}
+        stage = f"reconciliation.part-{position + 1:04d}"
+        envelope = None if force else load_artifact(artifact_path(cache, stage, settings), stage, settings)
+        stored = envelope["payload"] if envelope else None
+        result = stored.get("result") if isinstance(stored, dict) else None
+        provenance = envelope.get("provenance") if envelope else None
+        if result is None and not force and CURRENT_LEGACY.get():
+            path = CURRENT_LEGACY.get()["directory"] / "fusion" / (signature + ".json")
+            result = read_json(path)
+            if result is not None:
+                provenance = legacy_provenance(path)
+        responses = stored.get("responses", []) if isinstance(stored, dict) else []
         failure = None
         for attempt in range(3):
             answer = None
@@ -2151,8 +2391,12 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
                     if failure:
                         request["validation_feedback"] = {"error": failure,
                             "instruction": "Correct this validation failure using the original sources. Return all primary anchors."}
-                    answer = call(key, model, effort, prompt, json.dumps(request, ensure_ascii=False),
-                                  schema=fusion_schema(), max_output_tokens=20000)
+                    token = CURRENT_RESPONSES.set(responses)
+                    try:
+                        answer = call(key, model, effort, prompt, json.dumps(request, ensure_ascii=False),
+                                      schema=fusion_schema(), max_output_tokens=20000)
+                    finally:
+                        CURRENT_RESPONSES.reset(token)
                     try:
                         result = json.loads(answer)
                     except (ValueError, TypeError):
@@ -2165,7 +2409,8 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
                 rejected = {"part": position + 1, "start": chunk["start"], "end": chunk["end"],
                             "attempt": attempt + 1, "model": model, "effort": effort,
                             "error": failure, "response": answer if answer is not None else result}
-                save_json(cache / "fusion-rejected" / (signature + f"-{time.time_ns()}.json"), redacted(rejected, key))
+                save_artifact(cache, "reconciliation.rejected", {"signature": signature, "attempt": time.time_ns()},
+                              redacted({**rejected, "responses": responses}, key))
                 diagnostic("reconciliation", failure, **{k: v for k, v in rejected.items() if k != "error"})
                 # Transport/auth/quota failures already have their own policy in
                 # api_request; corrective retries are for returned content only.
@@ -2181,7 +2426,7 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
             if extra.strip():
                 supplements.append({"start": chunk["start"], "end": chunk["end"], "text": extra.strip()})
             name_candidates.extend(candidates)
-            save_json(path, result)
+            save_artifact(cache, stage, settings, {"result": result, "responses": responses}, provenance=provenance)
             failure = None
             break
         if failure:
@@ -2192,6 +2437,10 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
             if CURRENT_RUN.get() is not None:
                 CURRENT_RUN.get().partial = True
             say(f"  WARNING: Reconciliation part {position + 1} unresolved; source text retained for this part.")
+    return restored_turns(local_turns, corrected, name_candidates), supplements
+
+
+def restored_turns(local_turns, corrected, name_candidates):
     if set(corrected) != set(range(len(local_turns))):
         raise AppError("Fusion did not cover all local anchors.")
     turns = [{**turn, "text": corrected[i]} for i, turn in enumerate(local_turns) if corrected[i]]
@@ -2202,7 +2451,31 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
         label = speaker_label(turn["speaker"]) if turn["speaker"] else "UNKNOWN SPEAKER"
         if label in names:
             turn["speaker_name"] = names[label]
-    return turns, supplements
+    return turns
+
+
+def restore_legacy_turns(chunks, local_turns, cache, key, model, effort, force=False,
+                         *, single_source=False, additional_turns=None, issues=None):
+    """Pure JSON adapter: no extraction, recognition or reconciliation invocation."""
+    prompt = SINGLE_SOURCE_PROMPT if single_source else FUSION_PROMPT
+    corrected, supplements, candidates = {}, [], []
+    for position, chunk, primary, context_anchors, context, payload in reconciliation_inputs(
+            chunks, local_turns, additional_turns, candidates):
+        original_settings = {"payload": payload, "model": model, "effort": effort, "prompt": prompt}
+        signature = hashlib.sha256(json.dumps(original_settings, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        path = CURRENT_LEGACY.get()["directory"] / "fusion" / (signature + ".json")
+        result = read_json(path)
+        if result is None:
+            raise AppError("Legacy JSON is missing a compatible reconciliation part; final JSON cannot be reconstructed.")
+        texts, _ = validate_reconciliation(result, primary, single_source)
+        candidates.extend(supported_speaker_names(result["speaker_names"], primary + context_anchors,
+            texts, "\n\n".join(c["text"] for c in context)))
+        corrected.update(texts)
+        if result["unassigned_text"].strip():
+            supplements.append({"start": chunk["start"], "end": chunk["end"], "text": result["unassigned_text"].strip()})
+        save_artifact(cache, f"reconciliation.part-{position + 1:04d}", {**original_settings, "validator": 3},
+                      {"result": result, "responses": []}, provenance=legacy_provenance(path))
+    return restored_turns(local_turns, corrected, candidates), supplements
 
 
 def transcript_chunks(turns):
@@ -2221,33 +2494,28 @@ def output_state_path(cache, log_path):
 
 
 def local_checkpoints(cache, settings, args):
-    """The same reuse decisions serve both the forecast and actual execution."""
+    """Independent, deterministic stage variants shared by forecasts and execution."""
     backend = settings["recognizer"]["backend"]
-    voice_path = cache / "voices-stage.json"
-    shared_word_path, backend_word_path = cache / "words-stage.json", cache / f"words-stage-{backend}.json"
-    word_path = backend_word_path if args.transcription_model == ALL_MODE else shared_word_path
-    other_word_path = shared_word_path if word_path == backend_word_path else backend_word_path
-    voices = read_json(voice_path, {})
     voice_settings = {k: settings[k] for k in ("source", "models", "diarization")}
     word_settings = {k: v for k, v in settings.items() if k not in ("diarization", "additional_recognizers")}
-    # Legacy word checkpoints also included the old fixed-count voice settings.
-    # Word decoding did not use those fields; old voice intervals are NOT reused.
-    def matches_words(stage):
-        saved = stage.get("settings")
-        if not isinstance(saved, dict):
-            return False
-        saved = {k: v for k, v in saved.items() if k not in ("speakers", "diarization")}
-        if "recognizer" not in saved and backend == "mlx":
-            saved["recognizer"] = settings["recognizer"]
-        return saved == word_settings
-    words = read_json(word_path, {})
-    if not args.force and not matches_words(words):
-        alternate = read_json(other_word_path, {})
-        if matches_words(alternate):
-            words = alternate
-    voices_ready = not args.force and voices.get("settings") == voice_settings
-    words_ready = not args.force and matches_words(words)
-    return backend, word_path, voices, words, voice_settings, word_settings, voices_ready, words_ready
+    voice_stage = "diarization." + ("nemotron-3" if args.diarization_model == "nemotron" else "community-1")
+    voices = artifact_payload(cache, voice_stage, voice_settings, args.force)
+    words = artifact_payload(cache, backend_stage(backend), word_stage_settings(cache, settings), args.force)
+    if not args.force and not isinstance(voices, dict):
+        old, provenance = legacy_stage(cache, ["voices-stage.json"], voice_settings)
+        if old and valid_rows(old.get("intervals"), speaker=True):
+            voices = {"intervals": old["intervals"], "raw": None}
+            save_artifact(cache, voice_stage, voice_settings, voices, provenance=provenance)
+    if not args.force and not isinstance(words, dict):
+        old, provenance = legacy_stage(cache, [f"words-stage-{backend}.json", "words-stage.json"], word_settings, words=True)
+        if old and valid_rows(old.get("words"), text=True):
+            words = {"words": old["words"], "duration": old.get("duration"),
+                     "language_evidence": old.get("language_evidence", {}), "raw": None}
+            save_artifact(cache, backend_stage(backend), word_stage_settings(cache, settings), words, provenance=provenance)
+    voices_ready = not args.force and isinstance(voices, dict) and valid_rows(voices.get("intervals"), speaker=True)
+    words_ready = not args.force and isinstance(words, dict) and valid_rows(words.get("words"), text=True)
+    return (backend, artifact_path(cache, backend_stage(backend), word_stage_settings(cache, settings)),
+            voices or {}, words or {}, voice_settings, word_settings, voices_ready, words_ready)
 
 
 def forecast_local(wav_path, cache, settings, args):
@@ -2303,40 +2571,52 @@ def forecast_local(wav_path, cache, settings, args):
 
 
 def local_recognition(wav_path, cache, settings, args, *, voice_intervals=None):
-    """Reuse the local stages independently of the chosen final transcript model."""
-    backend, word_path, voices, words, voice_settings, word_settings, voices_ready, words_ready = local_checkpoints(cache, settings, args)
-    with wave.open(str(wav_path)) as reader:
-        duration = reader.getnframes() / reader.getframerate()
-        if not reader.getnframes():
-            raise AppError("The audio track is empty.")
-        if not words_ready:
-            import numpy as np
-            audio = np.frombuffer(reader.readframes(reader.getnframes()), dtype=np.int16).astype(np.float32) / 32768
-    if voice_intervals is not None:
-        intervals = voice_intervals
-        say("  Reusing voice intervals from the current comparison run.")
-    elif voices_ready:
-        intervals = voices["intervals"]
-        say(f"  Reusing {args.diarization_model} automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
-    else:
-        processing_stage("diarization")
-        intervals = diarize(wav_path, args.models_dir, args.diarization_model)
-        save_json(cache / "voices-stage.json", {"settings": voice_settings, "intervals": intervals})
-    if words_ready:
-        recognized = words["words"]
-        say(f"  Reusing saved {backend} words.")
-    else:
-        processing_stage("local recognition", model=backend)
-        evidence = {}
-        recognized = recognize(audio, args.models_dir, args.language, args.vocabulary,
-                               settings["recognizer"]["backend"], voice_intervals=intervals,
-                               evidence=evidence) if intervals else []
-        save_json(word_path, {"settings": word_settings, "duration": duration, "words": recognized,
-                             "language_evidence": evidence})
-    turns = assign_speakers(recognized, intervals)
-    result = {"duration": duration, "words": recognized, "voices": intervals, "turns": turns}
-    save_json(cache / (f"recognition-{backend}.json" if args.transcription_model == ALL_MODE else "recognition.json"), result)
-    return result
+    """Save successful backend payloads before proceeding to dependent stages."""
+    backend, _, voices, words, voice_settings, word_settings, voices_ready, words_ready = local_checkpoints(cache, settings, args)
+    context = {"cache": cache, "word_settings": word_settings, "force": args.force}
+    token = CURRENT_LOCAL.set(context)
+    try:
+        with wave.open(str(wav_path)) as reader:
+            duration = reader.getnframes() / reader.getframerate()
+            if not reader.getnframes():
+                raise AppError("The audio track is empty.")
+            if not words_ready:
+                import numpy as np
+                audio = np.frombuffer(reader.readframes(reader.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+        if voice_intervals is not None:
+            intervals = voice_intervals
+            say("  Reusing voice intervals from the current comparison run.")
+        elif voices_ready:
+            intervals = voices["intervals"]
+            say(f"  Reusing {args.diarization_model} automatic diarization: {len({v['speaker'] for v in intervals})} voice(s).")
+        else:
+            processing_stage("diarization")
+            intervals = diarize(wav_path, args.models_dir, args.diarization_model)
+            if not valid_rows(intervals, speaker=True):
+                raise AppError("Invalid diarization intervals.")
+            voice_stage = "diarization." + ("nemotron-3" if args.diarization_model == "nemotron" else "community-1")
+            save_artifact(cache, voice_stage, voice_settings,
+                          {"intervals": intervals, "raw": context.get("raw_diarization")})
+        if words_ready:
+            recognized = words["words"]
+            say(f"  Reusing saved {backend} words.")
+        else:
+            processing_stage("local recognition", model=backend)
+            evidence = {}
+            recognized = recognize(audio, args.models_dir, args.language, args.vocabulary,
+                                   backend, voice_intervals=intervals, evidence=evidence) if intervals else []
+            if not valid_rows(recognized, text=True):
+                raise AppError("Invalid recognized words.")
+            save_artifact(cache, backend_stage(backend), word_stage_settings(cache, settings),
+                          {"duration": duration, "words": recognized, "language_evidence": evidence,
+                           "raw": context.get("raw_alignment" if backend == "whisperx" else "raw_recognition")})
+        turns = assign_speakers(recognized, intervals)
+        result = {"duration": duration, "words": recognized, "voices": intervals, "turns": turns}
+        save_artifact(cache, "materialization." + backend + "-anchors",
+                      {"words": json_identity(recognized), "voices": json_identity(intervals), "renderer": 1}, result)
+        return result
+    finally:
+        CURRENT_LOCAL.reset(token)
 
 
 def collect_files(file_args, cwd, input_dir=None):
@@ -2752,12 +3032,8 @@ def process_file(source, args, key, *, prepare_models=False):
         token = CURRENT_RUN.set(diagnostics)
         timing_token = CURRENT_TIMING.set(TimingHistory(args.cache_dir / "timings.json"))
         try:
-            if prepare_models and not args.summary_only and args.transcription_model != ONLINE_MODE:
-                processing_stage("model preparation")
-                ensure_models(args.models_dir, args.offline, args.verify_models,
-                              transcription_model=args.transcription_model, diarization_model=args.diarization_model)
             processing_stage("output validation")
-            result = _process_file(source, args, "" if args.offline else key)
+            result = _process_file(source, args, "" if args.offline else key, prepare_models=prepare_models)
         except BaseException as exc:
             diagnostics.event(diagnostics.stage, str(exc) or type(exc).__name__, **diagnostics.details)
             diagnostics.finish("interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
@@ -2770,8 +3046,8 @@ def process_file(source, args, key, *, prepare_models=False):
             CURRENT_RUN.reset(token)
 
 
-def recognition_settings(source, args):
-    settings = {"version": CACHE_VERSION, "source": source_signature(source),
+def recognition_settings(source, args, signature=None):
+    settings = {"version": CACHE_VERSION, "source": signature or source_signature(source),
                 "language": args.language, "vocabulary": args.vocabulary,
                 "models": portable_model_path(args.models_dir)}
     if args.transcription_model != ONLINE_MODE:
@@ -2782,255 +3058,472 @@ def recognition_settings(source, args):
     return settings
 
 
-def _process_file(source, args, key):
+def final_reference(cache, reference, *, required=False):
+    saved = None
+    if isinstance(reference, dict) and set(reference) == {"file", "payload_sha256"}:
+        name = reference["file"]
+        if isinstance(name, str) and Path(name).name == name:
+            saved = load_artifact(cache / name, "reconciliation.final-transcript")
+            if saved:
+                try:
+                    valid = (saved["payload_sha256"] == reference["payload_sha256"]
+                             and saved["settings"]["request"]["settings"]["source"] == read_json(cache / "manifest.json")["source"]
+                             and valid_final(saved["payload"]))
+                except (KeyError, TypeError, ValueError):
+                    valid = False
+                if not valid:
+                    saved = None
+    if required and saved is None:
+        raise AppError("Missing, ambiguous or invalid internal final JSON. An exported .log.md is not a cache input; "
+                       "run ordinary processing to build a validated internal transcript.")
+    return saved
+
+
+def valid_final(value):
+    valid = (isinstance(value, dict) and value.get("status") in ("complete", "partial", "fallback", "offline")
+            and valid_rows(value.get("turns"), text=True, speaker=True)
+            and valid_rows(value.get("supplements"), text=True)
+            and type(value.get("duration")) in (int, float) and math.isfinite(value["duration"])
+            and value["duration"] >= 0 and isinstance(value.get("provenance"), str)
+            and isinstance(value.get("sources"), dict) and isinstance(value.get("source_reports"), list)
+            and type(value.get("pipeline_complete")) is bool and type(value.get("api_only")) is bool
+            and value.get("recognizer") in ("whisperx", "mlx")
+            and value.get("diarizer") in ("nemotron", "community-1")
+            and isinstance(value.get("source_name"), str) and isinstance(value.get("source_mode"), str))
+    if not valid:
+        return False
+    for turn in value["turns"]:
+        if "speaker_name" in turn and (not isinstance(turn["speaker_name"], str) or not turn["speaker_name"].strip()):
+            return False
+    sources = value["sources"]
+    for key in ("local", "mlx_local"):
+        local = sources.get(key)
+        if local is not None and (not isinstance(local, dict)
+                or not valid_rows(local.get("turns"), text=True, speaker=True)
+                or not valid_rows(local.get("voices"), speaker=True)
+                or not valid_rows(local.get("words"), text=True)
+                or type(local.get("duration")) not in (int, float) or not math.isfinite(local["duration"])):
+            return False
+    if sources.get("gpt_chunks") is not None and not valid_rows(sources["gpt_chunks"], text=True):
+        return False
+    try:
+        return (value.get("text") == render_final(Path(value["source_name"]), value)
+                and value["source_reports"] == final_sources(Path(value["source_name"]), value))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def render_final(source, final):
+    if final["api_only"]:
+        text = gpt_transcript_text(source, final["turns"])
+        if final.get("reconciled_by"):
+            text = text.replace("Sources: GPT-Transcribe only\n",
+                "Sources: GPT-Transcribe only; reconciled by " + final["reconciled_by"] + "\n", 1)
+    else:
+        text = transcript_text(source, final["duration"], final["turns"],
+                               provenance=final["provenance"], supplements=final["supplements"])
+    if final.get("reconciliation_issues"):
+        text += "\nRECONCILIATION INCOMPLETE — source text retained in unresolved parts:\n"
+        text += "\n".join(f"Part {i['part']}: {clock(i['start'])}–{clock(i['end'])}" for i in final["reconciliation_issues"]) + "\n"
+    elif final["status"] == "fallback":
+        text += "\nRECONCILIATION INCOMPLETE — source text retained for the entire recording.\n"
+    return text
+
+
+def materialize_final(cache, reference, final, source):
+    settings = {"final": reference, "renderer": 1, "source_name": source.name}
+    text = render_final(source, final)
+    payload = artifact_payload(cache, "materialization.final-transcript", settings)
+    if not isinstance(payload, dict) or payload.get("text") != text or payload.get("final") != reference:
+        save_artifact(cache, "materialization.final-transcript", settings,
+                      {"final": reference, "text": text, "source_name": source.name, "status": final["status"]})
+    return text
+
+
+def select_final(cache, reference, log_path, request=None):
+    manifest = read_json(cache / "manifest.json")
+    identity = output_state_path(cache, log_path).parent.name
+    manifest["selected_final"] = reference
+    manifest["selected_finals"][identity] = reference
+    if request is not None:
+        manifest.setdefault("requests", {})[json_identity(request)] = reference
+    save_json(cache / "manifest.json", manifest)
+
+
+def final_sources(source, final):
+    # Frozen JSON payloads, not mutable shared stage slots or exported text.
+    sources = final["sources"]
+    return recognition_source_reports(source, local=sources.get("local"), gpt_chunks=sources.get("gpt_chunks"),
+        recognizer=final["recognizer"], diarizer=final["diarizer"], mlx_local=sources.get("mlx_local"))
+
+
+def persist_final(cache, request, final):
+    dependencies = {name: identity for name, identity in (CURRENT_ARTIFACTS.get() or {}).items()
+                    if name.startswith(("recognition.", "alignment.", "diarization.", "reconciliation.part-"))}
+    if final["sources"].get("gpt_chunks") is None:
+        dependencies = {name: identity for name, identity in dependencies.items()
+                        if not name.startswith("recognition.gpt-transcribe.")}
+    # Only selected source payloads determine the final variant; unrelated cached
+    # configurations are inventory, never dependencies of this result.
+    settings = {"request": request, "sources": json_identity(final["sources"]), "dependencies": dependencies, "renderer": 1}
+    final["dependencies"] = dependencies
+    final["speaker_names"] = {speaker_label(t["speaker"]): t["speaker_name"] for t in final["turns"]
+                              if t.get("speaker") and t.get("speaker_name")}
+    if final.get("source_name"):
+        final["text"] = render_final(Path(final["source_name"]), final)
+    return save_artifact(cache, "reconciliation.final-transcript", settings, final,
+                         provenance=final.get("legacy_provenance"))
+
+
+def migrate_legacy_final(source, args, cache, state, request):
+    """Rebuild only from verifiable JSON. Exported Markdown is never imported."""
+    context = CURRENT_LEGACY.get()
+    if not state.get("legacy_provenance") or not context:
+        raise AppError("Legacy JSON cannot reconstruct a final transcript: matching output state is missing. "
+                       "An exported .log.md cannot supply this prerequisite.")
+    old_args = argparse.Namespace(**vars(args))
+    selection = state.get("selection", {})
+    mode = selection.get("transcription_model")
+    if mode not in (ONLINE_MODE, COMBINED_MODE, ALL_MODE, "whisperx", "mlx"):
+        raise AppError("Legacy JSON has no compatible final selection; ordinary processing is required.")
+    old_args.transcription_model = mode
+    old_args.force = False
+    old_args.offline = "fusion" not in selection
+    settings = state["settings"]
+    voice_identity = settings.get("diarization")
+    if mode != ONLINE_MODE:
+        choices = [backend for backend in ("nemotron", "community-1")
+                   if diarization_spec(backend)["identity"] == voice_identity]
+        if len(choices) != 1:
+            raise AppError("Legacy JSON diarization identity cannot reconstruct the final transcript.")
+        old_args.diarization_model = choices[0]
+    local = mlx_local = gpt_chunks = None
+    if mode in (ONLINE_MODE, COMBINED_MODE, ALL_MODE):
+        gpt_settings = {"source": settings["source"], "language": settings["language"],
+                        "vocabulary": settings["vocabulary"], "model": "gpt-transcribe", "request_version": 1}
+        old, _ = legacy_stage(cache, ["gpt-stage.json"], gpt_settings)
+        if old and valid_rows(old.get("chunks"), text=True):
+            gpt_chunks = old["chunks"]
+        if mode == ONLINE_MODE and not gpt_chunks:
+            raise AppError("Legacy JSON is missing cloud recognition chunks; cannot reconstruct final JSON.")
+    if mode != ONLINE_MODE:
+        def restore(configuration):
+            backend, _, voices, words, _, _, voices_ready, words_ready = local_checkpoints(cache, configuration, old_args)
+            if not voices_ready or not words_ready:
+                raise AppError("Legacy JSON is missing compatible words/voice checkpoints; cannot reconstruct final JSON.")
+            duration = words.get("duration")
+            if type(duration) not in (int, float):
+                turns = assign_speakers(words["words"], voices["intervals"])
+                for name in (f"recognition-{backend}.json", "recognition.json"):
+                    old = read_json(context["directory"] / name)
+                    if (isinstance(old, dict) and old.get("words") == words["words"]
+                            and old.get("voices") == voices["intervals"] and old.get("turns") == turns):
+                        duration = old.get("duration")
+                        break
+            if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
+                raise AppError("Legacy JSON is missing audio duration; cannot reconstruct final JSON without processing.")
+            return {"duration": duration, "words": words["words"], "voices": voices["intervals"],
+                    "turns": assign_speakers(words["words"], voices["intervals"])}
+        local = restore(settings)
+        if mode == ALL_MODE:
+            mlx_settings = {k: v for k, v in settings.items() if k != "additional_recognizers"}
+            mlx_settings["recognizer"] = settings["additional_recognizers"]["mlx"]
+            mlx_local = restore(mlx_settings)
+    final = reconcile_final(source, old_args, "", cache, selection, local, gpt_chunks, mlx_local,
+                            state.get("gpt_error"), cache_only=True)
+    if (final_sources(source, final) != state.get("source_reports", {}).get("reports")
+            or hashlib.sha256(render_final(source, final).encode()).hexdigest() != state.get("transcript_sha256")):
+        raise AppError("Legacy JSON does not reproduce the frozen final transcript; exported logs are not migration inputs.")
+    final["legacy_provenance"] = state["legacy_provenance"]
+    migrated_request = {"settings": settings, "selection": selection}
+    reference = persist_final(cache, migrated_request, final)
+    select_final(cache, reference, output_paths(source, args.output_dir)[0], migrated_request)
+    return reference
+
+
+def _process_file(source, args, key, *, prepare_models=False):
     if args.monitor_dir is not None and monitor_snapshot(source) != args.monitor_expected_snapshot:
         raise AppError("Source changed after the monitor readiness check; waiting for a new stable version.")
+    snapshot = source_snapshot(source)
+    signature = source_signature(source)
+    cache = args.cache_dir / signature["sha256"]
+    import fcntl
+    lock_dir = args.cache_dir / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with (lock_dir / ("source-" + signature["sha256"] + ".lock")).open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise AppError("Another application instance is already processing this recording content; retry later.") from None
+        if source_snapshot(source) != snapshot:
+            raise AppError("Source changed before cache access; retry with a stable recording.")
+        cache.mkdir(parents=True, exist_ok=True)
+        open_manifest(cache, signature, source)
+        old = args.cache_dir / hashlib.sha256(str(source).encode()).hexdigest()[:16]
+        context = {"directory": old, "signature": legacy_source_signature(source),
+                   "output": output_state_path(old, output_paths(source, args.output_dir)[0]).parent} if old.is_dir() else None
+        token = CURRENT_LEGACY.set(context)
+        artifacts_token = CURRENT_ARTIFACTS.set({})
+        try:
+            return _process_cached(source, args, key, cache, signature, snapshot, prepare_models)
+        finally:
+            CURRENT_ARTIFACTS.reset(artifacts_token)
+            CURRENT_LEGACY.reset(token)
+
+
+def _process_cached(source, args, key, cache, signature, snapshot, prepare_models):
     log_path, summary_path = output_paths(source, args.output_dir)
     all_summaries = summary_paths(source, args.output_dir)
-    cache_id = hashlib.sha256(str(source).encode()).hexdigest()[:16]
-    cache = args.cache_dir / cache_id
-    cache.mkdir(parents=True, exist_ok=True)
-    settings = recognition_settings(source, args)
+    if any(path.is_symlink() for path in (log_path, *all_summaries)):
+        raise AppError("Output file is a symlink; refusing to replace it.")
+    settings = recognition_settings(source, args, signature)
     selection = {"transcription_model": args.transcription_model}
     fusion_model, fusion_effort = args.summarize_model or (DEFAULT_MODEL, DEFAULT_EFFORT)
     if not args.offline:
         selection["fusion"] = {"model": fusion_model, "effort": fusion_effort,
-                               "prompt": hashlib.sha256((FUSION_PROMPT + SINGLE_SOURCE_PROMPT).encode()).hexdigest(),
-                               "version": 3}
+            "prompt": hashlib.sha256((FUSION_PROMPT + SINGLE_SOURCE_PROMPT).encode()).hexdigest(), "version": 3}
+    request = {"settings": settings, "selection": selection}
     state_path = output_state_path(cache, log_path)
     state = read_json(state_path, {})
-    # Legacy state belonged to the old input-adjacent/default log. It can prove
-    # ownership for migration, but must never be used across arbitrary output dirs.
-    if not state and log_path.resolve() == (source.parent / (source.stem + ".log.md")).resolve():
-        legacy = read_json(cache / "state.json", {})
-        if legacy:
-            state = {**legacy, "selection": {"transcription_model": "mlx"}, "pipeline_complete": True}
-    saved_settings = state.get("settings")
-    saved_selection = state.get("selection")
-    if isinstance(saved_selection, dict):
-        saved_selection = dict(saved_selection)
-        previous_mode = saved_selection.get("transcription_model")
-        if previous_mode == "gpt-transcribe":
-            saved_selection["transcription_model"] = ONLINE_MODE
-        elif previous_mode == "whisper-local":
-            saved_selection["transcription_model"] = "mlx"
-    if (args.transcription_model == ONLINE_MODE and isinstance(saved_settings, dict)
-            and (saved_selection or {}).get("transcription_model") == ONLINE_MODE):
-        # The old shared settings carried a count even for API-only outputs.
-        # Discard that unused field only when ownership proves an API-only log.
-        saved_settings = {k: v for k, v in saved_settings.items() if k != "speakers"}
-    elif (args.transcription_model == "mlx" and isinstance(saved_settings, dict)
-            and (saved_selection or {}).get("transcription_model") == "mlx" and "recognizer" not in saved_settings):
-        saved_settings = {**saved_settings, "recognizer": settings["recognizer"]}
-    owned = saved_settings == settings
-    reusable = (owned and saved_selection == selection and log_path.is_file()
-                and state.get("pipeline_complete", True))
+    if not isinstance(state, dict):
+        state = {}
+    context = CURRENT_LEGACY.get()
+    if not state and context:
+        legacy_path = output_state_path(context["directory"], log_path)
+        legacy = read_json(legacy_path, {})
+        if not legacy and log_path.resolve() == source.with_suffix(".log.md").resolve():
+            legacy_path = context["directory"] / "state.json"
+            legacy = read_json(legacy_path, {})
+        if isinstance(legacy, dict) and legacy.get("settings", {}).get("source") == context["signature"]:
+            state = {**legacy, "settings": {**legacy["settings"], "source": signature},
+                     "legacy_provenance": legacy_provenance(legacy_path)}
+    if (args.transcription_model == ONLINE_MODE and isinstance(state.get("settings"), dict)
+            and state.get("selection", {}).get("transcription_model") in (ONLINE_MODE, "gpt-transcribe")):
+        state["settings"] = {k: v for k, v in state["settings"].items() if k != "speakers"}
+    owned = (isinstance(state.get("settings"), dict) and state["settings"].get("source") == signature
+             and (args.summary_only or state["settings"] == settings))
+    manifest = read_json(cache / "manifest.json")
+    identity = state_path.parent.name
     if args.summary_only:
-        if not log_path.is_file():
-            raise AppError(f"--summary-only requires an existing transcript: {log_path}")
-        transcript = log_path.read_text(encoding="utf-8")
-    elif reusable and not args.force:
-        say("  Reusing the saved final transcript.")
-        transcript = log_path.read_text(encoding="utf-8")
+        reference = manifest["selected_finals"].get(identity, manifest.get("selected_final"))
+        if reference is None and context:
+            reference = migrate_legacy_final(source, args, cache, state, request)
+        saved = final_reference(cache, reference, required=True)
+        final = saved["payload"]
+        if summary_path.exists() and not owned and not args.force:
+            raise AppError("Output report has unknown ownership; use --force to replace it from internal JSON.")
     else:
-        if (log_path.exists() or any(path.exists() for path in all_summaries)) and not args.force and not owned:
-            raise AppError("Output files already exist, but the source/settings changed or ownership state is missing. "
-                           "Use --force to replace them, or --summary-only for the existing log.")
-        if log_path.exists():
-            saved_hash = state.get("transcript_sha256")
-            if saved_hash and digest_file(log_path) != saved_hash and not args.force:
-                raise AppError("The log was edited after generation. Use --summary-only to preserve your edits, "
-                               "or --force to regenerate it.")
-            backup = state_path.parent / (f"previous-{time.time_ns()}.log.md")
-            atomic_write(backup, log_path.read_text(encoding="utf-8"))
-        old_summary = state.get("summary")
-        state = {"settings": settings, "selection": selection, "pipeline_complete": False}
-        if old_summary:
-            state["summary"] = old_summary
-        if args.transcription_model == ALL_MODE:
-            say("  Comparing GPT-Transcribe, WhisperX and MLX independently; "
-                "GPT then reconciles the final log with fixed WhisperX voice/time anchors.")
-        gpt_chunks, gpt_error, local, mlx_local = None, None, None, None
-        temporary = cache / "tmp"
-        temporary.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="scribe-audio-", dir=temporary) as tmp:
-            wav_path = Path(tmp) / "audio.wav"
-            say("  Extracting audio (first audio track)...")
-            processing_stage("audio extraction")
-            extract_audio(source, wav_path)
-            if args.monitor_dir is not None and (monitor_snapshot(source) != args.monitor_expected_snapshot
-                                                or source_signature(source) != settings["source"]):
-                raise AppError("Source changed during audio extraction; no recognition request was started.")
-            forecast_local(wav_path, cache, settings, args)
-            if args.transcription_model in (ONLINE_MODE, COMBINED_MODE, ALL_MODE):
-                gpt_settings = {"source": settings["source"], "language": args.language,
-                                "vocabulary": args.vocabulary, "model": "gpt-transcribe", "request_version": 1}
-                try:
-                    processing_stage("cloud recognition")
-                    gpt_chunks = transcribe_gpt(wav_path, cache, gpt_settings, key,
-                                                args.language, args.vocabulary, args.force)
-                    if not any(c["text"].strip() for c in gpt_chunks):
-                        gpt_chunks = None
-                        raise AppError("GPT-Transcribe returned no text.")
-                    atomic_write(cache / "sources/gpt-transcribe.txt",
-                                 "\n\n".join(c["text"] for c in gpt_chunks))
-                except (AppError, OSError, ValueError) as exc:
-                    if args.transcription_model == ONLINE_MODE:
-                        raise
-                    gpt_error = str(exc).replace(key, "[key redacted]") if key else str(exc)
-                    diagnostic("cloud recognition", gpt_error)
-                    state["gpt_error"] = gpt_error
-                    action = "Using the local text for final GPT reconciliation."
-                    say("  WARNING: " + gpt_error + " " + action)
-            if args.transcription_model != ONLINE_MODE:
-                local = local_recognition(wav_path, cache, settings, args)
-                if args.transcription_model == ALL_MODE:
-                    mlx_settings = {k: v for k, v in settings.items() if k != "additional_recognizers"}
-                    mlx_settings["recognizer"] = settings["additional_recognizers"]["mlx"]
-                    mlx_local = local_recognition(wav_path, cache, mlx_settings, args,
-                                                  voice_intervals=local["voices"])
-        if args.transcription_model == ONLINE_MODE:
-            transcript = gpt_transcript_text(source, gpt_chunks)
+        if (log_path.exists() or any(path.exists() for path in all_summaries)) and not args.force:
+            if not owned:
+                raise AppError("Output files already exist, but the source/settings changed or ownership state is missing. "
+                               "Use --force to replace them from the recording.")
+            if log_path.exists() and (not state.get("transcript_sha256")
+                    or digest_file(log_path) != state["transcript_sha256"]):
+                raise AppError("The log was edited after generation; it is an export, not a pipeline input. "
+                               "Use --summary-only to preserve it, or --force to replace it.")
+        reference = manifest.get("requests", {}).get(json_identity(request))
+        saved = None if args.force else final_reference(cache, reference)
+        if saved and saved["settings"].get("request") != request:
+            saved = None
+        if saved and saved["payload"]["pipeline_complete"]:
+            final = saved["payload"]
+            say("  Reusing the internal final transcript JSON.")
         else:
-            transcript = transcript_text(source, local["duration"], local["turns"],
-                provenance=f"{'MLX' if args.transcription_model == 'mlx' else 'WhisperX'} large-v3-turbo "
-                           f"+ {args.diarization_model} voice/time anchors")
-            atomic_write(cache / "sources/local.log.md", transcript)
-            if mlx_local is not None:
-                atomic_write(cache / "sources/mlx.log.md", recognition_source_reports(source,
-                    local=mlx_local, recognizer="mlx", diarizer=args.diarization_model)[0]["text"])
-        # Persist the selected usable source BEFORE either text API step.
-        atomic_write(log_path, transcript)
-        if args.force:
-            archive_summaries(all_summaries, state_path)
-            state.pop("summary", None)
-        state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
-        state["source_reports"] = {"version": 1, "source": settings["source"],
-            "transcript_sha256": state["transcript_sha256"],
-            "reports": recognition_source_reports(source, local=local, gpt_chunks=gpt_chunks,
-                recognizer="mlx" if args.transcription_model == "mlx" else "whisperx",
-                diarizer=args.diarization_model, mlx_local=mlx_local)}
-        state["pipeline_complete"] = args.offline
-        state["source_mode"] = args.transcription_model if args.offline else "unreconciled-fallback"
-        save_json(state_path, state)
-        if not args.offline:
-            source_transcript = transcript
-            try:
-                if local is None:
-                    anchors = [{"start": c["start"], "end": c["end"], "speaker": None, "text": c["text"]}
-                               for c in gpt_chunks]
-                else:
-                    anchors = local["turns"]
-                single_source = local is None or gpt_chunks is None
-                reconcile_options = {"single_source": True} if single_source else {}
-                if mlx_local is not None:
-                    reconcile_options["additional_turns"] = mlx_local["turns"]
-                processing_stage("reconciliation", model=fusion_model, effort=fusion_effort)
-                issues = []
-                reconcile_options["issues"] = issues
-                turns, supplements = fuse_transcripts(gpt_chunks if gpt_chunks is not None else transcript_chunks(anchors),
-                    anchors, cache, key, fusion_model, fusion_effort, args.force, **reconcile_options)
-                if issues:
-                    state["reconciliation_issues"] = issues
-                    state["fusion_error"] = "Some reconciliation parts remain unresolved."
-                if local is None:
-                    final_chunks = [{"start": t["start"], "end": t["end"], "text": t["text"]} for t in turns]
-                    transcript = gpt_transcript_text(source, final_chunks).replace(
-                        "Sources: GPT-Transcribe only\n", f"Sources: GPT-Transcribe only; reconciled by {fusion_model}\n", 1)
-                else:
-                    label = "MLX" if args.transcription_model == "mlx" else "WhisperX"
-                    provenance = (f"{label} large-v3-turbo + {args.diarization_model} voice/time anchors" if single_source
-                        else f"GPT-Transcribe text + WhisperX / {args.diarization_model} voice/time anchors")
-                    if mlx_local is not None:
-                        provenance += "; MLX comparison source included"
-                    transcript = transcript_text(source, local["duration"], turns,
-                        provenance=provenance + f"; reconciled by {fusion_model}", supplements=supplements)
-                all_failed = bool(issues) and len(issues) == len(gpt_chunks if gpt_chunks is not None else transcript_chunks(anchors))
-                if issues:
-                    warning = "RECONCILIATION INCOMPLETE — source text retained in unresolved parts:\n"
-                    warning += "\n".join(f"Part {i['part']}: {clock(i['start'])}–{clock(i['end'])}" for i in issues)
-                    if all_failed:
-                        transcript = source_transcript
-                    transcript += "\n" + warning + "\n"
-                atomic_write(log_path, transcript)
-                state["pipeline_complete"] = not issues and (args.transcription_model != ALL_MODE or gpt_chunks is not None)
-                state["source_mode"] = "unreconciled-fallback" if all_failed else ("partially-reconciled" if issues else "gpt-reconciled")
-                state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
-                state["source_reports"]["transcript_sha256"] = state["transcript_sha256"]
-                save_json(state_path, state)
-            except (AppError, OSError, ValueError) as exc:
-                message = str(exc).replace(key, "[key redacted]") if key else str(exc)
-                diagnostic("reconciliation", message, model=fusion_model, effort=fusion_effort)
-                if CURRENT_RUN.get() is not None:
-                    CURRENT_RUN.get().partial = True
-                state["fusion_error"] = message
-                transcript = source_transcript + "\nRECONCILIATION INCOMPLETE — source text retained for the entire recording.\n"
-                atomic_write(log_path, transcript)
-                state["transcript_sha256"] = hashlib.sha256(transcript.encode()).hexdigest()
-                state["source_reports"]["transcript_sha256"] = state["transcript_sha256"]
-                save_json(state_path, state)
-                say("  WARNING: " + message + " Final GPT reconciliation failed; retaining the unreconciled source log.")
-        say(f"  Saved: {log_path}")
+            final = compute_final(source, args, key, cache, settings, selection, snapshot, prepare_models)
+            reference = persist_final(cache, request, final)
+        select_final(cache, reference, log_path, request)
+    transcript = materialize_final(cache, reference, final, source)
+    if source_snapshot(source) != snapshot:
+        raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
     transcript_hash = hashlib.sha256(transcript.encode()).hexdigest()
-    prior_summary_hash = state.get("summary", {}).get("transcript")
-    if (not args.summary_only and any(path.is_file() for path in all_summaries)
-            and prior_summary_hash != transcript_hash):
-        # Preserve the previous summary, but never present it beside a different log
-        # after a failed API call or a transcription-only backend switch.
+    old_summary = state.get("summary")
+    old_export_hash = state.get("transcript_sha256")
+    # The only reads of the user log are ownership hashing and explicit backups.
+    # Never substitute those bytes for the internal transcript.
+    if not args.summary_only or not log_path.exists():
+        if log_path.exists() and (args.force or digest_file(log_path) != transcript_hash):
+            atomic_write(state_path.parent / f"previous-{time.time_ns()}.log.md", log_path.read_text(encoding="utf-8"))
+        if not log_path.exists() or digest_file(log_path) != transcript_hash:
+            atomic_write(log_path, transcript)
+        old_export_hash = transcript_hash
+        say(f"  Saved: {log_path}")
+    source_reports = final_sources(source, final)
+    state = {"settings": settings if not args.summary_only else saved["settings"]["request"]["settings"],
+             "selection": selection if not args.summary_only else saved["settings"]["request"]["selection"],
+             "final": reference, "transcript_sha256": old_export_hash,
+             "pipeline_complete": final["pipeline_complete"], "source_mode": final["source_mode"]}
+    for field in ("gpt_error", "fusion_error", "reconciliation_issues"):
+        if final.get(field):
+            state[field] = final[field]
+    if old_summary:
+        state["summary"] = old_summary
+    if not args.summary_only and any(path.is_file() for path in all_summaries) and (
+            args.force or (old_summary or {}).get("transcript") != transcript_hash):
         archive_summaries(all_summaries, state_path)
         state.pop("summary", None)
-        save_json(state_path, state)
-    if CURRENT_RUN.get() is not None and not state.get("pipeline_complete", True):
+    save_json(state_path, state)
+    select_final(cache, reference, log_path)
+    if CURRENT_RUN.get() is not None and not final["pipeline_complete"]:
         CURRENT_RUN.get().partial = True
     if args.summarize_model is None:
         return
     model, effort = args.summarize_model
-    summary_settings = {"model": model, "effort": effort,
-                        "tabs": args.report_tabs,
-                        "prompt": hashlib.sha256(SUMMARIZATION_PROMPT.encode()).hexdigest(),
-                        "notes_prompt": hashlib.sha256(PART_NOTES_PROMPT.encode()).hexdigest(),
-                        "transcript": transcript_hash}
-    levels = summary_levels(args.report_tabs)
-    summary_settings["html_template"] = digest_file(RESOURCE_DIR / "summary.html")
-    summary_settings["header_prompt"] = hashlib.sha256(REPORT_HEADER_PROMPT.encode()).hexdigest()
-    summary_settings["topic_prompt"] = hashlib.sha256(REPORT_TOPIC_PROMPT.encode()).hexdigest()
-    if not args.force and not args.summary_only and summary_path.is_file() and state.get("summary") == summary_settings:
-        say("  The summary is already up to date; no API request is needed.")
-        return
-    pending_path = state_path.parent / "summary-pending.json"
-    pending = read_json(pending_path, {}) if not args.force else {}
-    answers = pending.get("answers", {}) if pending.get("settings") == summary_settings else {}
-    if not isinstance(answers, dict):
-        answers = {}
     summaries = {}
-    for level in levels:
-        answer = answers.get(str(level))
-        if isinstance(answer, str) and answer.strip():
-            say(f"  Reusing completed summary detail {level}/10 from the interrupted request.")
-        else:
-            say(f"  Summarizing the final log with OpenAI: {model}, reasoning={effort}, detail={level}/10...")
+    for level in summary_levels(args.report_tabs):
+        summary_settings = {"final": reference, "transcript": transcript_hash, "model": model, "effort": effort,
+                            "detail": level, "prompt": summary_prompt(level), "notes_prompt": notes_prompt(level)}
+        stage = f"summary.level-{level}"
+        payload = artifact_payload(cache, stage, summary_settings, args.force)
+        answer = payload.get("text") if isinstance(payload, dict) else None
+        if answer is None and context and not args.force:
+            old_path = context["output"] / "summary-pending.json"
+            pending = read_json(old_path, {})
+            expected = {"model": model, "effort": effort, "transcript": transcript_hash,
+                        "prompt": hashlib.sha256(SUMMARIZATION_PROMPT.encode()).hexdigest(),
+                        "notes_prompt": hashlib.sha256(PART_NOTES_PROMPT.encode()).hexdigest()}
+            if (isinstance(pending, dict) and isinstance(pending.get("settings"), dict)
+                    and all(pending["settings"].get(k) == v for k, v in expected.items())
+                    and isinstance(pending.get("answers"), dict)):
+                answer = pending["answers"].get(str(level))
+                if isinstance(answer, str) and answer.strip():
+                    save_artifact(cache, stage, summary_settings, {"text": answer, "responses": []},
+                                  provenance=legacy_provenance(old_path))
+        if not isinstance(answer, str) or not answer.strip():
+            say(f"  Summarizing the internal transcript: {model}, reasoning={effort}, detail={level}/10...")
             processing_stage(f"summary level {level}", model=model, effort=effort)
-            answer = summarize(transcript, key, model, effort, detail=level)
+            responses = []
+            token = CURRENT_RESPONSES.set(responses)
+            try:
+                answer = summarize(transcript, key, model, effort, detail=level)
+            finally:
+                CURRENT_RESPONSES.reset(token)
             if not isinstance(answer, str) or not answer.strip():
                 raise AppError(f"Summary detail {level}/10 was empty; existing summaries are preserved.")
-            answers[str(level)] = answer
-            save_json(pending_path, {"settings": summary_settings, "answers": answers})
+            save_artifact(cache, stage, summary_settings, {"text": answer, "responses": responses})
+        else:
+            say(f"  Reusing summary detail {level}/10.")
         summaries[level] = answer
     processing_stage("report header", model=model, effort=effort)
-    extracted = extract_report_metadata(transcript, key, model, effort, state_path.parent, args.force)
+    extracted = extract_report_metadata(transcript, key, model, effort, cache, args.force)
     content = summary_html(source, summaries, report_header(source, transcript, extracted),
-                           transcript=transcript, tabs=args.report_tabs,
-                           source_reports=saved_source_reports(state, transcript), summary_model=model)
-    if args.summary_only and prior_summary_hash and prior_summary_hash != transcript_hash:
-        # Once generation succeeds, do not leave the other format describing an old log.
+                           transcript=transcript, tabs=args.report_tabs, source_reports=source_reports, summary_model=model)
+    if source_snapshot(source) != snapshot:
+        raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
+    if summary_path.exists():
+        atomic_write(state_path.parent / f"previous-{time.time_ns()}.summary.html", summary_path.read_text(encoding="utf-8"))
+    if args.summary_only and old_summary and old_summary.get("transcript") != transcript_hash:
         archive_summaries([path for path in all_summaries if path != summary_path], state_path)
     processing_stage("report publication")
     atomic_write(summary_path, content)
-    state["summary"] = summary_settings
+    state["summary"] = {"model": model, "effort": effort, "tabs": args.report_tabs, "transcript": transcript_hash,
+                        "html_template": digest_file(RESOURCE_DIR / "summary.html")}
     save_json(state_path, state)
-    pending_path.unlink(missing_ok=True)
     say(f"  Saved: {summary_path}")
 
+
+def model_preparation_key(args):
+    return (args.transcription_model, args.diarization_model, str(args.models_dir), args.offline, args.verify_models)
+
+
+def compute_final(source, args, key, cache, settings, selection, snapshot, prepare_models):
+    needs_models = False
+    if args.transcription_model != ONLINE_MODE:
+        plans = [settings]
+        if args.transcription_model == ALL_MODE:
+            plans.append({**{k: v for k, v in settings.items() if k != "additional_recognizers"},
+                          "recognizer": settings["additional_recognizers"]["mlx"]})
+        needs_models = any(not all(local_checkpoints(cache, plan, args)[-2:]) for plan in plans)
+    if prepare_models and needs_models:
+        processing_stage("model preparation")
+        ensure_models(args.models_dir, args.offline, args.verify_models,
+                      transcription_model=args.transcription_model, diarization_model=args.diarization_model)
+        args._prepared_models = model_preparation_key(args)
+    if args.transcription_model == ALL_MODE:
+        say("  Comparing GPT-Transcribe, WhisperX and MLX independently with one shared diarization.")
+    gpt_chunks, gpt_error, local, mlx_local = None, None, None, None
+    with tempfile.TemporaryDirectory(prefix="scribe-audio-", dir=cache.parent) as tmp:
+        wav_path = Path(tmp) / "audio.wav"
+        say("  Extracting audio (first audio track)...")
+        processing_stage("audio extraction")
+        extract_audio(source, wav_path)
+        if source_snapshot(source) != snapshot:
+            raise AppError("Source changed during audio extraction; no recognition request was started.")
+        forecast_local(wav_path, cache, settings, args)
+        if args.transcription_model in (ONLINE_MODE, COMBINED_MODE, ALL_MODE):
+            gpt_settings = {"source": settings["source"], "language": args.language,
+                            "vocabulary": args.vocabulary, "model": "gpt-transcribe", "request_version": 1}
+            try:
+                processing_stage("cloud recognition")
+                gpt_chunks = transcribe_gpt(wav_path, cache, gpt_settings, key, args.language, args.vocabulary, args.force)
+                if not gpt_chunks or not valid_rows(gpt_chunks, text=True) or not any(c["text"].strip() for c in gpt_chunks):
+                    gpt_chunks = None
+                    raise AppError("GPT-Transcribe returned no usable text.")
+            except (AppError, OSError, ValueError) as exc:
+                if args.transcription_model == ONLINE_MODE:
+                    raise
+                gpt_error = redacted(str(exc), key)
+                diagnostic("cloud recognition", gpt_error)
+                say("  WARNING: " + gpt_error + " Using local text for final reconciliation.")
+        if args.transcription_model != ONLINE_MODE:
+            local = local_recognition(wav_path, cache, settings, args)
+            if args.transcription_model == ALL_MODE:
+                mlx_settings = {k: v for k, v in settings.items() if k != "additional_recognizers"}
+                mlx_settings["recognizer"] = settings["additional_recognizers"]["mlx"]
+                mlx_local = local_recognition(wav_path, cache, mlx_settings, args, voice_intervals=local["voices"])
+    return reconcile_final(source, args, key, cache, selection, local, gpt_chunks, mlx_local, gpt_error)
+
+
+def reconcile_final(source, args, key, cache, selection, local, gpt_chunks, mlx_local=None, gpt_error=None, *, cache_only=False):
+    anchors = local["turns"] if local is not None else [
+        {"start": c["start"], "end": c["end"], "speaker": None, "text": c["text"]} for c in gpt_chunks]
+    recognizer = "mlx" if args.transcription_model == "mlx" else "whisperx"
+    label = "MLX" if recognizer == "mlx" else "WhisperX"
+    single_source = local is None or gpt_chunks is None
+    provenance = f"{label} large-v3-turbo + {args.diarization_model} voice/time anchors"
+    if mlx_local is not None:
+        provenance += "; MLX comparison source included"
+    final = {"source_name": source.name, "turns": anchors, "supplements": [], "duration": local["duration"] if local else max(c["end"] for c in gpt_chunks),
+             "provenance": provenance, "api_only": local is None, "recognizer": recognizer, "diarizer": args.diarization_model,
+             "status": "offline" if args.offline else "fallback", "pipeline_complete": args.offline,
+             "source_mode": args.transcription_model if args.offline else "unreconciled-fallback",
+             "sources": {"local": local, "gpt_chunks": gpt_chunks, "mlx_local": mlx_local}, "source_reports": []}
+    final["source_reports"] = final_sources(source, final)
+    if gpt_error:
+        final["gpt_error"] = gpt_error
+    if args.offline:
+        return final
+    model, effort = selection["fusion"]["model"], selection["fusion"]["effort"]
+    issues = []
+    try:
+        processing_stage("legacy JSON migration" if cache_only else "reconciliation", model=model, effort=effort)
+        options = {"issues": issues}
+        if single_source:
+            options["single_source"] = True
+        if mlx_local is not None:
+            options["additional_turns"] = mlx_local["turns"]
+        chunks = gpt_chunks if gpt_chunks is not None else transcript_chunks(anchors)
+        restore = restore_legacy_turns if cache_only else fuse_transcripts
+        turns, supplements = restore(chunks, anchors, cache, key, model, effort, args.force, **options)
+        all_failed = bool(issues) and len(issues) == len(chunks)
+        if not all_failed:
+            provenance = (provenance if single_source else
+                          f"GPT-Transcribe text + WhisperX / {args.diarization_model} voice/time anchors"
+                          + ("; MLX comparison source included" if mlx_local is not None else ""))
+            final.update(turns=turns, supplements=supplements, reconciled_by=model,
+                         provenance=provenance + f"; reconciled by {model}")
+        final.update(status="fallback" if all_failed else ("partial" if issues or gpt_error else "complete"),
+                     pipeline_complete=not issues and (args.transcription_model != ALL_MODE or gpt_chunks is not None),
+                     source_mode="unreconciled-fallback" if all_failed else ("partially-reconciled" if issues else "gpt-reconciled"))
+        if issues:
+            final.update(reconciliation_issues=issues, fusion_error="Some reconciliation parts remain unresolved.")
+    except (AppError, OSError, ValueError) as exc:
+        if cache_only:
+            raise
+        message = redacted(str(exc), key)
+        diagnostic("reconciliation", message, model=model, effort=effort)
+        final["fusion_error"] = message
+        say("  WARNING: " + message + " Final reconciliation failed; retaining source text.")
+    return final
 
 def parse_model_spec(value):
     """Pack a text model and reasoning effort into one CLI value."""
@@ -3085,7 +3578,7 @@ def build_parser():
     p.add_argument("--force", action="store_true", help="Process completed pairs again; bypass recognition/API caches")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--transcribe-only", action="store_true", help="Alias for --summarize-model none; final GPT reconciliation still uses the API unless --offline")
-    group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from existing .log.md files in the output directory")
+    group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from internal final JSON; preserve existing log exports")
     p.add_argument("--offline", action="store_true", help="Force local recognition and no summary; retain explicit mlx, otherwise use whisperx; no API calls/downloads")
     p.add_argument("--setup", action="store_true",
                    help="Prepare local models and exit; scribe.sh also prepares data/.venv. No MKV files or API key required")
@@ -3163,13 +3656,12 @@ def process_files(files, args):
         key = ""
     if args.summary_only and not key:
         raise AppError("OPENAI_API_KEY is required for --summary-only. Set it in .env.")
-    models_ready = False
     errors = 0
     for i, source in enumerate(pending, 1):
         say(f"\n[{i}/{len(pending)}] {source}")
         try:
-            process_file(source, args, key, prepare_models=not models_ready)
-            models_ready = True
+            process_file(source, args, key,
+                         prepare_models=getattr(args, "_prepared_models", None) != model_preparation_key(args))
         except (AppError, OSError, RuntimeError, ValueError, ImportError) as exc:
             errors += 1
             # Key is never intentionally logged; redact it even from third-party errors.

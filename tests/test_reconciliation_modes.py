@@ -62,7 +62,9 @@ class ReconciliationModeTests(unittest.TestCase):
                 self.assertEqual((first, repeated), (1, 1), 'Resume must not repeat final GPT calls')
                 state = app.read_json(next(args.cache_dir.glob('*/outputs/*/state.json')))
                 self.assertTrue(state['pipeline_complete'])
-                raw = next(r['text'] for r in state['source_reports']['reports'] if r['id'] == ('mlx' if mode == 'mlx' else 'whisperx'))
+                cache = args.cache_dir / app.digest_file(source)
+                final = app.final_reference(cache, state['final'], required=True)['payload']
+                raw = next(r['text'] for r in app.final_sources(source, final) if r['id'] == ('mlx' if mode == 'mlx' else 'whisperx'))
                 self.assertIn('] A\n', raw)
                 self.assertNotIn('] Alice\n', raw)
                 if mode == 'all':
