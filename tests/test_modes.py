@@ -24,12 +24,18 @@ class ModeTests(unittest.TestCase):
 
     def test_offline_launcher_cannot_bootstrap_a_missing_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
-            launcher = Path(tmp) / "scribe.sh"
+            root = Path(tmp) / "app"
+            (root / "src").mkdir(parents=True)
+            launcher = root / "scribe.sh"
             shutil.copy2(app.APP_DIR / "scribe.sh", launcher)
-            result = subprocess.run(["/bin/bash", str(launcher), "--offline"], capture_output=True, text=True)
+            shutil.copy2(app.SOURCE_DIR / "console_log.py", root / "src/console_log.py")
+            cwd = Path(tmp) / "caller"
+            cwd.mkdir()
+            result = subprocess.run(["/bin/bash", str(launcher), "--offline"], cwd=cwd, capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertNotIn("Installing", result.stdout + result.stderr)
-            self.assertFalse((Path(tmp) / "data").exists())
+            self.assertFalse((root / "data").exists())
+            self.assertEqual(len(list((cwd / "data/log").glob("*.log"))), 1)
 
     def setup_case(self, root, *options):
         source = root / "recording.mkv"

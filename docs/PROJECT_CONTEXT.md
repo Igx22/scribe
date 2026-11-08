@@ -9,8 +9,9 @@ Keep this file focused on architectural decisions and unresolved limitations.
 ## Structure and runtime
 
 Keep the application portable and simple: `scribe.sh` prepares the isolated
-Python environment and launches `src/scribe.py`; static resources live in
-`src/resources`, with mocked tests in `tests`. Current native support is macOS
+Python environment and launches `src/scribe.py`; `src/console_log.py` is the
+standard-library console supervisor shared by both CLI entry points. Static
+resources live in `src/resources`, with mocked tests in `tests`. Current native support is macOS
 Apple Silicon with Python 3.12-3.13. Cross-platform folder presets do not imply
 cross-platform model/runtime support. Docker integration is deferred.
 
@@ -26,6 +27,7 @@ scribe/
   README.md, AGENTS.md, TASKS.md, LICENSE, .gitignore
   src/
     scribe.py
+    console_log.py
     resources/models-manifest.json
     resources/summary.html
   tests/
@@ -65,6 +67,20 @@ Ordinary input/output `./data` is instead relative to the launch working directo
 monitor outputs default to the watched folder. Only `--output-dir` relocates results; models and caches stay in the application's
 `data/models` and `data/.cache`. The environment stays in `data/.venv`.
 
+SCR-090 console logs instead always follow the caller cwd: `data/log/` contains
+exclusive UTF-8 files named by local date and a stable start-time/PID/random run
+identifier. Midnight rotates on the next write, retaining that identifier; there
+is no retention/deletion policy. A supervisor mirrors stdout/stderr descriptors,
+using PTYs only for original TTY outputs to preserve progress detection and
+terminal dimensions. The launcher starts it before setup checks; a parent-PID
+marker prevents a second log across exec into Python. Direct CLI uses the same
+helper, with no import side effects or extra dependencies. File copies clean
+terminal controls and redact configured credentials; optional logging failures
+warn and preserve console operation/worker status. Original stream ordering is
+preserved within each descriptor; scheduling between stdout and stderr is not a
+global chronology. See [console behavior](USAGE.md#console-logs) and
+[isolated logging checks](../tests/test_console_log.py).
+
 Keep both static resources with the source when copying the application:
 `summary.html` is the standalone report template; `models-manifest.json` defines
 model paths, pinned URLs/revisions, sizes, hashes and archive extraction rules,
@@ -92,6 +108,29 @@ optional on a fresh checkout but enable resume without repeating paid recognitio
 Application bytecode is disabled with `-B` and `sys.dont_write_bytecode`;
 dependency bytecode stays inside `data/.venv`. No root-level cache, environment
 or model directory is required.
+
+### Recognition cache artifacts
+
+Per-recording cache folders currently use a hash of the source path; stored
+settings separately validate the recording signature and model configuration.
+Recognition is already cached beyond the exported `.log.md`:
+
+| Current artifact | Stored result |
+| --- | --- |
+| `gpt-stage.json` | Completed GPT audio chunks: text, time bounds, languages and returned usage. |
+| `words-stage.json`, `words-stage-<backend>.json` | Normalized WhisperX/MLX words, timing and available language-detection evidence. |
+| `voices-stage.json` | Diarization intervals and model/settings identity, for Nemotron or Community-1. |
+| `recognition.json`, `recognition-<backend>.json` | Combined local words, voice intervals and assigned turns. |
+| `fusion/<signature>.json`, `outputs/<output-id>/state.json` | Reconciliation parts and output-bound state/source snapshots. |
+
+Single-recognizer modes share a word-cache slot; `all` uses separate WhisperX/MLX
+slots. Settings protect reuse, but alternating configurations can replace a shared
+slot. Raw ASR/alignment/native responses are not all retained before normalization.
+There is no single self-contained cache artifact for the complete rendered final
+transcript. `--summary-only` already skips audio extraction, recognition, diarization
+and reconciliation, but requires the exported `.log.md`; a missing export is an
+error even when upstream stage caches exist. These reuse contracts are covered by
+the mocked all-mode, source-report and HTML-summary tests.
 
 The CLI uses automatic language detection and no custom vocabulary prompt. Internal
 backend fields retain those default values and the existing checkpoint schema,
@@ -173,6 +212,16 @@ casual nicknames. Citation validation does not prove correct social interpretati
 or diarization. Keep speech confidence and voice uncertainty on affected spans.
 Preserve actual participant names and the conversation's predominant language;
 never use external knowledge to guess identities or repair the apparent quality.
+
+SCR-089's successful Russian rerun had `speaker_names: []` in all 16 matching
+responses: no candidates reached validation/resolution, and saved log/HTML agreed.
+Opening name/reply quotes lay inside uncertain attribution spans; the existing
+naming policy excludes them. Six unrelated unattributed fragments also set the
+whole-recording context flag; this does not prove an additional participant.
+The model's exact reason for abstaining is unavailable: empty name lists carry no
+reason/status, and reports currently give no explicit explanation for anonymous
+labels. Successful reconciliation does not guarantee name discovery. No naming
+fix is implemented; see private [SCR-089 evidence](../data/comparison/july-speaker-names-investigation/README.md).
 
 ## Resume behavior and failures
 

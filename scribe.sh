@@ -9,6 +9,20 @@ VENV_PYTHON="$VENV_DIR/bin/python3"
 REQUIREMENTS="$APP_DIR/requirements.txt"
 STAMP="$VENV_DIR/.requirements-sha256"
 LEGACY_PYTHON="$DATA_DIR/runtime/python/bin/python3"
+# Start before platform/setup checks, and keep one supervisor across launcher
+# and Python execs. Any available Python 3 can run this standard-library helper.
+if [[ "${_SCRIBE_CONSOLE_PARENT:-}" != "$PPID" ]]; then
+    for logger_python in "$VENV_PYTHON" "$LEGACY_PYTHON" python3.13 python3.12 python3; do
+        if command -v "$logger_python" >/dev/null 2>&1 && \
+            "$logger_python" -I -B -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+            if [[ -f "$APP_DIR/src/console_log.py" ]]; then
+                exec "$logger_python" -I -B "$APP_DIR/src/console_log.py" /bin/bash "$APP_DIR/scribe.sh" "$@"
+            fi
+            break
+        fi
+    done
+    echo "WARNING: Console file logging unavailable: Python 3.9+ or src/console_log.py is missing." >&2
+fi
 OFFLINE=false
 SETUP=false
 for option in "$@"; do

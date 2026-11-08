@@ -137,8 +137,127 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-084 | [Make reconciliation resilient to imperfect recognition sources](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-085 | [Detect WhisperX language from speech instead of leading silence](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-086 | [Save per-recording processing errors beside the HTML report](data/comparison/reconciliation-resilience-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
-| SCR-087 | Regenerate the July report after fixes while preserving cloud recognition caches | In Progress | 2026-11-08 | — |
+| SCR-087 | [Regenerate the July report after fixes while preserving cloud recognition caches](data/comparison/july-recording-run/rerun-console.log) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-088 | [Add local model progress and processing time estimates](data/comparison/progress-preview/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-089 | [Investigate missing speaker names after successful reconciliation](data/comparison/july-speaker-names-investigation/README.md) | In Progress | 2026-11-08 | — |
+| SCR-090 | [Save complete console output in daily per-run logs under the launch directory](data/comparison/console-logging-verification/VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-091 | Clarify output directory defaults and monitoring documentation | Done | 2026-11-08 | 2026-11-08 |
+| SCR-092 | [Audit recognition caches and specify reusable per-model artifacts](docs/PROJECT_CONTEXT.md#recognition-cache-artifacts) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-093 | Standardize per-model cache artifacts and allow summaries from cached final transcripts | Planned | 2026-11-08 | — |
+
+### SCR-093
+
+Proposed implementation following the SCR-092 audit. The user requested research
+and a task specification; implementation has not yet been assigned.
+
+#### Goal and existing behavior
+
+Make each completed recognition/diarization/reconciliation result an identifiable,
+reusable JSON artifact, so downstream work does not depend on the presence of one
+exported `.log.md`. Extend existing checkpoints rather than creating a second
+unrelated cache. GPT audio, local words and voice intervals already have JSON
+checkpoints; `--summary-only` already avoids recognition but currently requires
+the exported log. Nemotron supplies speaker intervals, not transcription text.
+
+#### Proposed design
+
+- Keep the application's existing ignored `data/.cache` root. Within each
+  recording's cache, use readable artifact names and a small versioned manifest
+  identifying the recording and available results. A short configuration ID
+  distinguishes model/settings variants; filenames must not be hashes alone.
+  Preserve collision safety for recordings with identical basenames. Changing the
+  export directory must not require another recognition run.
+- Save GPT-Transcribe responses per completed audio chunk, WhisperX ASR segments
+  before alignment, alignment results, MLX results, and Nemotron/Community-1
+  diarization results at their stage boundaries. Retain the JSON-serializable
+  original returned payload and the normalized data actually used downstream,
+  without inventing fields the backend did not return. A later alignment or
+  reconciliation failure must not discard an already successful upstream result.
+- Every artifact needs a schema version, stage/backend/model identity and revision,
+  relevant settings, recording signature, dependency identifiers, completion state
+  and payload. Preserve timestamps, word/voice uncertainty, language evidence,
+  returned usage where available, and exact original text. Diarization metadata
+  must distinguish anonymous voice IDs from validated human names.
+- Save a complete final-transcript artifact after reconciliation, including the
+  exact rendered text, structured turns/validated speaker metadata, supplements,
+  provenance, input artifact references and complete/partial/fallback status.
+  Preserve existing per-part reconciliation checkpoints and error diagnostics.
+  Never present a partial or fallback result as successful full reconciliation.
+- Keep recognition settings separate from the text model, reasoning effort,
+  reconciliation prompt and summary settings. Changing only the summary model,
+  effort, detail levels, prompts, template or output directory must not rerun ASR
+  or diarization. Keep multiple compatible model/settings variants rather than
+  overwriting another recognizer's only checkpoint. Dependency changes invalidate
+  only affected work; preserve existing reuse guarantees for words and voices.
+- With `--summary-only`, an existing exported `.log.md` remains authoritative,
+  including user edits. Preserve it byte-for-byte. If it is missing, allow a
+  validated cached final transcript to supply the report and restore its exact
+  export under normal output protection. Select the artifact through matching
+  source/provenance and a manifest/output-state reference; ambiguous candidates
+  must produce a clear error rather than a guess based on filename or recency.
+- `--summary-only` must never extract audio, load recognition/voice models, run
+  ASR/diarization, or invoke reconciliation. If neither an exported log nor a
+  compatible final cache exists, explain what is missing. Raw model caches alone
+  must not trigger hidden audio processing or reconciliation. Normal summary/header
+  text requests remain allowed. `--summary-only --force` still bypasses only
+  summary/header reuse; ordinary `--force` retains its deliberate reprocessing
+  behavior. Existing completed-pair skipping remains intact.
+- Read compatible old checkpoints without new inference. Migrate or adapt them
+  lazily without deleting old caches/results; record when original backend payloads
+  are unavailable in legacy data rather than fabricating them or rerunning models
+  just to populate a new schema. Keep incomplete artifacts distinguishable and
+  resume GPT chunks and successful reconciliation parts independently.
+- Use atomic writes, version/schema validation and appropriate locking for shared
+  per-recording artifacts, including concurrent exports to different directories.
+  Corrupt/mismatched data must not be silently accepted or damage a valid result.
+  Preserve edited-log isolation, frozen report-source snapshots, uncertainty,
+  offline guarantees, safe paths and existing ownership/backups. Add no dependencies
+  or extra recognition calls merely for cache organization.
+
+Illustrative filenames; the implementation may simplify the layout while keeping
+model names readable and configurations distinct:
+
+```text
+data/.cache/<recording-id>/
+  artifacts.json
+  recognition/gpt-transcribe.<config-id>.json
+  recognition/whisperx-turbo.<config-id>.json
+  alignment/whisperx-turbo.<config-id>.json
+  recognition/mlx-turbo.<config-id>.json
+  diarization/nemotron-3.<config-id>.json
+  diarization/community-1.<config-id>.json
+  reconciliation/final-transcript.<config-id>.json
+```
+
+#### Acceptance and verification
+
+- Each selected backend produces its own identifiable JSON result. Optional or
+  unused backends are not run just to fill the cache. In `all`, each recognizer
+  still runs at most once and voice segmentation is shared once.
+- A summary-only run with a saved log makes zero extraction/ASR/diarization/fusion
+  calls. The same holds with a missing export and a validated cached final result.
+  An edited log wins over an older final cache and retains current source-view
+  isolation. Missing/ambiguous final caches fail clearly without upstream work.
+- Switching recognizers and switching back reuses both stored variants when
+  compatible. Changing the summary model/effort/detail or export directory reuses
+  upstream results. Source/model/dependency changes invalidate only relevant data.
+- Cover legacy migration, stage failures after successful upstream work, partial
+  results, corrupt files, interrupted writes, duplicate recording basenames,
+  concurrent output directories, force/offline behavior and completed-output
+  protection. Preserve the existing source-report and retry tests.
+- Run the mocked unit suite without paid calls or model downloads. Update the
+  concise README, detailed Usage cache/summary-only rules and Project Context's
+  durable cache contract. Keep recordings, artifacts and experiment data ignored.
+
+### SCR-089
+
+Extend the completed cache audit with a bounded live prompt experiment on the
+saved opening GPT-Transcribe/WhisperX sources. Repeat the current reconciliation
+prompt with gpt-6.1-sol:medium and compare a clearer evidence-focused prompt.
+Preserve source data, attribution uncertainty, validation and ordinary outputs.
+Record exact prompts/responses, usage and limitations under ignored comparison
+data; distinguish proposed name candidates from validated mappings. No full audio
+recognition or report regeneration is needed.
 
 ### SCR-073
 

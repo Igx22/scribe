@@ -3180,6 +3180,16 @@ def process_files(files, args):
 
 
 if __name__ == "__main__":
+    # Isolated (-I) execution omits src from sys.path; the helper has no optional
+    # dependencies. Start only at the CLI boundary, never while importing tests.
+    import runpy
+    try:
+        console_log = runpy.run_path(str(SOURCE_DIR / "console_log.py"))
+    except (OSError, ImportError) as exc:
+        print(f"WARNING: Console file logging unavailable: {exc}", file=sys.stderr)
+        console_log = None
+    if console_log is not None and not console_log["supervised"]():
+        raise SystemExit(console_log["run"]([sys.executable, "-I", "-B", str(SOURCE_DIR / "scribe.py"), *sys.argv[1:]]))
     # System Python delegates dependency preparation to the launcher. Compare
     # prefixes, not resolved executables: venv interpreters can be symlinks.
     managed = {APP_DATA / ".venv", APP_DATA / "runtime/python", APP_DATA / "runtime/venv"}

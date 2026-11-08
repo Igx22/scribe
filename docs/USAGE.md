@@ -149,8 +149,10 @@ with `-f`, `--input-dir`, `--force`, `--summary-only`, setup or prompt-preview o
 ## Outputs and completed recordings
 
 For `meeting.mkv`, outputs are plain-text `meeting.log.md` and standalone
-`meeting.summary.html`. They go to `./data`, the watched folder in monitor mode,
-or `--output-dir`. With reports disabled, only the log is written.
+`meeting.summary.html`. Use `--output-dir DIR` to choose their destination; it does
+not enable monitoring. Without this option, results go to `./data` in the launch
+directory, or to the watched folder when `--monitor-dir` is used. With reports
+disabled, only the log is written.
 
 Errors and recovery warnings also produce `meeting.summary.err`, including failures
 before a log/report is written and runs with reports disabled. This UTF-8 JSON file
@@ -164,8 +166,9 @@ files are protected even with `--force`. Global CLI/configuration errors without
 a started recording are reported in the console.
 
 A log plus HTML or legacy Markdown summary counts as complete: processing skips
-it without API calls or file changes, even after source/settings change. Ordinary
-resume of a lone log requires matching cached source/settings and ownership.
+it without API calls or changes to those outputs, even after source/settings
+change. Ordinary resume of a lone log requires matching cached source/settings
+and ownership.
 
 `--force` replaces the log and report, backs up previous results, and may repeat
 paid requests. `--summary-only` preserves the log and regenerates the report
@@ -176,6 +179,50 @@ checkpoints:
 ./scribe.sh -f "recording.mkv" --force
 ./scribe.sh -f "recording.mkv" --summary-only --force
 ```
+
+## Console logs
+
+Every CLI invocation mirrors emitted stdout and stderr to UTF-8 files under
+`<launch-working-directory>/data/log/`. This includes launcher/setup messages,
+help/version output, CLI errors, Python warnings/tracebacks and console messages
+from dependencies or subprocesses. Output intentionally captured or suppressed
+by Scribe is not exposed. Output still appears live on its original console
+stream. Terminal progress and its refresh frequency are preserved; file copies
+remove ANSI controls and separate carriage-return updates into readable lines.
+
+For example, three launches on November 8 create three separate files:
+
+```text
+data/log/2026-11-08_143500-123456_4101_a1b2c3d4.log
+data/log/2026-11-08_151000-234567_4150_b2c3d4e5.log
+data/log/2026-11-08_151005-345678_4162_c3d4e5f6.log
+```
+
+The first component is the local date; the remainder identifies one invocation
+using its start time, PID and random suffix. Concurrent launches stay separate.
+If a run spans midnight, its next logged output starts a new date's file with
+the same run identifier. Existing files are never overwritten; a name collision
+adds a numeric suffix. Logs are flushed during output and at orderly shutdown.
+There is no automatic deletion, retention limit or compression.
+
+This folder always follows the directory from which you launch Scribe, for both
+`scribe.sh` and direct `python3 src/scribe.py` execution. It is independent of
+the application checkout, models/caches, input/monitor folder and `--output-dir`.
+The launcher and the Python application share one invocation log. Importing
+Scribe as a module creates no console log.
+
+Console files are separate from recording transcripts (`meeting.log.md`) and
+processing histories (`meeting.summary.err`). Known configured credentials and
+recognizable API tokens are redacted in file copies, but logs may still contain
+private filenames and conversation excerpts. Generated console-log folders are
+excluded from this repository's Git tracking.
+
+File logging is optional: an unavailable/unwritable directory or a disk-write
+failure produces a warning on the original stderr and processing continues with
+its original exit status. Launcher logging needs an available Python 3.9+ for
+the standard-library helper; if none is available, it warns and continues the
+usual setup checks. No extra logging package, model verbosity or paid call is
+introduced.
 
 ## Progress and time estimates
 

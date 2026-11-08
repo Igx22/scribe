@@ -1,6 +1,8 @@
 .env
 /data/*
 !/data/.gitkeep
+# Console logs can also be created from a working directory inside the checkout.
+**/data/log/
 __pycache__/
 *.py[cod]
 .DS_Store

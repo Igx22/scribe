@@ -40,6 +40,7 @@ class SetupTests(unittest.TestCase):
             requirements.write_text("")
             launcher = root / "scribe.sh"
             shutil.copy2(app.APP_DIR / "scribe.sh", launcher)
+            shutil.copy2(app.SOURCE_DIR / "console_log.py", root / "src/console_log.py")
             environment = root / "data/.venv"
             subprocess.run([sys._base_executable, "-I", "-B", "-m", "venv", "--without-pip", "--symlinks",
                             str(environment)], check=True, capture_output=True)
@@ -55,6 +56,8 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertNotIn("READY", result.stdout)
             self.assertNotIn("Installing", result.stdout + result.stderr)
+            self.assertEqual(len(list((cwd / "data/log").glob("*.log"))), 2)
+            self.assertFalse((root / "data/log").exists())
 
     @unittest.skipUnless(shutil.which("git"), "Git is needed to verify Git exclusions")
     def test_git_excludes_private_and_generated_files_but_keeps_sources(self):
@@ -64,7 +67,9 @@ class SetupTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
             for name in (".env", "data/.venv/lib/dependency.py", "data/models/weights.safetensors",
                          "data/.cache/stage.json", "data/recording.mkv", "data/comparison/usage.json",
-                         "data/notes.txt", "data/.env", "data/.gitkeep.copy", "exports/meeting.summary.html"):
+                         "data/notes.txt", "data/.env", "data/.gitkeep.copy", "data/log/session.log",
+                         "nested/data/log/session.log",
+                         "exports/meeting.summary.html"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 0, name)
             for name in (".env.example", "requirements.txt", "scribe.sh", "src/scribe.py",
                          "src/resources/models-manifest.json", "src/resources/summary.html", "tests/test_setup.py",

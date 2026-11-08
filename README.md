@@ -100,6 +100,10 @@ For `meeting.mkv`, Scribe writes `meeting.log.md` and `meeting.summary.html`.
 Reports include summary levels, the final transcript, available source views, and a dark theme.
 Input recordings are never modified.
 
+Each invocation also saves console stdout/stderr to `./data/log/` in the launch
+directory. Runs have separate UTF-8 files and rotate at local midnight, regardless
+of `--output-dir`. [Console log details](docs/USAGE.md#console-logs).
+
 Processing errors and recovery warnings are saved beside the report in
 `meeting.summary.err`, with attempt history and credentials redacted. Reconciliation
 retries invalid parts up to twice, then retains their source text and continues;
@@ -112,8 +116,9 @@ invented percentages. Before inference, a local-only time range uses comparable
 successful runs and excludes reused checkpoints. The first run explicitly reports
 missing history; API/report time is not included. [Progress and estimate details](docs/USAGE.md#progress-and-time-estimates).
 
-Batch results go to `./data` in the current directory. Monitor results go beside the
-recording. `--output-dir` overrides either location; `--input-dir` changes only the input.
+`--output-dir DIR` sets where recording transcripts, reports and error files are saved.
+Without it, results go to `./data` in the current directory, or to the watched folder
+when `--monitor-dir` is used. Monitoring is enabled by `--monitor-dir`.
 
 A log plus a summary counts as complete and is skipped, even if settings change.
 A lone log resumes only with matching cached source/settings and ownership.
@@ -232,7 +237,7 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Report and final GPT reconciliation model/effort; none disables reports, not reconciliation. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; levels keep their order within the Summary menu. Always writes standalone HTML. |
 | `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
-| `--output-dir DIR` | Monitor folder in monitor mode; otherwise working directory's `data` | Destination for logs and summaries; an explicit value overrides either default. |
+| `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports and error files to DIR. Does not enable monitoring. |
 | `--force` | Off | Bypass completion skipping and recognition/API caches; may repeat paid calls. |
 | `--transcribe-only` | Off | Create only the log; equivalent to `--summarize-model none`. Final GPT reconciliation still runs unless offline. |
 | `--summary-only` | Off | Regenerate an HTML report from an existing log, without recognition/fusion. |
