@@ -2,8 +2,9 @@
 
 Date: 2026-11-11
 Task: SCR-097
-Status: Approved by the user on 2026-11-11. Implementation delivered on branch
-`codex/scr-097-finder-hooks`; native acceptance is partial (see PROJECT_CONTEXT.md).
+Status: Approved by the user on 2026-11-11. Implemented and merged into main.
+Quick Actions verified; accepted as complete by the user on 2026-11-12, with
+browser-picker selection left to manual checking (see PROJECT_CONTEXT.md).
 
 ## Intent
 

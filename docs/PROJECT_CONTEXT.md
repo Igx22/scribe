@@ -524,98 +524,66 @@ established by these mocked checks.
 
 ## Finder hooks (SCR-097)
 
-`macos-register-finder-hooks` is a separate Bash 3.2 launcher. Its top-of-file
-`MENU_TITLE` and `run_conversion(file, file_dir)` are the only editable behavior
-configuration. The ordinary command adds only absolute `-f` and `--output-dir`,
-preserving WhisperX/GPT defaults and configuration precedence. It resolves input
-symlinks before deriving outputs, changes to the project root for console logs,
-waits synchronously, and opens HTML only after exit 0. It preserves normal skip,
-cache, lock and resume behavior. It never prepares Python/models during registration.
+`macos-register-finder-hooks` is a separate Bash 3.2 launcher with editable
+`MENU_TITLE` and `run_conversion(file, file_dir)` at the top. The ordinary command
+preserves local WhisperX/GPT defaults and configuration precedence, adding only
+absolute `-f` and `--output-dir`. Canonical input paths keep symlink outputs
+consistent with Scribe. It runs from the project folder, waits synchronously,
+and opens available HTML only after exit 0; skip/cache/lock/resume semantics
+and failure diagnostics are retained. Registration never prepares models or Python.
 
-The generated `Scribe Local Conversion.workflow` has stable identity
-`org.scribe.finder.local-conversion`; the editable display title is separate.
-Plist serialization escapes dynamic values. Replacements are prepared and parsed
-before replacing an owned bundle, with rollback on rename failure. Foreign or
-symlink destinations are refused. The workflow contains only delegation to the
-installed script path, not the conversion function. Re-register after a project
-move or title change. Terminal receives a quoted foreground `/bin/bash SCRIPT
---run FILE` child through AppleScript argv; its interactive parent remains open.
-NSWorkspace resolves the HTTPS handler without navigation; `open -a` explicitly
-uses it for HTML. [Apple's lookup contract](https://developer.apple.com/documentation/appkit/nsworkspace/urlforapplication(toopen:)-7qkzf).
+The user workflow has stable identity `org.scribe.finder.local-conversion` and
+basename `Scribe Local Conversion.workflow`, separate from its display title.
+Ownership checks refuse foreign/symlink destinations; validated replacements
+have rollback on rename failure. Standard icon/background metadata exposes it
+as a Quick Action. Re-register after title/project-location changes; command
+edits apply immediately. Discovery uses `pbs -flush` then `-update`, because
+`-update` alone retained deleted entries. Native before/after `NSServicesStatus`
+snapshots compared byte-for-byte equal. Terminal runs a foreground Bash child
+and retains its interactive parent. NSWorkspace selects the HTTPS handler;
+explicit application dispatch preserves browser choice over HTML associations.
 
-Verification on 2026-11-12, macOS 14.5 (23F79), system Bash 3.2.57:
+Verification completed on 2026-11-12, macOS 14.5 (23F79):
 
-- Full suite after review fixes: **267 tests passed** (244 existing + 23 hook tests), using
-  `/opt/projects26/scribe/data/.venv/bin/python3 -I -B -m unittest discover -s tests -t . -v`.
-  No real recordings, model downloads or paid API calls. Hook fixtures cover
-  literal special-character paths, relative paths/symlinks, synchronous completion,
-  normal skips, failure/SIGINT/stale HTML, missing HTML/legacy Markdown, browser
-  errors, edited conversion functions, CLI validation, interpreter discovery,
-  ownership/symlink/write failures, safe replacement, rename and relocation.
-- `/bin/bash -n` passed. Generated `Info.plist` and `document.wflow` passed native
-  `plutil -lint`; Terminal AppleScript passed `osacompile`. Native `automator -i`
-  executed a temporary workflow and delivered exact `--launch` argv to a harmless
-  target with Cyrillic, quotes, spaces and shell metacharacters.
-- A temporary project under `/tmp/scr097-ui` registered a harmless action in the
-  real Services directory. There was no preexisting Scribe installation. Finder
-  exposed it in **Finder → Services** and directly in the MKV context menu.
-  Initial invocation displayed native error **-1743** and the launcher's
-  permission guidance. After the user enabled Terminal automation, Finder launched
-  a distinct Terminal window (7208); fixture progress and final output were visible.
-  A completion gate proved no browser dispatch while conversion remained active.
-  The prompt returned, `busy=false`, and a subsequent `printf` executed in the shell.
-- Real failure 7 (window 7215) and physical Ctrl+C (7220) retained diagnostics,
-  output bytes and interactive prompts. Neither opened old HTML. Synthetic TXT
-  was offered the service but rejected at runtime without conversion. Action title
-  rename and project relocation were exercised through Finder, retaining one bundle;
-  the relocated command executed from the moved project (window 7231).
-- Native HTTPS and HTML associations both resolved `/Applications/Velja.app`.
-  Actual `open -a` dispatch opened the first fixture report in Firefox, whose window
-  title matched the synthetic report. Velja may show its browser/profile selector;
-  the launcher leaves that policy to the system handler. A deliberately differing
-  HTML-editor association was **not** configured or tested natively; adapter tests
-  cover that routing decision. Completed-pair skipping was fixture-tested, without
-  running the real ASR pipeline.
-- The real **Quick Actions** submenu showed only **Customize…**, while the Scribe
-  service worked from the context menu/Services. Modern Quick Action metadata, including standard service icon/background fields,
-  is included, but discovery/enabling of Scribe inside that submenu and invocation
-  through that exact route remain **unverified**. No unrelated extension setting
-  was changed. SCR-097 stays **In Progress** until that acceptance check is resolved.
-- The temporary workflow was removed twice; later diagnostics found that
-  `pbs -update` retained its deleted discovery entry. Refresh now uses `pbs -flush`
-  followed by `-update`. Native install/removal with the corrected script passed,
-  `pbs -dump` no longer listed Scribe, and `NSServicesStatus` before/after snapshots
-  compared byte-for-byte equal. No production action or discovery entry was left
-  pointing to the temporary project; unrelated services and source-checkout
-  changes were preserved. Private data, `.env`, caches and reports were untouched.
+- Full suite: **267/267 passed** (244 existing + 23 hook fixtures), using
+  `./data/.venv/bin/python3 -I -B -m unittest discover -s tests -t . -v`.
+  Bash syntax, native plist lint, AppleScript compilation and native Automator
+  execution also passed. Fixtures cover literal paths/argv, symlinks, completion,
+  stale/missing HTML, SIGINT, browser errors, interpreter discovery, ownership,
+  replacement, rename/relocation and discovery refresh. No paid API/model work.
+- The current script was copied into a temporary harmless project. Finder showed
+  **Quick Actions → Scribe — Local conversion**, and that exact menu item was
+  invoked for two distinct synthetic MKVs. No settings toggle was needed.
+  Recorded argv/output directory and project cwd matched their canonical paths.
+- The user confirmed a separate Terminal window with visible progress. A gate
+  held the first run before completion; after release it created the HTML. The
+  user supplied the final `END 0`, report path and returned shell prompt.
+  The UI tool refused access to Terminal, so these window observations are
+  explicitly user-confirmed; filesystem and subprocess evidence was inspected.
+- The system HTTPS handler is Velja, which shows a transient browser-selection
+  popup. Native report dispatch returned 0. Firefox displayed the new synthetic
+  report, but a diagnostic Finder double-click also occurred during that case.
+  A second distinct case confirmed Quick Action dispatch to Velja without manual
+  HTML opening. The user confirmed the picker and explicitly skipped automated
+  Firefox selection. Automatic browser selection/display is therefore not claimed.
+- Earlier native checks through Finder Services verified error 7 and physical
+  Ctrl+C with stale HTML: neither opened it, and Terminal retained diagnostics
+  and prompts. Title rename, project relocation and repeated removal worked.
+  A synthetic TXT was offered the service and rejected without conversion.
+- Temporary registration was removed after testing; no test target was left
+  installed. Source data, credentials, caches, unrelated services/settings and
+  preexisting task edits were preserved. There were no new Extensions crash
+  reports during this retest.
 
-The Python `-I` named-module unittest command in the plan cannot import the local
-`tests` package on this runtime. Discovery with explicit `-t .` is the verified
-command and provides the same test package setup used by the existing suite.
+An earlier System Settings Extensions host crash showed EXC_BAD_ACCESS/SIGSEGV,
+including icon rendering in one report. Its exact cause remains unresolved;
+the Settings checkbox panel was not retested, since the current Quick Action
+was already visible. A deliberately different HTML-editor association remains
+adapter-tested only; user browser defaults were not changed. These limits do
+not imply a crash of the conversion process.
 
-Final independent review (fresh `gpt-6-astra/high`) ran the full 266-test suite
-and found no additional runner/registration defect. It flagged the unqualified
-Quick Actions instructions as Important; README, usage and installer now describe
-the verified Services route and explicit Quick Actions enablement. The user
-chose to defer exact-submenu acceptance, so SCR-097 remains In Progress. The single
-fix pass added standard `NSIconName`/`NSBackgroundColorName` metadata and corrected
-stale cache refresh; both regression contracts were observed RED → GREEN, with
-267/267 tests and native plist/removal checks green afterward. No second review
-was dispatched. A Minor task-table formatting finding was deferred: SCR-097's row
-is separated from the existing table by a blank line.
-
-The user also reported **Settings Error: Extension process Extensions exited**.
-Crash reports `Extensions-2026-11-12-004204.ips`, `004634.ips` and `004901.ips`
-show EXC_BAD_ACCESS/SIGSEGV in the macOS Extensions host; the first includes
-`NSQuickActionGetIcon`/NSImage drawing. This is a different failure from Terminal
-permission denial and does not show conversion terminating early. A control
-attempt without the workflow file was inconclusive because its cached discovery
-entry still existed. The test entry was then removed with the corrected cache
-refresh. The cause of the Settings host crash and a checkbox/submenu retest remain
-unverified; no extra permission or unrelated setting was changed as a workaround.
-
-Execution decisions: the plan's isolated named unittest import was replaced by
-explicit-top-level discovery (cost: changed collection scope, recorded counts).
-Exact Quick Actions acceptance was deferred at the user's request (cost: further
-native integration work may remain). Code and documented evidence are committed;
-private source-checkout data and unrelated task edits were not copied or modified.
+One independent whole-branch review and its single fix pass are complete. The
+user accepted the remaining manual browser checks, stopped further testing and
+requested SCR-097 be marked Done on 2026-11-12. The feature was already merged
+into main. Use discovery with explicit `-t .`: Python `-I` prevents the plan's
+named-module invocation from importing the local tests package on this runtime.

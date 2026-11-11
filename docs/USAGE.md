@@ -134,12 +134,12 @@ is needed. It installs `~/Library/Services/Scribe Local Conversion.workflow`.
 Repeated registration updates that one owned workflow and preserves other services.
 A foreign bundle or symlink at that path is refused rather than overwritten.
 
-Select **one existing MKV** in Finder, then choose **Finder → Services → Scribe —
-Local conversion**, the verified entry point. For the **Quick Actions** context
-submenu, enable this action in Finder extensions as described below. That exact
-submenu route remains pending native acceptance. The workflow receives files broadly: runtime validation rejects folders,
-non-MKV files and multiple selections explicitly; `.MKV` is accepted. MKV-only
-menu visibility is not promised.
+Select **one existing MKV** in Finder, then right-click and choose **Quick Actions
+→ Scribe — Local conversion**. This submenu route was verified on macOS 14.5.
+Enable a hidden action in Finder extensions as described below. The workflow
+receives files broadly: runtime validation rejects folders, non-MKV files and
+multiple selections explicitly; `.MKV` is accepted. MKV-only menu visibility is
+not promised.
 
 The editable title and command are together near the beginning of
 `macos-register-finder-hooks`:
@@ -188,9 +188,11 @@ On macOS 14 Sonoma, enable a disabled action under **System Settings → Privacy
 Security → Extensions → Finder**. If it is absent, re-run registration from the
 current project location; log out and back in if service discovery remains stale. Registration and removal
 rebuild the discovery cache without changing your service-enable preferences.
-Finder may also expose the action through **Finder → Services**. In the verified Sonoma session, Scribe appeared directly in the context menu
-and Services; the Quick Actions submenu still required a discovery/enabling check.
-Actual UI acceptance and remaining checks are recorded in
+Finder may also expose the action through **Finder → Services**. The Quick Actions
+submenu was verified with the current registration metadata. If your default
+browser is a picker such as Velja, choose a browser in its popup to view the
+report; Scribe preserves that choice rather than forcing a browser.
+Actual UI acceptance and remaining limits are recorded in
 [project context](PROJECT_CONTEXT.md#finder-hooks-scr-097).
 
 If Finder reports **Not authorized to send Apple events to Terminal (-1743)**,

@@ -144,8 +144,7 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-091 | Clarify output directory defaults and monitoring documentation | Done | 2026-11-08 | 2026-11-08 |
 | SCR-092 | [Audit recognition caches and specify reusable per-model artifacts](docs/PROJECT_CONTEXT.md#recognition-cache-artifacts) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-093 | [Key flat JSON caches by recording content and keep user exports separate](docs/USAGE.md#processing-cache-and-exports) | Done | 2026-11-08 | 2026-11-08 |
-
-| SCR-097 | [Add configurable macOS Finder action registration](docs/USAGE.md#finder-quick-action-macos) | In Progress | 2026-11-11 | — |
+| SCR-097 | [Add configurable macOS Finder action registration](docs/USAGE.md#finder-quick-action-macos) | Done | 2026-11-11 | 2026-11-12 |
 
 ### SCR-073
 
@@ -162,16 +161,3 @@ Candidate references checked on 2026-11-07:
 [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B),
 [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507),
 [llama.cpp](https://github.com/ggml-org/llama.cpp).
-
-### SCR-097
-
-Approved [design](docs/superpowers/specs/2026-11-11-macos-finder-hooks-design.md)
-and [plan](docs/superpowers/plans/2026-11-11-macos-finder-hooks.md).
-Implementation on `codex/scr-097-finder-hooks`: editable runner, stable owned
-workflow registration/removal, Terminal launch and system-browser dispatch.
-267 tests pass (244 existing + 23 hook fixtures), with native plist, AppleScript
-and Automator execution checks. See [verification evidence and remaining UI checks](docs/PROJECT_CONTEXT.md#finder-hooks-scr-097).
-Finder Services → Terminal success, error 7 and Ctrl+C were verified with synthetic inputs.
-The final independent review and its one fix pass are complete.
-The Quick Actions submenu route remains deferred at the user's request; no paid processing
-or model downloads are part of this ticket's verification.
