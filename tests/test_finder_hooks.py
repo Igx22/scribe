@@ -202,3 +202,172 @@ class RunnerTests(HookFixture):
         result = subprocess.run(['/bin/bash', '-c', 'source "$1"', 'fixture', str(self.hook)], capture_output=True)
         self.assertEqual(result.returncode, 0)
         self.assert_no_work()
+
+
+class RegistrationTests(HookFixture):
+    def setUp(self):
+        super().setUp()
+        self.services = self.base / 'Services'
+        self.services.mkdir()
+        self.unrelated = self.services / 'unrelated.workflow'
+        self.unrelated.write_bytes(b'unrelated service')
+        self.bundle = self.services / 'Scribe Local Conversion.workflow'
+
+    def register(self, operation='install_action', overrides='', env=None):
+        code = 'source "$1" || exit; native_refresh_services() { :; }; ' + overrides + '\n' + operation + ' "$2"'
+        return subprocess.run(['/bin/bash', '-c', code, 'fixture', str(self.hook), str(self.services)],
+                              env=env or self.environment(), text=True, capture_output=True, timeout=15)
+
+    def info(self):
+        import plistlib
+        return plistlib.loads((self.bundle / 'Contents/Info.plist').read_bytes())
+
+    def workflow(self):
+        import plistlib
+        return plistlib.loads((self.bundle / 'Contents/document.wflow').read_bytes())
+
+    def transport(self):
+        return self.workflow()['actions'][0]['action']['ActionParameters']['COMMAND_STRING']
+
+    def test_install_update_rename_and_uninstall_preserve_unrelated_service(self):
+        for title in (None, None, 'Renamed & <Scribe>'):
+            if title:
+                self.hook.write_text(self.hook.read_text().replace('Scribe — Local conversion', title))
+            result = self.register()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(sorted(p.name for p in self.services.iterdir()), ['Scribe Local Conversion.workflow', 'unrelated.workflow'])
+            self.assertEqual(self.info()['CFBundleIdentifier'], 'org.scribe.finder.local-conversion')
+            self.assertEqual(self.info()['NSServices'][0]['NSMenuItem']['default'], title or 'Scribe — Local conversion')
+            self.assertEqual(self.unrelated.read_bytes(), b'unrelated service')
+            self.assert_no_work()
+        for _ in range(2):
+            result = self.register('uninstall_action')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(self.bundle.exists())
+            self.assertEqual(self.unrelated.read_bytes(), b'unrelated service')
+
+    def test_workflow_round_trip_and_relocation(self):
+        for moved in (False, True):
+            if moved:
+                dest = self.base / "moved ' \" ; $() проект"
+                self.project.rename(dest)
+                self.project = dest
+                self.hook = dest / HOOK.name
+            result = self.register()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            transport = self.transport()
+            # Replace the target only after serializing; execute the actual shell transport.
+            original = self.hook.read_bytes()
+            self.hook.write_text(f'#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+            # Workflow explicitly uses Bash, so capture shell arguments with a Bash fixture.
+            self.hook.write_text('#!/bin/bash\n"' + sys.executable + '" -c \'import json,sys;print(json.dumps(sys.argv[1:]))\' "$@"\n')
+            run = subprocess.run(['/bin/bash', '-c', transport, 'workflow', str(self.source)], capture_output=True, text=True)
+            self.hook.write_bytes(original)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout), ['--launch', str(self.source)])
+            self.assert_no_work()
+
+    def test_missing_installed_target_reports_reregistration(self):
+        self.assertEqual(self.register().returncode, 0)
+        transport = self.transport()
+        self.hook.unlink()
+        result = subprocess.run(['/bin/bash', '-c', transport, 'workflow', str(self.source)], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('register', result.stderr.lower())
+        self.assertIn(str(self.project), result.stderr)
+        self.assert_no_work()
+
+    def test_foreign_bundle_and_symlink_are_preserved(self):
+        self.bundle.mkdir()
+        foreign = self.bundle / 'foreign'
+        foreign.write_bytes(b'foreign')
+        for operation in ('install_action', 'uninstall_action'):
+            result = self.register(operation)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(foreign.read_bytes(), b'foreign')
+        shutil.rmtree(self.bundle)
+        target = self.base / 'foreign directory'
+        target.mkdir()
+        (target / 'marker').write_bytes(b'protected')
+        self.bundle.symlink_to(target, target_is_directory=True)
+        for operation in ('install_action', 'uninstall_action'):
+            result = self.register(operation)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(self.bundle.is_symlink())
+            self.assertEqual((target / 'marker').read_bytes(), b'protected')
+        self.assert_no_work()
+
+    def test_unwritable_destination_fails_without_writes(self):
+        self.services.chmod(0o555)
+        self.addCleanup(self.services.chmod, 0o755)
+        result = self.register()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertFalse(self.bundle.exists())
+        self.assertEqual(self.unrelated.read_bytes(), b'unrelated service')
+        self.assert_no_work()
+
+    def test_invalid_replacement_keeps_previous_owned_workflow(self):
+        self.assertEqual(self.register().returncode, 0)
+        before = {str(p.relative_to(self.bundle)): p.read_bytes() for p in self.bundle.rglob('*') if p.is_file()}
+        result = self.register(overrides="MENU_TITLE=$'bad\\001title'")
+        self.assertNotEqual(result.returncode, 0)
+        after = {str(p.relative_to(self.bundle)): p.read_bytes() for p in self.bundle.rglob('*') if p.is_file()}
+        self.assertEqual(after, before)
+        self.assert_no_work()
+
+    def test_prepared_runtime_with_minimal_path_and_missing_python(self):
+        minimal = self.base / 'minimal-bin'
+        minimal.mkdir()
+        for command in ('dirname', 'basename'):
+            (minimal / command).symlink_to('/usr/bin/' + command)
+        runtime = self.project / 'data/.venv/bin/python3'
+        runtime.parent.mkdir(parents=True)
+        runtime.symlink_to(sys.executable)
+        env = dict(self.environment(), PATH=str(minimal))
+        result = self.register(env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime.unlink()
+        # Model a host with no absolute fallback interpreter installed.
+        text = self.hook.read_text()
+        for command in ('/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3'):
+            text = text.replace(command, str(self.base / 'absent-python'))
+        self.hook.write_text(text)
+        result = self.register(env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Python 3', result.stderr)
+        self.assert_no_work()
+
+
+class LaunchTests(HookFixture):
+    def launch_override(self):
+        return 'native_terminal_do_script() { printf "%s" "$1" > "$FIXTURE_COMMAND"; }\n'
+
+    def environment(self):
+        return dict(super().environment(), FIXTURE_COMMAND=str(self.base / 'terminal-command'))
+
+    def test_terminal_command_round_trip_is_foreground_and_returns_to_shell(self):
+        result = self.run_hook('--launch', self.source.name, overrides=self.launch_override())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_no_work()
+        command = (self.base / 'terminal-command').read_text()
+        # Capture the arguments received by the child script, then prove shell control returns.
+        self.hook.write_text('#!/bin/bash\n"$FIXTURE_PYTHON" -c \'import json,sys; open(sys.argv[1], "w").write(json.dumps(sys.argv[2:]))\' "$FIXTURE_OPENED" "$@"\n')
+        run = subprocess.run(['/bin/bash', '-c', command + '\nprintf "SHELL RETURNED\\n"'], env=self.environment(), cwd=self.base, text=True, capture_output=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('SHELL RETURNED', run.stdout)
+        self.assertEqual(json.loads(self.opened.read_text()), ['--run', str(self.source)])
+        self.assertEqual(self.records(self.calls), [])
+
+    def test_invalid_selection_never_launches_terminal(self):
+        for args in [('--launch',), ('--launch', self.source, self.source), ('--launch', self.base), ('--launch', self.config)]:
+            result = self.run_hook(*args, overrides=self.launch_override())
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.base / 'terminal-command').exists())
+            self.assert_no_work()
+
+    def test_denied_terminal_automation_is_reported(self):
+        result = self.run_hook('--launch', self.source, overrides='native_terminal_do_script() { echo "Not authorized (-1743)" >&2; return 1; }')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Terminal', result.stderr)
+        self.assertIn('1743', result.stderr)
+        self.assert_no_work()

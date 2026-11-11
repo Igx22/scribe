@@ -92,6 +92,149 @@ run_file() (
     fi
 )
 
+native_terminal_do_script() {
+    /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+    tell application "Terminal"
+        activate
+        do script (item 1 of argv)
+    end tell
+end run
+APPLESCRIPT
+}
+
+launch_file() {
+    normalize_file "$1" || return
+    local command
+    # POSIX single-quote transport also works in the user's default zsh.
+    command=$("$PYTHON" -I -B - "$HOOK_PATH" "$REPLY" <<'PY'
+import shlex, sys
+print(' '.join(shlex.quote(arg) for arg in ['/bin/bash', sys.argv[1], '--run', sys.argv[2]]))
+PY
+    ) || return
+    if ! native_terminal_do_script "$command"; then
+        error 'Cannot launch Terminal. Allow automation of Terminal in System Settings > Privacy & Security > Automation, then try again.'
+        return 1
+    fi
+}
+
+native_refresh_services() {
+    /System/Library/CoreServices/pbs -update
+}
+
+# One implementation for install/removal keeps ownership checks identical.
+manage_action() {
+    local operation="$1" services_dir="$2"
+    find_python || return
+    "$PYTHON" -I -B - "$operation" "$services_dir" "$MENU_TITLE" "$HOOK_PATH" <<'PY'
+import os, pathlib, plistlib, shlex, shutil, sys, tempfile, uuid
+operation, directory, title, hook = sys.argv[1:]
+services = pathlib.Path(directory).absolute()
+bundle = services / 'Scribe Local Conversion.workflow'
+identity = 'org.scribe.finder.local-conversion'
+
+def owned():
+    if bundle.is_symlink():
+        raise ValueError('Refusing a symlink at ' + str(bundle))
+    if not bundle.exists():
+        return False
+    contents = bundle / 'Contents'
+    info = contents / 'Info.plist'
+    if not bundle.is_dir() or contents.is_symlink() or info.is_symlink():
+        raise ValueError('Refusing an unowned workflow at ' + str(bundle))
+    try:
+        metadata = plistlib.loads(info.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise ValueError('Refusing an unowned workflow at ' + str(bundle)) from exc
+    if metadata.get('CFBundleIdentifier') != identity:
+        raise ValueError('Refusing an unowned workflow at ' + str(bundle))
+    return True
+
+try:
+    if services.is_symlink():
+        raise ValueError('Refusing a symlink Services directory: ' + str(services))
+    exists = owned()
+    if operation == 'uninstall':
+        if exists:
+            shutil.rmtree(bundle)
+            print('Removed Scribe Finder action: ' + str(bundle))
+        else:
+            print('Scribe Finder action is not installed: ' + str(bundle))
+    else:
+        # Serialize everything before touching an existing valid installation.
+        transport = ('target=' + shlex.quote(hook) + '\n'
+            'if [ ! -f "$target" ]; then\n'
+            '  printf "Scribe project is missing: %s. Re-register from its new location.\\n" "$target" >&2\n'
+            '  exit 1\nfi\n'
+            '/bin/bash "$target" --launch "$@"\n')
+        info = {'CFBundleIdentifier': identity, 'CFBundleName': title,
+                'CFBundleVersion': '1', 'CFBundlePackageType': 'BNDL',
+                'NSServices': [{'NSMenuItem': {'default': title},
+                    'NSMessage': 'runWorkflowAsService',
+                    'NSSendFileTypes': ['public.item'],
+                    'NSSendTypes': ['NSFilenamesPboardType'],
+                    'NSRequiredContext': {'NSApplicationIdentifier': 'com.apple.finder'}}]}
+        action = {'AMAccepts': {'Container': 'List', 'Optional': True, 'Types': ['com.apple.cocoa.string']},
+                  'AMProvides': {'Container': 'List', 'Types': ['com.apple.cocoa.string']},
+                  'AMActionVersion': '2.0.3', 'AMApplication': ['Automator'],
+                  'ActionBundlePath': '/System/Library/Automator/Run Shell Script.action',
+                  'ActionName': 'Run Shell Script',
+                  'ActionParameters': {'COMMAND_STRING': transport, 'CheckedForUserDefaultShell': True,
+                                       'inputMethod': 1, 'shell': '/bin/bash', 'source': ''},
+                  'BundleIdentifier': 'com.apple.RunShellScript', 'CFBundleVersion': '2.0.3',
+                  'UUID': str(uuid.uuid4()), 'InputUUID': str(uuid.uuid4()), 'OutputUUID': str(uuid.uuid4())}
+        workflow = {'AMApplicationBuild': '523', 'AMApplicationVersion': '2.10', 'AMDocumentVersion': '2',
+                    'actions': [{'action': action, 'isViewVisible': True}], 'connectors': {},
+                    'workflowMetaData': {'workflowTypeIdentifier': 'com.apple.Automator.servicesMenu',
+                        'serviceInputTypeIdentifier': 'com.apple.Automator.fileSystemObject',
+                        'serviceOutputTypeIdentifier': 'com.apple.Automator.nothing',
+                        'serviceProcessesInput': 0, 'serviceApplicationBundleID': 'com.apple.finder',
+                        'serviceApplicationPath': '/System/Library/CoreServices/Finder.app'}}
+        encoded = {'Info.plist': plistlib.dumps(info), 'document.wflow': plistlib.dumps(workflow)}
+        services.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='.scribe-finder-', dir=services) as scratch:
+            scratch = pathlib.Path(scratch)
+            replacement = scratch / bundle.name
+            (replacement / 'Contents').mkdir(parents=True)
+            for name, data in encoded.items():
+                path = replacement / 'Contents' / name
+                path.write_bytes(data)
+                plistlib.loads(path.read_bytes())
+            # Recheck ownership immediately before replacement; never follow a new symlink.
+            exists = owned()
+            backup = scratch / 'previous.workflow'
+            if exists:
+                bundle.rename(backup)
+            try:
+                replacement.rename(bundle)
+            except OSError:
+                if exists:
+                    backup.rename(bundle)
+                raise
+        print('Installed Scribe Finder action: ' + str(bundle))
+except (OSError, ValueError, TypeError) as exc:
+    print('Scribe Finder: ' + str(exc), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+install_action() {
+    manage_action install "$1" || return
+    if ! native_refresh_services; then
+        error 'Installed, but service discovery could not refresh. Log out and back in if Finder does not show the action.'
+        return 1
+    fi
+    printf 'Finder: Quick Actions > %s\nIf disabled, enable this action in System Settings > Privacy & Security > Extensions > Finder.\n' "$MENU_TITLE"
+}
+
+uninstall_action() {
+    manage_action uninstall "$1" || return
+    if ! native_refresh_services; then
+        error 'Removed, but service discovery could not refresh. Log out and back in if Finder still shows the action.'
+        return 1
+    fi
+}
+
 usage() {
     cat <<'HELP'
 Usage: ./macos-register-finder-hooks [--uninstall | --help]
@@ -106,6 +249,7 @@ HELP
 main() {
     case "${1-}" in
         --help|-h) [ "$#" -eq 1 ] || { error 'Unexpected arguments.'; return 2; }; usage ;;
+        --launch) [ "$#" -eq 2 ] || { error 'Select exactly one MKV file.'; return 2; }; launch_file "$2" ;;
         --run) [ "$#" -eq 2 ] || { error 'Select exactly one MKV file.'; return 2; }; run_file "$2" ;;
         --uninstall) [ "$#" -eq 1 ] || { error 'Unexpected arguments.'; return 2; }; uninstall_action "$HOME/Library/Services" ;;
         '') [ "$#" -eq 0 ] || { error 'Unexpected arguments.'; return 2; }; install_action "$HOME/Library/Services" ;;
