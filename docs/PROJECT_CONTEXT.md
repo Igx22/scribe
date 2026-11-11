@@ -521,3 +521,70 @@ writes/content locks, raw ASR/alignment resume, batch preparation, offline reuse
 and legacy final/summary/header adapters that preserve original JSON. Live model
 accuracy and historical full-file identity of legacy edge-hash data are not
 established by these mocked checks.
+
+## Finder hooks (SCR-097)
+
+`macos-register-finder-hooks` is a separate Bash 3.2 launcher. Its top-of-file
+`MENU_TITLE` and `run_conversion(file, file_dir)` are the only editable behavior
+configuration. The ordinary command adds only absolute `-f` and `--output-dir`,
+preserving WhisperX/GPT defaults and configuration precedence. It resolves input
+symlinks before deriving outputs, changes to the project root for console logs,
+waits synchronously, and opens HTML only after exit 0. It preserves normal skip,
+cache, lock and resume behavior. It never prepares Python/models during registration.
+
+The generated `Scribe Local Conversion.workflow` has stable identity
+`org.scribe.finder.local-conversion`; the editable display title is separate.
+Plist serialization escapes dynamic values. Replacements are prepared and parsed
+before replacing an owned bundle, with rollback on rename failure. Foreign or
+symlink destinations are refused. The workflow contains only delegation to the
+installed script path, not the conversion function. Re-register after a project
+move or title change. Terminal receives a quoted foreground `/bin/bash SCRIPT
+--run FILE` child through AppleScript argv; its interactive parent remains open.
+NSWorkspace resolves the HTTPS handler without navigation; `open -a` explicitly
+uses it for HTML. [Apple's lookup contract](https://developer.apple.com/documentation/appkit/nsworkspace/urlforapplication(toopen:)-7qkzf).
+
+Verification on 2026-11-12, macOS 14.5 (23F79), system Bash 3.2.57:
+
+- Full suite: **266 tests passed** (244 existing + 22 hook tests), using
+  `/opt/projects26/scribe/data/.venv/bin/python3 -I -B -m unittest discover -s tests -t . -v`.
+  No real recordings, model downloads or paid API calls. Hook fixtures cover
+  literal special-character paths, relative paths/symlinks, synchronous completion,
+  normal skips, failure/SIGINT/stale HTML, missing HTML/legacy Markdown, browser
+  errors, edited conversion functions, CLI validation, interpreter discovery,
+  ownership/symlink/write failures, safe replacement, rename and relocation.
+- `/bin/bash -n` passed. Generated `Info.plist` and `document.wflow` passed native
+  `plutil -lint`; Terminal AppleScript passed `osacompile`. Native `automator -i`
+  executed a temporary workflow and delivered exact `--launch` argv to a harmless
+  target with Cyrillic, quotes, spaces and shell metacharacters.
+- A temporary project under `/tmp/scr097-ui` registered a harmless action in the
+  real Services directory. There was no preexisting Scribe installation. Finder
+  exposed it in **Finder → Services** and directly in the MKV context menu.
+  Initial invocation displayed native error **-1743** and the launcher's
+  permission guidance. After the user enabled Terminal automation, Finder launched
+  a distinct Terminal window (7208); fixture progress and final output were visible.
+  A completion gate proved no browser dispatch while conversion remained active.
+  The prompt returned, `busy=false`, and a subsequent `printf` executed in the shell.
+- Real failure 7 (window 7215) and physical Ctrl+C (7220) retained diagnostics,
+  output bytes and interactive prompts. Neither opened old HTML. Synthetic TXT
+  was offered the service but rejected at runtime without conversion. Action title
+  rename and project relocation were exercised through Finder, retaining one bundle;
+  the relocated command executed from the moved project (window 7231).
+- Native HTTPS and HTML associations both resolved `/Applications/Velja.app`.
+  Actual `open -a` dispatch opened the first fixture report in Firefox, whose window
+  title matched the synthetic report. Velja may show its browser/profile selector;
+  the launcher leaves that policy to the system handler. A deliberately differing
+  HTML-editor association was **not** configured or tested natively; adapter tests
+  cover that routing decision. Completed-pair skipping was fixture-tested, without
+  running the real ASR pipeline.
+- The real **Quick Actions** submenu showed only **Customize…**, while the Scribe
+  service worked from the context menu/Services. Modern Quick Action metadata is
+  included, but discovery/enabling of Scribe inside that submenu and invocation
+  through that exact route remain **unverified**. No unrelated extension setting
+  was changed. SCR-097 stays **In Progress** until that acceptance check is resolved.
+- The temporary action was uninstalled twice successfully. No production action
+  was left pointing to the temporary project; unrelated services and source-checkout
+  changes were preserved. Private data, `.env`, caches and reports were untouched.
+
+The Python `-I` named-module unittest command in the plan cannot import the local
+`tests` package on this runtime. Discovery with explicit `-t .` is the verified
+command and provides the same test package setup used by the existing suite.

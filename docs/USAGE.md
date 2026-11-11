@@ -117,6 +117,98 @@ launcher preserves that directory. Only MKV files are accepted; `.MKV` also work
 Missing inputs, empty input directories, and output-name collisions are reported.
 Repeated references or symlinks to the same resolved file are processed once.
 
+## Finder Quick Action (macOS)
+
+Prepare Scribe using the normal setup above, then register this user's action
+from the project folder:
+
+```bash
+./macos-register-finder-hooks
+./macos-register-finder-hooks --help
+```
+
+Registration needs an existing Python 3, tries the prepared `data/.venv`, the
+legacy `data/runtime/python`, and installed Python commands/standard locations.
+It never runs setup, downloads a model, or calls an API. No administrator access
+is needed. It installs `~/Library/Services/Scribe Local Conversion.workflow`.
+Repeated registration updates that one owned workflow and preserves other services.
+A foreign bundle or symlink at that path is refused rather than overwritten.
+
+Select **one existing MKV** in Finder, then use **Quick Actions → Scribe — Local
+conversion** in its context menu. Finder's **Services** menu also exposes the
+action. The workflow receives files broadly: runtime validation rejects folders,
+non-MKV files and multiple selections explicitly; `.MKV` is accepted. MKV-only
+menu visibility is not promised.
+
+The editable title and command are together near the beginning of
+`macos-register-finder-hooks`:
+
+```bash
+MENU_TITLE="Scribe — Local conversion"
+
+run_conversion() {
+    local file="$1"
+    local file_dir="$2"
+    "$PROJECT_DIR/scribe.sh" -f "$file" --output-dir "$file_dir"
+}
+```
+
+Command changes apply to the next invocation. Re-register after changing the
+title or moving the project. The installed workflow delegates to the project
+script and does not contain a second copy of the conversion command. Keep the
+normal output naming when editing the function so it can locate the report.
+
+The ordinary command uses local WhisperX recognition and its normal diarization,
+then GPT text reconciliation and HTML summaries. "Local conversion" describes
+recognition; text processing still uses the API. The hook adds neither `--offline`
+nor `--force`, and normal CLI → environment → `.env` → built-in precedence applies.
+An explicit configured transcription mode still takes precedence over the default.
+
+A separate Terminal window runs the command in the project folder, so console
+logs go to the project's `data/log/`. Absolute, canonical input paths keep symlink
+outputs consistent with Scribe. For `recording.mkv`, the launcher requests
+`recording.log.md` and `recording.summary.html` beside the recording.
+Terminal returns to its interactive shell after success, failure or Ctrl+C.
+It retains the visible diagnostics without changing Terminal's global preferences.
+
+The launcher waits for command completion. Exit 0 opens the available HTML,
+including a normal completed-pair skip. A nonzero exit or interruption does not
+open an old report. A legacy Markdown-only completion or any other success without
+HTML prints the expected path and returns a launcher error. Existing caching,
+locks, resume, partial-result and error-history rules are unchanged; there are
+no automatic retries. The HTTPS handler is resolved through macOS NSWorkspace,
+and the report is explicitly opened with that application, independently of an
+HTML editor association. Lookup/open failures leave the report path visible and
+do not repeat conversion. A browser selector such as Velja remains in control.
+
+### Finder permissions and troubleshooting
+
+On macOS 14 Sonoma, enable a disabled action under **System Settings → Privacy &
+Security → Extensions → Finder**. If it is absent, re-run registration from the
+current project location; log out and back in if service discovery remains stale.
+Finder may also expose the action through **Finder → Services**. In the verified Sonoma session, Scribe appeared directly in the context menu
+and Services; the Quick Actions submenu still required a discovery/enabling check.
+Actual UI acceptance and remaining checks are recorded in
+[project context](PROJECT_CONTEXT.md#finder-hooks-scr-097).
+
+If Finder reports **Not authorized to send Apple events to Terminal (-1743)**,
+open **System Settings → Privacy & Security → Automation**. Expand the requesting
+application (Finder, Automator or WorkflowServiceRunner, as shown by macOS) and
+allow **Terminal** under it. If macOS asks whether that application may control
+Terminal, choose Allow. This is permission for the workflow's host to control
+Terminal. [Apple's Automation instructions](https://support.apple.com/en-au/guide/mac-help/mchl07817563/mac).
+The launcher reports a denial through Automator without starting conversion.
+
+If the project was moved or removed, the workflow reports its missing target;
+register again from the new location. If the browser cannot open, use the printed
+report path. Registration reports missing Python without trying to prepare it.
+
+Remove only the owned action, leaving unrelated services untouched:
+
+```bash
+./macos-register-finder-hooks --uninstall
+```
+
 ## Monitor growing OBS recordings
 
 Start Scribe before or during an OBS recording:
