@@ -134,9 +134,10 @@ is needed. It installs `~/Library/Services/Scribe Local Conversion.workflow`.
 Repeated registration updates that one owned workflow and preserves other services.
 A foreign bundle or symlink at that path is refused rather than overwritten.
 
-Select **one existing MKV** in Finder, then use **Quick Actions → Scribe — Local
-conversion** in its context menu. Finder's **Services** menu also exposes the
-action. The workflow receives files broadly: runtime validation rejects folders,
+Select **one existing MKV** in Finder, then choose **Finder → Services → Scribe —
+Local conversion**, the verified entry point. For the **Quick Actions** context
+submenu, enable this action in Finder extensions as described below. That exact
+submenu route remains pending native acceptance. The workflow receives files broadly: runtime validation rejects folders,
 non-MKV files and multiple selections explicitly; `.MKV` is accepted. MKV-only
 menu visibility is not promised.
 
@@ -185,7 +186,8 @@ do not repeat conversion. A browser selector such as Velja remains in control.
 
 On macOS 14 Sonoma, enable a disabled action under **System Settings → Privacy &
 Security → Extensions → Finder**. If it is absent, re-run registration from the
-current project location; log out and back in if service discovery remains stale.
+current project location; log out and back in if service discovery remains stale. Registration and removal
+rebuild the discovery cache without changing your service-enable preferences.
 Finder may also expose the action through **Finder → Services**. In the verified Sonoma session, Scribe appeared directly in the context menu
 and Services; the Quick Actions submenu still required a discovery/enabling check.
 Actual UI acceptance and remaining checks are recorded in

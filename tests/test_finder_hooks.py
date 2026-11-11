@@ -246,9 +246,21 @@ class RegistrationTests(HookFixture):
             self.assertFalse(self.bundle.exists())
             self.assertEqual(self.unrelated.read_bytes(), b'unrelated service')
 
+    def test_native_refresh_invalidates_cached_services_before_rescan(self):
+        pbs = self.base / 'fixture-pbs'
+        calls = self.base / 'refresh-calls.jsonl'
+        pbs.write_text(f'#!{sys.executable}\nimport json,sys\nwith open({str(calls)!r}, "a") as out: out.write(json.dumps(sys.argv[1:])+"\\n")\n')
+        pbs.chmod(0o755)
+        self.hook.write_text(self.hook.read_text().replace('/System/Library/CoreServices/pbs', str(pbs)))
+        result = subprocess.run(['/bin/bash', '-c', 'source "$1"; native_refresh_services', 'fixture', str(self.hook)], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.records(calls), [['-flush'], ['-update']])
+
     def test_workflow_advertises_finder_quick_action(self):
         self.assertEqual(self.register().returncode, 0)
         metadata = self.workflow()['workflowMetaData']
+        self.assertTrue(self.info()['NSServices'][0].get('NSIconName'))
+        self.assertEqual(self.info()['NSServices'][0].get('NSBackgroundColorName'), 'background')
         self.assertEqual(metadata['presentationMode'], 15)
         self.assertEqual(metadata['inputTypeIdentifier'], 'com.apple.Automator.fileSystemObject')
         self.assertEqual(metadata['applicationBundleIDsByPath'], {'/System/Library/CoreServices/Finder.app': 'com.apple.finder'})

@@ -119,6 +119,9 @@ PY
 }
 
 native_refresh_services() {
+    # Rebuild discovery cache; -update alone retains removed workflow entries.
+    # This leaves the user's NSServicesStatus preferences unchanged.
+    /System/Library/CoreServices/pbs -flush || return
     /System/Library/CoreServices/pbs -update
 }
 
@@ -169,7 +172,8 @@ try:
             '/bin/bash "$target" --launch "$@"\n')
         info = {'CFBundleIdentifier': identity, 'CFBundleName': title,
                 'CFBundleVersion': '1', 'CFBundlePackageType': 'BNDL',
-                'NSServices': [{'NSMenuItem': {'default': title},
+                'NSServices': [{'NSIconName': 'NSActionTemplate', 'NSBackgroundColorName': 'background',
+                    'NSMenuItem': {'default': title},
                     'NSMessage': 'runWorkflowAsService',
                     'NSSendFileTypes': ['public.item'],
                     'NSSendTypes': ['NSFilenamesPboardType'],
@@ -232,7 +236,7 @@ install_action() {
         error 'Installed, but service discovery could not refresh. Log out and back in if Finder does not show the action.'
         return 1
     fi
-    printf 'Finder: Quick Actions > %s\nIf disabled, enable this action in System Settings > Privacy & Security > Extensions > Finder.\n' "$MENU_TITLE"
+    printf 'Finder > Services > %s\nFor the Quick Actions submenu, enable this action in System Settings > Privacy & Security > Extensions > Finder.\n' "$MENU_TITLE"
 }
 
 uninstall_action() {
