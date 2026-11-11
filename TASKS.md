@@ -169,8 +169,9 @@ Approved [design](docs/superpowers/specs/2026-11-11-macos-finder-hooks-design.md
 and [plan](docs/superpowers/plans/2026-11-11-macos-finder-hooks.md).
 Implementation on `codex/scr-097-finder-hooks`: editable runner, stable owned
 workflow registration/removal, Terminal launch and system-browser dispatch.
-266 tests pass (244 existing + 22 hook fixtures), with native plist, AppleScript
+267 tests pass (244 existing + 23 hook fixtures), with native plist, AppleScript
 and Automator execution checks. See [verification evidence and remaining UI checks](docs/PROJECT_CONTEXT.md#finder-hooks-scr-097).
 Finder Services → Terminal success, error 7 and Ctrl+C were verified with synthetic inputs.
-The Quick Actions submenu route and final review are still pending; no paid processing
+The final independent review and its one fix pass are complete.
+The Quick Actions submenu route remains deferred at the user's request; no paid processing
 or model downloads are part of this ticket's verification.

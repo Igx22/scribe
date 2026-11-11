@@ -545,7 +545,7 @@ uses it for HTML. [Apple's lookup contract](https://developer.apple.com/document
 
 Verification on 2026-11-12, macOS 14.5 (23F79), system Bash 3.2.57:
 
-- Full suite: **266 tests passed** (244 existing + 22 hook tests), using
+- Full suite after review fixes: **267 tests passed** (244 existing + 23 hook tests), using
   `/opt/projects26/scribe/data/.venv/bin/python3 -I -B -m unittest discover -s tests -t . -v`.
   No real recordings, model downloads or paid API calls. Hook fixtures cover
   literal special-character paths, relative paths/symlinks, synchronous completion,
@@ -577,14 +577,45 @@ Verification on 2026-11-12, macOS 14.5 (23F79), system Bash 3.2.57:
   cover that routing decision. Completed-pair skipping was fixture-tested, without
   running the real ASR pipeline.
 - The real **Quick Actions** submenu showed only **Customize…**, while the Scribe
-  service worked from the context menu/Services. Modern Quick Action metadata is
-  included, but discovery/enabling of Scribe inside that submenu and invocation
+  service worked from the context menu/Services. Modern Quick Action metadata, including standard service icon/background fields,
+  is included, but discovery/enabling of Scribe inside that submenu and invocation
   through that exact route remain **unverified**. No unrelated extension setting
   was changed. SCR-097 stays **In Progress** until that acceptance check is resolved.
-- The temporary action was uninstalled twice successfully. No production action
-  was left pointing to the temporary project; unrelated services and source-checkout
+- The temporary workflow was removed twice; later diagnostics found that
+  `pbs -update` retained its deleted discovery entry. Refresh now uses `pbs -flush`
+  followed by `-update`. Native install/removal with the corrected script passed,
+  `pbs -dump` no longer listed Scribe, and `NSServicesStatus` before/after snapshots
+  compared byte-for-byte equal. No production action or discovery entry was left
+  pointing to the temporary project; unrelated services and source-checkout
   changes were preserved. Private data, `.env`, caches and reports were untouched.
 
 The Python `-I` named-module unittest command in the plan cannot import the local
 `tests` package on this runtime. Discovery with explicit `-t .` is the verified
 command and provides the same test package setup used by the existing suite.
+
+Final independent review (fresh `gpt-6-astra/high`) ran the full 266-test suite
+and found no additional runner/registration defect. It flagged the unqualified
+Quick Actions instructions as Important; README, usage and installer now describe
+the verified Services route and explicit Quick Actions enablement. The user
+chose to defer exact-submenu acceptance, so SCR-097 remains In Progress. The single
+fix pass added standard `NSIconName`/`NSBackgroundColorName` metadata and corrected
+stale cache refresh; both regression contracts were observed RED → GREEN, with
+267/267 tests and native plist/removal checks green afterward. No second review
+was dispatched. A Minor task-table formatting finding was deferred: SCR-097's row
+is separated from the existing table by a blank line.
+
+The user also reported **Settings Error: Extension process Extensions exited**.
+Crash reports `Extensions-2026-11-12-004204.ips`, `004634.ips` and `004901.ips`
+show EXC_BAD_ACCESS/SIGSEGV in the macOS Extensions host; the first includes
+`NSQuickActionGetIcon`/NSImage drawing. This is a different failure from Terminal
+permission denial and does not show conversion terminating early. A control
+attempt without the workflow file was inconclusive because its cached discovery
+entry still existed. The test entry was then removed with the corrected cache
+refresh. The cause of the Settings host crash and a checkbox/submenu retest remain
+unverified; no extra permission or unrelated setting was changed as a workaround.
+
+Execution decisions: the plan's isolated named unittest import was replaced by
+explicit-top-level discovery (cost: changed collection scope, recorded counts).
+Exact Quick Actions acceptance was deferred at the user's request (cost: further
+native integration work may remain). Code and documented evidence are committed;
+private source-checkout data and unrelated task edits were not copied or modified.
