@@ -246,6 +246,13 @@ class RegistrationTests(HookFixture):
             self.assertFalse(self.bundle.exists())
             self.assertEqual(self.unrelated.read_bytes(), b'unrelated service')
 
+    def test_workflow_advertises_finder_quick_action(self):
+        self.assertEqual(self.register().returncode, 0)
+        metadata = self.workflow()['workflowMetaData']
+        self.assertEqual(metadata['presentationMode'], 15)
+        self.assertEqual(metadata['inputTypeIdentifier'], 'com.apple.Automator.fileSystemObject')
+        self.assertEqual(metadata['applicationBundleIDsByPath'], {'/System/Library/CoreServices/Finder.app': 'com.apple.finder'})
+
     def test_workflow_round_trip_and_relocation(self):
         for moved in (False, True):
             if moved:
