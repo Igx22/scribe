@@ -1,0 +1,118 @@
+#!/bin/bash
+# Editable Finder configuration. Re-register after changing MENU_TITLE.
+MENU_TITLE="Scribe — Local conversion"
+
+# Command edits apply on the next invocation. Keep Scribe's output naming.
+run_conversion() {
+    local file="$1"
+    local file_dir="$2"
+    "$PROJECT_DIR/scribe.sh" -f "$file" --output-dir "$file_dir"
+}
+
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+HOOK_PATH="$PROJECT_DIR/$(basename -- "${BASH_SOURCE[0]}")"
+
+error() { printf 'Scribe Finder: %s\n' "$*" >&2; }
+
+find_python() {
+    local candidate
+    for candidate in "$PROJECT_DIR/data/.venv/bin/python3" \
+        "$PROJECT_DIR/data/runtime/python/bin/python3" \
+        python3.13 python3.12 python3 \
+        /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+        if "$candidate" -I -B -c 'import pathlib, plistlib, json, shutil, tempfile' >/dev/null 2>&1; then
+            PYTHON="$candidate"
+            return 0
+        fi
+    done
+    error 'Python 3 is required. Use an existing project runtime or install Python 3; registration never runs setup.'
+    return 1
+}
+
+# Sets REPLY to the canonical MKV path before changing directories.
+normalize_file() {
+    local value
+    find_python || return
+    value=$("$PYTHON" -I -B - "$1" <<'PY'
+import pathlib, sys
+try:
+    path = pathlib.Path(sys.argv[1]).expanduser().resolve(strict=True)
+    if not path.is_file() or path.suffix.lower() != '.mkv':
+        raise ValueError('Expected one existing MKV file: ' + str(path))
+    sys.stdout.write(str(path))
+except (OSError, ValueError, RuntimeError) as exc:
+    print('Scribe Finder: ' + str(exc), file=sys.stderr)
+    sys.exit(1)
+PY
+    ) || return
+    REPLY="$value"
+}
+
+native_default_browser() {
+    /usr/bin/osascript -l JavaScript <<'JXA'
+ObjC.import('AppKit');
+function run() {
+    var app = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString('https://example.invalid/'));
+    if (!app || app.isNil()) throw new Error('No default HTTPS browser is configured');
+    return ObjC.unwrap(app.path);
+}
+JXA
+}
+
+native_open_document() {
+    /usr/bin/open -a "$1" "$2"
+}
+
+run_file() (
+    normalize_file "$1" || return
+    local file="$REPLY" file_dir report status browser
+    file_dir="${file%/*}"
+    report="${file%.*}.summary.html"
+    cd -- "$PROJECT_DIR" || return
+    # Terminal's interactive parent survives; interruption must never open old HTML.
+    trap 'error "Conversion interrupted; no report opened."; exit 130' INT
+    trap 'error "Conversion terminated; no report opened."; exit 143' TERM
+    if run_conversion "$file" "$file_dir"; then status=0; else status=$?; fi
+    if [ "$status" -ne 0 ]; then
+        error "Conversion failed (exit $status); no report opened."
+        return "$status"
+    fi
+    if [ ! -f "$report" ]; then
+        error "Conversion completed without HTML: $report"
+        return 1
+    fi
+    printf 'Report: %s\n' "$report"
+    if ! browser=$(native_default_browser) || [ -z "$browser" ]; then
+        error "Cannot resolve the default web browser. Open this report manually: $report"
+        return 1
+    fi
+    if ! native_open_document "$browser" "$report"; then
+        error "Cannot open the report in the default web browser: $report"
+        return 1
+    fi
+)
+
+usage() {
+    cat <<'HELP'
+Usage: ./macos-register-finder-hooks [--uninstall | --help]
+  No arguments: install or update this user's Finder Quick Action.
+  --uninstall: remove only the owned Scribe Quick Action.
+Edit MENU_TITLE and run_conversion near the top of this script.
+Re-register after a title change or project move; command edits apply immediately.
+Internal modes: --launch FILE, --run FILE (exactly one existing MKV).
+HELP
+}
+
+main() {
+    case "${1-}" in
+        --help|-h) [ "$#" -eq 1 ] || { error 'Unexpected arguments.'; return 2; }; usage ;;
+        --run) [ "$#" -eq 2 ] || { error 'Select exactly one MKV file.'; return 2; }; run_file "$2" ;;
+        --uninstall) [ "$#" -eq 1 ] || { error 'Unexpected arguments.'; return 2; }; uninstall_action "$HOME/Library/Services" ;;
+        '') [ "$#" -eq 0 ] || { error 'Unexpected arguments.'; return 2; }; install_action "$HOME/Library/Services" ;;
+        *) error 'Unknown option; see --help.'; return 2 ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
