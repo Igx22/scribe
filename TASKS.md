@@ -123,12 +123,12 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-070 | Investigate missing reconciliation and speaker names in the supplied single-speaker report | Done | 2026-11-07 | 2026-11-07 |
 | SCR-071 | Parse recording dates from filenames with descriptive text and suffixes | Done | 2026-11-07 | 2026-11-07 |
 | SCR-072 | Make GPT reconciliation a common final stage across transcription modes | Done | 2026-11-07 | 2026-11-07 |
-| SCR-073 | Evaluate a compact local text model for offline summaries and reconciliation | Planned | 2026-11-07 | — |
+| SCR-073 | [Evaluate a compact local text model for offline summaries and reconciliation](docs/PROJECT_CONTEXT.md#task-register-cleanup-2026-11-12) | Done | 2026-11-07 | 2026-11-12 |
 | SCR-074 | Group summary detail levels in a dropdown with their generating model badge | Done | 2026-11-07 | 2026-11-07 |
 | SCR-075 | Propose clearer summary and transcript menu labels | Done | 2026-11-08 | 2026-11-08 |
 | SCR-076 | Generate two visual concepts for summary and transcript menus | Done | 2026-11-08 | 2026-11-08 |
 | SCR-077 | [Implement compact Summary and Transcript report menus](data/comparison/menu-naming-preview/IMPLEMENTATION_VERIFICATION.md) | Done | 2026-11-08 | 2026-11-08 |
-| SCR-078 | Regenerate the single-speaker recording report and open it in Chrome | In Progress | 2026-11-08 | — |
+| SCR-078 | [Regenerate the single-speaker recording report and open it in Chrome](docs/PROJECT_CONTEXT.md#task-register-cleanup-2026-11-12) | Done | 2026-11-08 | 2026-11-12 |
 | SCR-079 | Generate a log and summary report for the supplied July recording | Done | 2026-11-08 | 2026-11-08 |
 | SCR-080 | Draft a concise GitHub README and documentation migration plan | Done | 2026-11-08 | 2026-11-08 |
 | SCR-081 | Adopt the concise README and detailed usage guide | Done | 2026-11-08 | 2026-11-08 |
@@ -144,20 +144,7 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-091 | Clarify output directory defaults and monitoring documentation | Done | 2026-11-08 | 2026-11-08 |
 | SCR-092 | [Audit recognition caches and specify reusable per-model artifacts](docs/PROJECT_CONTEXT.md#recognition-cache-artifacts) | Done | 2026-11-08 | 2026-11-08 |
 | SCR-093 | [Key flat JSON caches by recording content and keep user exports separate](docs/USAGE.md#processing-cache-and-exports) | Done | 2026-11-08 | 2026-11-08 |
+| SCR-094 | [Design a single-screen desktop interface with direct access to Scribe features](data/comparison/electron-ui-concept/DESIGN.md) | Done | 2026-11-09 | 2026-11-09 |
+| SCR-095 | Process the newest Movies recording and save results beside it | Done | 2026-11-09 | 2026-11-09 |
+| SCR-096 | [Design a second single-screen desktop interface concept with large direct controls](data/comparison/desktop-ui-concept-2/VERIFICATION.md) | Done | 2026-11-10 | 2026-11-10 |
 | SCR-097 | [Add configurable macOS Finder action registration](docs/USAGE.md#finder-quick-action-macos) | Done | 2026-11-11 | 2026-11-12 |
-
-### SCR-073
-
-Evaluate compact quantized instruction models for English/Russian summaries on a
-MacBook, CPU-only machine or small GPU. Start with Qwen3.5-4B; compare a larger
-candidate only if available memory permits. Measure working memory, prompt/output
-latency, factual coverage, uncertainty preservation and structured reconciliation
-validation on existing cached transcripts against the GPT baseline. Test bounded
-context and hierarchical notes rather than assuming the advertised context fits.
-Also consider the text-only Qwen3-4B-Instruct-2507 as a non-thinking baseline.
-Model selection and implementation are deferred; this ticket authorizes neither
-downloads nor integration. Keep strict offline guarantees and original sources.
-Candidate references checked on 2026-11-07:
-[Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B),
-[Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507),
-[llama.cpp](https://github.com/ggml-org/llama.cpp).

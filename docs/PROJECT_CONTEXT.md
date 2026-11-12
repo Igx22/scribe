@@ -587,3 +587,21 @@ user accepted the remaining manual browser checks, stopped further testing and
 requested SCR-097 be marked Done on 2026-11-12. The feature was already merged
 into main. Use discovery with explicit `-t .`: Python `-I` prevents the plan's
 named-module invocation from importing the local tests package on this runtime.
+
+## Task register cleanup (2026-11-12)
+
+The user confirmed that the current functionality works and explicitly requested
+that all remaining open tasks be marked Done. SCR-073 and SCR-078 were closed
+administratively on 2026-11-12. This cleanup performed no new model benchmarks
+or recording regeneration. SCR-097 retains its separately recorded acceptance.
+
+SCR-073's deferred proposal covered compact quantized instruction models for
+English/Russian summaries and structured reconciliation on a MacBook, CPU-only
+machine, or small GPU. Candidate notes from 2026-11-07 named
+[Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B),
+[Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507),
+and [llama.cpp](https://github.com/ggml-org/llama.cpp). The intended comparison
+covered memory, latency, factual coverage, uncertainty, bounded context, and
+hierarchical summaries against cached-transcript GPT baselines. These remain
+historical research notes; administrative closure records the user's backlog
+decision rather than a benchmark or model-integration result.

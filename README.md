@@ -67,13 +67,6 @@ A bit higher quality can be achieved with paid GPT transcribe api.
 ./scribe.sh --monitor-dir --transcription-model gpt-transcribe+whisperx
 ```
 
-## Run from Finder
-
-On macOS, run `./macos-register-finder-hooks` once, then select one MKV in
-Finder and choose **Quick Actions → Scribe — Local conversion**. Processing
-appears in a separate Terminal window; results go beside the recording and the
-HTML opens in the default web browser. See [Finder setup and permissions](docs/USAGE.md#finder-quick-action-macos).
-
 ## Install
 
 With [Homebrew](https://brew.sh/) installed:
@@ -90,6 +83,11 @@ Set `OPENAI_API_KEY` in `.env`, then prepare the environment and default models:
 ```bash
 ./scribe.sh --setup
 ```
+
+After setup, run `./macos-register-finder-hooks` once to register Scribe's Finder
+action. Then right-click an MKV and choose **Quick Actions → Scribe — Local
+conversion** to process it in Terminal and open the HTML report in your default
+browser. See [Finder setup and permissions](docs/USAGE.md#finder-quick-action-macos).
 
 | Command | Models prepared (approximate download) |
 | --- | --- |
