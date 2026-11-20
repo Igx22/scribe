@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Security by obscurity is dead: How LLMs can take over hardware — Conversation summary</title>
+  <script>
+    (() => {
+      const key = 'scribe-report-theme';
+      const root = document.documentElement;
+      const valid = value => value === 'light' || value === 'dark';
+      const web = location.protocol === 'http:' || location.protocol === 'https:';
+      let saved;
+      // Local-file storage may be unavailable or isolated to this particular file.
+      try { saved = localStorage.getItem(key); } catch (_) {}
+      if (!valid(saved) && web) {
+        try {
+          const cookie = document.cookie.split(';').map(item => item.trim()).find(item => item.startsWith(key + '='));
+          saved = cookie ? cookie.slice(key.length + 1) : null;
+        } catch (_) {}
+      }
+      const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.dataset.theme = valid(saved) ? saved : (systemDark ? 'dark' : 'light');
+      document.addEventListener('DOMContentLoaded', () => {
+        const stamp = document.getElementById('generated-at');
+        const generated = stamp && new Date(stamp.getAttribute('datetime'));
+        if (generated && Number.isFinite(generated.getTime())) {
+          const timeOptions = {hour: '2-digit', minute: '2-digit', hour12: false};
+          const fullOptions = {...timeOptions, day: '2-digit', month: 'short', year: 'numeric'};
+          function updateGenerationTime() {
+            const now = new Date();
+            const today = generated.getFullYear() === now.getFullYear() &&
+                          generated.getMonth() === now.getMonth() && generated.getDate() === now.getDate();
+            stamp.textContent = new Intl.DateTimeFormat('en-GB', today ? timeOptions : fullOptions).format(generated);
+            stamp.setAttribute('title', new Intl.DateTimeFormat('en-GB', {...fullOptions, timeZoneName: 'short'}).format(generated));
+          }
+          updateGenerationTime();
+          window.setInterval(updateGenerationTime, 60000);
+        }
+        const toggle = document.getElementById('theme-toggle');
+        const state = document.getElementById('theme-state');
+        function apply(theme) {
+          root.dataset.theme = theme;
+          toggle.setAttribute('aria-checked', String(theme === 'dark'));
+          state.textContent = theme === 'dark' ? 'On' : 'Off';
+        }
+        apply(root.dataset.theme);
+        toggle.hidden = false;
+        toggle.addEventListener('click', () => {
+          const theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          apply(theme);
+          try { localStorage.setItem(key, theme); } catch (_) {}
+          if (web) {
+            try {
+              document.cookie = key + '=' + theme + '; Max-Age=31536000; Path=/; SameSite=Lax' +
+                                (location.protocol === 'https:' ? '; Secure' : '');
+            } catch (_) {}
+          }
+        });
+        const tabs = [...document.querySelectorAll('[role="tab"]')];
+        const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+        const groups = ['detail', 'transcript'].map(name => ({
+          picker: document.getElementById(name + '-picker'),
+          choice: document.getElementById(name + '-toggle'),
+          options: document.getElementById(name + '-options'),
+          description: document.getElementById(name + '-choice-description'),
+          tabs: tabs.filter(tab => name === 'detail' ? /^tab-\d+$/.test(tab.id) :
+            tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'))
+        })).filter(group => group.choice);
+        function select(tab) {
+          tabs.forEach(item => {
+            item.setAttribute('aria-selected', String(item === tab));
+            item.tabIndex = -1;
+          });
+          panels.forEach(panel => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
+          groups.forEach(group => { group.update(tab); group.open(false); });
+        }
+        groups.forEach(group => {
+          let current = group.tabs[0], pinned = false, closeTimer;
+          group.open = open => {
+            window.clearTimeout(closeTimer);
+            if (!open) pinned = false;
+            if (open) groups.filter(other => other !== group).forEach(other => other.open(false));
+            group.options.hidden = !open;
+            group.choice.setAttribute('aria-expanded', String(open));
+            group.tabs.forEach(tab => { tab.tabIndex = open && tab === current ? 0 : -1; });
+          };
+          group.update = tab => {
+            const active = group.tabs.includes(tab);
+            if (active) current = tab;
+            group.description.textContent = current.getAttribute('data-choice-label');
+            group.choice.setAttribute('data-active', String(active));
+            group.tabs.forEach(item => item.setAttribute('data-current', String(item === current)));
+          };
+          group.picker.setAttribute('data-enhanced', 'true');
+          group.choice.hidden = false;
+          group.update(tabs.find(tab => tab.getAttribute('aria-selected') === 'true'));
+          group.open(false);
+          group.choice.addEventListener('click', () => {
+            if (pinned) group.open(false);
+            else { pinned = true; group.open(true); }
+          });
+          group.choice.addEventListener('pointerenter', event => {
+            if (event.pointerType === 'mouse') group.open(true);
+          });
+          group.picker.addEventListener('pointerenter', () => window.clearTimeout(closeTimer));
+          group.picker.addEventListener('pointerleave', () => {
+            closeTimer = window.setTimeout(() => {
+              if (!pinned && !group.options.contains(document.activeElement)) group.open(false);
+            }, 160);
+          });
+          group.picker.addEventListener('focusout', event => {
+            if (!group.picker.contains(event.relatedTarget)) group.open(false);
+          });
+          group.picker.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+              event.preventDefault(); group.open(false); group.choice.focus();
+            } else if (event.target === group.choice && ['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+              event.preventDefault(); group.open(true);
+              (event.key === 'ArrowUp' ? group.tabs[group.tabs.length - 1] : current).focus();
+            }
+          });
+        });
+        document.addEventListener('pointerdown', event => {
+          groups.forEach(group => { if (!group.picker.contains(event.target)) group.open(false); });
+        });
+        tabs.forEach((tab, index) => {
+          tab.addEventListener('click', () => {
+            select(tab);
+            groups.find(group => group.tabs.includes(tab)).choice.focus();
+          });
+          tab.addEventListener('keydown', event => {
+            let next;
+            const group = groups.find(group => group.tabs.includes(tab));
+            if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+            else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = tabs.length - 1;
+            else if (group && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+              const offset = event.key === 'ArrowDown' ? 1 : -1;
+              next = tabs.indexOf(group.tabs[(group.tabs.indexOf(tab) + offset + group.tabs.length) % group.tabs.length]);
+            }
+            else return;
+            event.preventDefault();
+            select(tabs[next]);
+            groups.find(item => item.tabs.includes(tabs[next])).open(true);
+            tabs[next].focus();
+          });
+        });
+      });
+    })();
+  </script>
+  <style>
+    :root { color-scheme: light; --page: #f4f5f7; --surface: #fff; --ink: #243044; --strong: #182230; --secondary: #475467; --muted: #667085; --line: #e4e7ec; --line-soft: #f0f1f3; --control-border: #d0d5dd; --accent: #334d73; --focus: #5276a5; --shadow: #18223004; }
+    :root[data-theme="dark"] { color-scheme: dark; --page: #11151c; --surface: #1a202a; --ink: #d7dfea; --strong: #edf2f8; --secondary: #c1cbd9; --muted: #a2aec1; --line: #344051; --line-soft: #2b3544; --control-border: #4d5c70; --accent: #acc5e8; --focus: #acc5e8; --shadow: #00000018; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+    .page { max-width: 1040px; margin: 48px auto 32px; padding: 0 28px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+    .brand { display: flex; align-items: center; gap: 10px; color: var(--secondary); font-size: 13px; font-weight: 650; letter-spacing: .03em; }
+    .mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--control-border); border-radius: 7px; background: var(--surface); color: var(--accent); font-family: Georgia, serif; font-size: 20px; }
+    .theme-toggle { display: inline-flex; align-items: center; gap: 10px; min-height: 38px; padding: 7px 12px; border: 1px solid var(--control-border); border-radius: 999px; background: var(--surface); color: var(--secondary); font: inherit; font-size: 12px; cursor: pointer; }
+    .theme-toggle:hover { border-color: var(--accent); color: var(--strong); }
+    .theme-state { min-width: 19px; color: var(--muted); font-size: 11px; text-align: right; }
+    .switch-track { position: relative; width: 28px; height: 16px; border-radius: 999px; background: var(--control-border); }
+    .switch-track::before { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); }
+    [aria-checked="true"] .switch-track { background: var(--accent); }
+    [aria-checked="true"] .switch-track::before { transform: translateX(12px); }
+    .report { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 4px 20px var(--shadow); }
+    header { padding: 34px 40px 28px; }
+    .eyebrow { margin: 0 0 26px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
+    .meeting-facts { display: grid; gap: 22px; margin: 0; }
+    .fact { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; align-items: baseline; }
+    dt { margin: 0; color: var(--muted); font-size: 14px; font-weight: 500; }
+    dd { margin: 0; color: var(--strong); font-size: 30px; font-weight: 500; line-height: 1.32; letter-spacing: -.025em; overflow-wrap: anywhere; }
+    h1 { margin: 0; font: inherit; }
+    .participants { font-size: 26px; line-height: 1.5; letter-spacing: -.015em; }
+    .participant-role { color: var(--muted); font-size: .76em; font-weight: 400; letter-spacing: 0; }
+    .source { margin: 26px 0 0; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+    .source strong { color: var(--secondary); font-weight: 500; }
+    .source a { color: var(--accent); }
+    .tabs-wrap { position: sticky; top: 0; z-index: 1; padding: 0 40px; background: var(--surface); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line); }
+    [role="tablist"] { display: flex; flex-wrap: wrap; gap: 0 20px; overflow: visible; }
+    [role="tab"] { flex: 0 0 auto; min-height: 76px; padding: 14px 2px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
+    .tab-title { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .tab-description { display: block; margin-top: 6px; padding-left: 35px; font-size: 11px; font-weight: 400; }
+    [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+    [role="tab"]:hover { color: var(--ink); }
+    .model-name { font-size: 11px; font-weight: 500; }
+    :root { --selected-line: #b5763d; --selected-fill: #fbf4ec; }
+    :root[data-theme="dark"] { --selected-line: #c99765; --selected-fill: #302820; }
+    .report-picker { position: relative; display: flex; align-items: center; width: 270px; max-width: 100%; }
+    .picker-toggle { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; margin: 7px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+    .picker-toggle[data-active="true"] { border-color: var(--selected-line); background: var(--selected-fill); }
+    .picker-toggle:hover { background: var(--line-soft); }
+    .picker-copy { flex: 1; display: grid; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+    .picker-icon { flex: 0 0 22px; width: 22px; height: 24px; }
+    .picker-choice-title { font-weight: 600; }
+    .picker-choice-description { color: var(--muted); font-size: 11px; }
+    .picker-arrow { flex-shrink: 0; color: var(--muted); }
+    [aria-expanded="true"] .picker-arrow { transform: rotate(180deg); }
+    .picker-options { width: 100%; padding: 6px; background: var(--surface); }
+    [data-enhanced="true"] .picker-options { position: absolute; top: 100%; right: 0; z-index: 2; width: 300px; max-width: calc(100vw - 48px); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px var(--shadow); }
+    .picker-options [role="tab"] { position: relative; display: block; width: 100%; min-height: 60px; margin: 0; padding: 10px 27px 10px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); font-size: 13px; white-space: normal; }
+    .picker-options .tab-title { display: block; white-space: normal; overflow-wrap: anywhere; }
+    .picker-options .model-name { font: inherit; }
+    .picker-options .tab-description { margin: 5px 0 0; padding: 0; color: var(--muted); line-height: 1.4; }
+    #detail-options [role="tab"] { padding-right: 70px; }
+    .detail-level { position: absolute; right: 11px; top: 22px; color: var(--muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+    #detail-options [data-current="true"]::after { right: 48px; top: 21px; }
+    .menu-footer { margin-top: 5px; padding: 10px; border-top: 1px solid var(--line); }
+    .menu-footer .processing-badge { display: inline-block; max-width: 100%; }
+    .picker-options [role="tab"]:hover { background: var(--line-soft); }
+    .picker-options [data-current="true"] { border-color: var(--selected-line); background: var(--selected-fill); }
+    .picker-options [data-current="true"]::after { content: "✓"; position: absolute; right: 9px; top: 11px; color: var(--selected-line); }
+    .option-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
+    .processing-badge { flex-shrink: 0; max-width: 48%; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--line-soft); color: var(--secondary); font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+    .menu-heading { margin: 6px 4px 0; padding: 12px 6px 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: 3px; }
+    [role="tab"]:focus-visible { outline-offset: -5px; }
+    [role="tabpanel"] { padding: 26px 40px 36px; }
+    [hidden] { display: none !important; }
+    .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 25px; padding-bottom: 18px; border-bottom: 1px solid var(--line-soft); }
+    h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+    .panel-heading > span { flex-shrink: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .prose { max-width: 76ch; font-size: 16px; line-height: 1.8; overflow-wrap: anywhere; }
+    .prose p { margin: 0 0 1.2em; white-space: pre-wrap; }
+    .prose p:last-child { margin-bottom: 0; }
+    .reconciliation-warning { margin: 20px 40px 0; padding: 12px; border: 1px solid var(--selected-line); border-radius: 6px; color: var(--ink); background: var(--selected-fill); font-size: 13px; line-height: 1.5; }
+    .transcript-content { margin-top: 24px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.85; }
+    footer { display: flex; justify-content: space-between; gap: 16px; padding: 18px 3px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .generation-stamp { white-space: nowrap; }
+    @media (max-width: 640px) {
+      .page { margin: 20px auto; padding: 0 12px; }
+      .toolbar { margin: 0 8px 16px; gap: 12px; }
+      header { padding: 28px 24px 24px; }
+      .fact { grid-template-columns: 1fr; gap: 7px; }
+      dd { font-size: 27px; }
+      .participants { font-size: 23px; }
+      .tabs-wrap { padding: 0 24px; }
+      [role="tablist"] { gap: 24px; }
+      [role="tabpanel"] { padding: 26px 24px 32px; }
+      .panel-heading { flex-direction: column; gap: 8px; }
+      .prose { font-size: 15px; line-height: 1.75; }
+      footer { padding: 16px 8px; flex-direction: column; gap: 4px; }
+    }
+    @media print {
+      :root, :root[data-theme="dark"] { color-scheme: light; --page: #f4f5f7; --surface: #fff; --ink: #243044; --strong: #182230; --secondary: #475467; --muted: #667085; --line: #e4e7ec; --line-soft: #f0f1f3; --control-border: #d0d5dd; --accent: #334d73; --focus: #5276a5; --shadow: #18223004; }
+      body { background: #fff; }
+      .page { max-width: none; margin: 0; padding: 0; }
+      .toolbar, .tabs-wrap, footer { display: none; }
+      .report { border: 0; box-shadow: none; }
+      header { padding: 0 0 20px; }
+      [role="tabpanel"] { padding: 0; }
+      .prose { max-width: none; font-size: 11pt; }
+      .transcript-content { font-size: 9pt; }
+      .panel-heading { break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="toolbar">
+      <div class="brand"><span class="mark" aria-hidden="true">s</span> Scribe</div>
+      <button id="theme-toggle" class="theme-toggle" type="button" role="switch" aria-label="Dark Mode" aria-checked="false" hidden>
+        <span>Dark Mode</span><span class="switch-track" aria-hidden="true"></span><span id="theme-state" class="theme-state" aria-hidden="true">Off</span>
+      </button>
+    </div>
+    <article class="report">
+      <header>
+        <p class="eyebrow">Conversation summary</p>
+        <dl class="meeting-facts">
+          <div class="fact"><dt>Video:</dt><dd><h1>Security by obscurity is dead: How LLMs can take over hardware</h1></dd></div>
+          <div class="fact"><dt>Participants:</dt><dd class="participants">Peter, B</dd></div>
+          <div class="fact"><dt>Duration:</dt><dd>23 min 30 sec</dd></div>
+          <div class="fact"><dt>Date:</dt><dd>Not recorded</dd></div>
+        </dl>
+        <p class="source"><strong>Source</strong> · Security by obscurity is dead How LLMs can take over hardware [FLoC0dhY4u4].webm · <a href="https://www.youtube.com/watch?v=FLoC0dhY4u4">Watch on YouTube</a><br>4 summary levels · Full transcript included. 2 source views included.</p>
+      </header>
+      <nav class="tabs-wrap" aria-label="Report navigation">
+        <div role="tablist" aria-label="Report sections"><div class="report-picker" id="detail-picker"><button class="picker-toggle" type="button" id="detail-toggle" aria-expanded="false" aria-controls="detail-options" hidden><svg class="picker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h12M4 18h8"/></svg><span class="picker-copy"><span class="picker-choice-title" id="detail-choice-title">Summary</span><span class="picker-choice-description" id="detail-choice-description">Key points · 1/10</span></span><span class="picker-arrow" aria-hidden="true">⌄</span></button><div class="picker-options" id="detail-options"><button type="button" role="tab" id="tab-1" data-choice-label="Key points · 1/10" aria-controls="panel-1" aria-selected="true" tabindex="0"><span class="tab-title">Key points</span><span class="tab-description">Essentials and decisions</span><span class="detail-level">1/10</span></button>
+<button type="button" role="tab" id="tab-3" data-choice-label="Overview · 3/10" aria-controls="panel-3" aria-selected="false" tabindex="-1"><span class="tab-title">Overview</span><span class="tab-description">Main discussion and context</span><span class="detail-level">3/10</span></button>
+<button type="button" role="tab" id="tab-5" data-choice-label="Expanded · 5/10" aria-controls="panel-5" aria-selected="false" tabindex="-1"><span class="tab-title">Expanded</span><span class="tab-description">Reasoning and alternatives</span><span class="detail-level">5/10</span></button>
+<button type="button" role="tab" id="tab-10" data-choice-label="In depth · 10/10" aria-controls="panel-10" aria-selected="false" tabindex="-1"><span class="tab-title">In depth</span><span class="tab-description">All substantive threads</span><span class="detail-level">10/10</span></button>
+<div class="menu-footer"><span class="processing-badge">GPT-6.1-sol</span></div></div></div>
+<div class="report-picker" id="transcript-picker"><button class="picker-toggle" type="button" id="transcript-toggle" aria-expanded="false" aria-controls="transcript-options" hidden><svg class="picker-icon microphone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span class="picker-copy"><span class="picker-choice-title" id="transcript-choice-title">Transcript</span><span class="picker-choice-description" id="transcript-choice-description">Final version</span></span><span class="picker-arrow" aria-hidden="true">⌄</span></button><div class="picker-options" id="transcript-options"><button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" data-choice-label="Final version" aria-selected="false" tabindex="-1"><span class="tab-title">Final transcript</span><span class="option-meta"><span class="tab-description">Selected pipeline result</span><span class="processing-badge">GPT-6.1-sol</span></span></button>
+<div class="menu-heading">Source transcripts</div>
+<button class="source-tab" type="button" role="tab" id="tab-source-whisperx" data-choice-label="Transcript · WhisperX Turbo" aria-controls="panel-source-whisperx" aria-selected="false" tabindex="-1"><span class="tab-title">Transcript · <small class="model-name">WhisperX Turbo</small></span><span class="option-meta"><span class="tab-description">Before reconciliation</span><span class="processing-badge">Offline</span></span></button>
+<div class="menu-heading">Speaker segmentation</div>
+<button class="source-tab" type="button" role="tab" id="tab-source-diarization" data-choice-label="Diarization · Nemotron 3" aria-controls="panel-source-diarization" aria-selected="false" tabindex="-1"><span class="tab-title">Diarization · <small class="model-name">Nemotron 3</small></span><span class="option-meta"><span class="tab-description">Voice intervals</span><span class="processing-badge">Offline</span></span></button></div></div></div>
+      </nav>
+      <section role="tabpanel" id="panel-1" aria-labelledby="tab-1" tabindex="0"><div class="panel-heading"><h2>Brief summary</h2><span>Detail 1 / 10 · 288 words</span></div><div class="prose" dir="auto"><p>Speaker mapping: A = Peter.</p>
+<p>Peter presented how LLMs can analyze firmware and discover vulnerabilities before secure boot validates an operating system. His central argument was that proprietary binaries and obfuscation offer little protection when models can rapidly interpret code and narrow the attack surface.</p>
+<p>He described a workflow using publicly available firmware updates rather than extracting chips: unpack compressed or transformed sections, use embedded error strings to identify components, map code reachable from untrusted inputs, and trace backward from potential bugs. Static analysis eliminates unreachable or crash-only paths; simulation and vulnerability chaining then help assess exploitability.</p>
+<p>One illustrated chain moved from network boot through HTTP error handling and redirection into DNS processing, where an oversized response could overwrite firmware memory, enable remote code execution, and bypass secure boot.</p>
+<p>Peter reported that Kimi found 15 zero-day vulnerabilities of varying or uncertain exploitability and three secure boot escapes. The scan took approximately one hour using a $100 Kimi subscription; reproducing findings on hardware took him an entire day. He withheld the device’s identity because, although most discussed issues had been published and fixed, some remained unresolved.</p>
+<p>He contrasted hiding firmware updates as an immediate defensive measure with adopting open, verifiable firmware and extensive analysis before release. These were recommendations, not agreed actions.</p>
+<p>In questions moderated by B, Peter argued that unnecessary connected-device features should be removed, while well-tested dependencies could become preferable again as libraries improve. He characterized security as a spectrum governed by attack cost and target value, not an absolute guarantee. He remained optimistic about privacy and cypherpunk goals despite potentially needing to replace unpatchable devices. He said he chose Kimi primarily because it would assist with this research, not because it was the most capable model.</p></div></section>
+<section role="tabpanel" id="panel-3" aria-labelledby="tab-3" tabindex="0" hidden><div class="panel-heading"><h2>Conversation overview</h2><span>Detail 3 / 10 · 620 words</span></div><div class="prose" dir="auto"><p>Speaker mapping: A = Peter</p>
+<p>LLM-assisted firmware analysis</p>
+<p>Peter argued that LLMs substantially reduce the time and expertise needed to discover firmware vulnerabilities, undermining reliance on proprietary formats and obscurity. His focus was secure boot: firmware must process some attacker-controlled inputs before it can establish that an operating system is trusted.</p>
+<p>Rather than physically extracting firmware from a chip, an analyst can often obtain it from a public update server or GitHub. Peter described an LLM-assisted workflow:
+- Disassemble the firmware, identify decompression or proprietary transformation routines, and use them to unpack otherwise unreadable sections.
+- Use embedded error messages to identify libraries and components, reconstruct a call graph, and locate code processing external inputs before secure-boot verification.
+- Narrow the search to suspicious operations, logic errors, and known vulnerabilities in identifiable libraries.
+- Filter out paths likely to cause only crashes, then trace backward from potential vulnerabilities to determine whether attacker-controlled input can reach them.
+- Model promising paths in Python and combine reachable weaknesses into exploit chains.</p>
+<p>He distinguished the initial static analysis from later simulation and hardware testing. Finding a suspicious operation does not establish exploitability: validation checks, unreachable code, device configuration, or intermediate operations may prevent an attack.</p>
+<p>Illustrative exploit chain and reported results</p>
+<p>Peter described a network-boot chain in which an attacker-controlled HTTP server triggers error handling and redirects, eventually reaching DNS functionality included through a library. An oversized DNS response then overflows a firmware buffer, potentially enabling remote code execution and a secure-boot bypass. The example illustrated how obscure fallback paths and unnecessary library functionality can expose attack surfaces.</p>
+<p>He reported that Kimi found 15 zero-day vulnerabilities and three secure-boot escapes in the hardware he examined. He qualified the broader vulnerability count: some findings might be exploitable, while others might only crash the device. The scan took approximately one hour using a $100 Kimi subscription; reproducing findings on hardware took him an entire day, making his own work the bottleneck.</p>
+<p>Peter did not identify the hardware. During questions, he said most of the issues discussed had already been published and fixed, but some had not, so he would not disclose further identifying details.</p>
+<p>Defensive implications</p>
+<p>Peter presented two contrasting responses: restrict access to firmware as an immediate defensive measure, or pursue open, verifiable designs and use intensive analysis before release. He cited PQ1 as an example of the latter direction. Although he described hiding public firmware as contrary to normal security-research instincts, he argued that it could reduce immediate exposure. His broader claim was that proprietary packaging or hidden formats should not be treated as durable protection against LLM analysis.</p>
+<p>Audience questions</p>
+<p>- LZ4 and error strings: Peter clarified that LZ4 is a compression algorithm. Human-readable library error messages provide useful anchors for identifying components and understanding firmware.
+- Privacy and cypherpunk: He rejected the idea that either was finished, instead describing an opportunity to rebuild insecure systems. He suggested that internet-connected devices that cannot be updated might need replacement.
+- Reducing smart-device complexity: He supported removing unnecessary connectivity and features, using Wi-Fi in washing machines as an example. However, he did not advocate permanently replacing external dependencies with in-house implementations; he expected well-tested libraries to become the safer choice again as their security improves.
+- Perfectly safe hardware: Speaking explicitly as a personal opinion, Peter described security as a spectrum governed by attacker effort, cost, and potential reward. He did not believe absolute safety could be guaranteed.
+- Why Kimi: He chose it because it was willing to assist with the analysis. He said other models could be more capable but less willing to help, and described occasionally using another model for smaller subtasks.</p>
+<p>No specific remediation plan or follow-up commitments were established.</p></div></section>
+<section role="tabpanel" id="panel-5" aria-labelledby="tab-5" tabindex="0" hidden><div class="panel-heading"><h2>Expanded summary</h2><span>Detail 5 / 10 · 1,120 words</span></div><div class="prose" dir="auto"><p>Speaker identification: A = Peter. B moderated the questions.</p>
+<p>Purpose and security model</p>
+<p>Peter’s talk examined how LLMs can accelerate firmware vulnerability discovery and potentially bypass secure boot. His central argument was that proprietary firmware’s complexity and obscurity are becoming much weaker barriers to attackers.</p>
+<p>He described secure boot as a mechanism that refuses to boot operating systems without valid digital signatures. Firmware sits between the device’s relatively trusted internal components and external inputs such as SD cards, NVMe drives, USB devices, and network boot services. Because firmware initializes hardware, handles external devices, and implements secure boot checks, vulnerabilities in code that runs before signature verification can undermine the protection.</p>
+<p>Rather than physically extracting firmware from chips, an attacker can often obtain firmware updates online, sometimes from GitHub. Peter used Kimi for his investigation because it was willing to assist with tasks that, in his experience, other models refused.</p>
+<p>How the analysis narrowed the search</p>
+<p>Peter outlined a workflow that progressively reduced a large firmware image to a small number of potentially exploitable paths:</p>
+<p>- Unpack and disassemble the firmware. Initially unreadable sections became accessible after the model identified an LZ4 decompression routine in readable code and applied it to other sections. A further proprietary data transformation was similarly identified and used to expose the remaining hidden section. Peter said the firmware was opened up within approximately five minutes.
+- Use embedded error messages to identify components. HTTP, DNS, and other library-specific strings provided anchors for interpreting otherwise difficult assembly and constructing a call graph.
+- Locate the secure boot verification boundary. The investigation focused on code processing attacker-controlled inputs before that boundary, rather than code running after an operating system had passed verification.
+- Map external inputs to relevant code paths. Different storage devices and network interfaces exposed different parts of the firmware.
+- Search for a limited set of suspicious patterns, including possible buffer overflows, problematic loops, incomplete conditional handling, logical errors, and known vulnerabilities in identifiable libraries.</p>
+<p>This first pass produced candidate issues, not confirmed exploits. Some suspicious code could be unreachable, protected by validation, or capable only of crashing the processor.</p>
+<p>Peter described evaluating the consequences of candidate bugs and then tracing backward from suspicious operations toward external inputs. Reverse traversal eliminated branches blocked by checks or containing unreachable code, while retaining paths connected to user-controlled data. He suggested that filtering crash-only cases could remove roughly half the initial candidates.</p>
+<p>According to Peter, this stage was static analysis: the model inspected code and modeled control flow without executing the firmware. It then translated relevant instruction sequences into Python simulations to check whether arithmetic, data movement, or other details invalidated the apparent exploit paths. His illustrative workflow ended with approximately five legitimate vulnerabilities, though these still required a feasible way to reach them on the configured device.</p>
+<p>From individual bugs to exploit chains</p>
+<p>Peter emphasized the difference between finding a vulnerable routine and making real hardware invoke it. A device configured to boot only from an SD card, for example, might never enter its NVMe driver.</p>
+<p>The next step was to combine vulnerabilities and unusual behavior into an executable chain. His example involved a network-booting compute module:</p>
+<p>- An attacker-controlled HTTP server returned an error, sending the bootloader into a separate retry implementation.
+- A subsequent redirect caused execution to enter another path involving DNS resolution.
+- The DNS handling code copied a response into a 64-byte buffer without adequately constraining its size.
+- An oversized response, described as approximately 5 KB, caused memory corruption that Peter said enabled remote code execution and a complete secure boot bypass.</p>
+<p>He attributed part of this attack surface to functionality inherited from imported libraries that had not been removed, even though the firmware did not need it for its intended operation.</p>
+<p>Reported results and limitations</p>
+<p>Peter said he initially expected Kimi to find nothing, but it reported 15 zero-day vulnerabilities and three secure boot escapes. He qualified the 15 findings: some might be exploitable, some merely caused crashes, and their consequences were not all established.</p>
+<p>He reported that:
+- The scan took approximately one hour using a $100 Kimi subscription.
+- Reproducing the findings on physical hardware took him an entire day.
+- Human hardware validation, rather than the model’s initial analysis, was the bottleneck.</p>
+<p>The hardware vendor and product were not disclosed. During questions, Peter jokingly referred to a nonexistent “generic blue compute module,” then explained that most of the issues discussed had been published and fixed, but some had not. He declined to provide identifying details for ethical reasons.</p>
+<p>Defensive implications</p>
+<p>Peter argued that LLMs can rapidly narrow a large search space and repeatedly recombine promising paths until they find a way through. In his view, proprietary formats, hidden sections, and similar barriers no longer offer dependable protection once a capable model has access to the firmware.</p>
+<p>He presented two broad responses, rather than a settled remediation plan:
+- Restrict access to firmware and hope to limit analysis. He cited a post he attributed to Matthew Green recommending the immediate removal of publicly available firmware updates, while acknowledging that this was an uncomfortable recommendation for a security researcher.
+- Favor open, verifiable designs and use intensive analysis before deployment. He pointed to PQ1 as an example and advocated having LLMs scrutinize initial firmware before it reaches devices in the field.</p>
+<p>Questions and qualifications</p>
+<p>LZ4 and error strings: Peter clarified that LZ4 is a compression algorithm/library. Error strings are separate diagnostic messages that often remain embedded in compiled firmware and provide useful starting points for identifying components.</p>
+<p>Privacy and cypherpunk: Peter rejected the idea that privacy was over. He saw the current situation as an opportunity to rebuild insecure systems closer to cypherpunk ideals, although internet-connected devices that cannot be updated might need to be discarded.</p>
+<p>Reducing smart-device complexity: He supported eliminating unnecessary features, questioning why a washing machine needs Wi-Fi. He distinguished this from avoiding third-party libraries altogether: although dependencies currently introduce vulnerabilities, he expected secure, battle-tested libraries eventually to become preferable again to in-house replacements.</p>
+<p>Perfectly safe hardware: Speaking explicitly as a matter of personal opinion, Peter said security is a spectrum, not an absolute guarantee. Attackers weigh effort and cost against a target’s value; a hardware wallet holding $1 million justifies more investment than a refrigerator. He also argued that future mathematical or physical discoveries could invalidate assumptions considered safe today.</p>
+<p>Why Kimi: Peter said willingness to help was the deciding factor, not superior capability. He considered an OpenAI model he called “Astra” better at some security tasks but less willing to assist. His described practice was to use Kimi for the broader investigation and occasionally ask the other model for help with a narrower subtask.</p></div></section>
+<section role="tabpanel" id="panel-10" aria-labelledby="tab-10" tabindex="0" hidden><div class="panel-heading"><h2>Detailed summary</h2><span>Detail 10 / 10 · 1,860 words</span></div><div class="prose" dir="auto"><p>Speakers: A = Peter; B = unnamed moderator.</p>
+<p>Purpose and central argument</p>
+<p>Peter’s talk examined how an LLM can analyze proprietary device firmware, identify vulnerabilities, and combine them into an exploit that bypasses secure boot. He argued that the difficulty humans face when interpreting large amounts of unfamiliar machine code is becoming a much weaker barrier: LLMs can rapidly unpack firmware, identify components, narrow the attack surface, and explore combinations of bugs.</p>
+<p>He reported testing Kimi against an undisclosed hardware platform. According to Peter, approximately one hour of analysis using a $100 Kimi subscription found 15 zero-day vulnerabilities and three secure boot escapes. He qualified that the 15 findings were not all necessarily exploitable: some might only cause crashes. Reproducing the findings on actual hardware took him an entire day, making him, rather than the model, the bottleneck.</p>
+<p>The hardware manufacturer and exact device were not disclosed. During questions, Peter said most of the issues discussed had already been published and fixed, but some had not, so he would not provide further identifying details.</p>
+<p>Firmware as the security boundary</p>
+<p>Peter used a generic compute module to represent devices ranging from refrigerators to hardware wallets. He described secure boot as a mechanism that permits a computer to boot only digitally signed operating systems.</p>
+<p>He divided the system into:
+- Internal components, such as the CPU and RAM, which he treated as comparatively protected unless an attacker undertakes physical intervention.
+- External inputs and storage, including SD cards, NVMe drives, USB devices, and network boot sources, which are less trustworthy.
+- Firmware, which initializes hardware, configures components, provides drivers, and implements the secure boot checks separating untrusted inputs from the trusted system.</p>
+<p>This makes firmware a particularly important target: an error in code that processes external data before signature verification can undermine the protection secure boot is intended to provide.</p>
+<p>Extracting firmware physically can require desoldering chips, using readers, and other difficult, error-prone work. Peter explained that this is often unnecessary because manufacturers distribute firmware updates online, sometimes through GitHub. An attacker or researcher may therefore obtain the relevant firmware without touching a device.</p>
+<p>He said some mainstream models refuse to assist with this kind of investigation, whereas Kimi was willing to analyze his hardware and firmware.</p>
+<p>Unpacking and understanding proprietary firmware</p>
+<p>Peter described an analysis sequence in which a model first disassembles a firmware image. Initially, substantial portions may remain uninterpretable because they are compressed or transformed rather than directly executable code.</p>
+<p>The model can examine the readable portions to identify the routines that unpack the rest. In his example:
+- It recognized an LZ4 decompression algorithm and used it to expose additional sections. Peter said this step took approximately five seconds.
+- It then identified a proprietary data-transformation algorithm and applied that to the remaining hidden section.
+- The proprietary firmware was fully exposed approximately five minutes after analysis began.</p>
+<p>His argument was that a device must itself contain some means of interpreting its firmware, and an LLM can use those mechanisms to reverse the concealment. Proprietary formats and unfamiliar transformations therefore did not provide a durable obstacle in the example.</p>
+<p>Once the code was available, embedded error messages supplied useful semantic anchors. Messages associated with HTTP, DNS, and other libraries helped the model identify what otherwise unfamiliar code sections did. From those anchors, it could construct a call graph and map information flow through the firmware.</p>
+<p>The next important boundary was the secure boot check itself. Peter focused on code reachable before that check, where externally controlled input could influence execution before an operating system had been authenticated. The model mapped inputs such as SD-card contents and NVMe data to the firmware components that process them.</p>
+<p>Reducing the vulnerability search space</p>
+<p>Peter emphasized that simply asking a model to find bugs throughout a large firmware image leaves too much complexity. His described approach progressively reduced the problem.</p>
+<p>First, the model searched for a limited set of suspicious patterns, without assuming they were exploitable. Examples included possible buffer overflows, problematic loops, incomplete conditional handling, logical errors, and unexpected interactions between identified components. Recognizing libraries from their error strings also allowed comparison with known vulnerabilities in vulnerability databases.</p>
+<p>This produced a smaller collection of candidate sites, but important questions remained: Could an attacker reach them? Could the attacker control the relevant data? Would the result be useful exploitation or merely a crash?</p>
+<p>The next stages addressed those questions:
+- Examine the consequences of reaching each suspicious site. Peter said many candidates would simply crash the processor; in his illustrative account, this eliminated roughly half.
+- Trace backward from each candidate through its callers rather than trying to explore every possible forward path from an input.
+- Eliminate branches blocked by validation checks or branches that are unreachable or dead code.
+- Retain paths that lead back to attacker-controlled input.</p>
+<p>Peter described this vulnerability-tracing stage as static analysis: the model inspected code and modeled branches and jumps without running the actual firmware. It could create a small Python representation of the control flow.</p>
+<p>Static reasoning was not sufficient for every candidate. Arithmetic, data movement, and transformations could make an apparently viable path fail or behave differently than expected. The model therefore simulated relevant firmware behavior in Python and stepped through the paths to distinguish usable vulnerabilities from false leads. Peter used five remaining vulnerabilities as an illustrative intermediate result, not as the final count from his reported test.</p>
+<p>Turning reachable bugs into an exploit chain</p>
+<p>A vulnerability in a component does not automatically mean a deployed device will expose that component to an attacker. Peter gave the example of a bootloader configured to use only an SD card: a flaw in its NVMe driver would not necessarily be reachable. Likewise, identifying a DNS-related vulnerability leaves the question of how to induce the bootloader to perform a DNS lookup.</p>
+<p>He described the model’s next task as recombining vulnerabilities and execution paths until it found a chain connecting an accessible input to a useful failure.</p>
+<p>The example chain involved network boot:
+- The compute module could retrieve its operating system over HTTP.
+- An attacker-controlled HTTP response could trigger an error and move the firmware into a separate retry implementation.
+- A subsequent redirect could send execution down another pathway and eventually cause a DNS lookup.
+- Peter attributed these additional pathways to functionality inherited from an included library that had not been removed from the firmware.
+- The DNS-handling code copied a response into a 64-byte buffer. An oversized response of approximately 5 kilobytes could overwrite firmware memory.</p>
+<p>Peter presented the resulting outcome as remote code execution and a full secure boot bypass. The larger point was that seemingly secondary error-handling and fallback behavior could make an otherwise unexpected vulnerable component reachable before the secure boot check.</p>
+<p>Reported results and their limits</p>
+<p>Peter said he had expected Kimi to find nothing when he initially ran it against the hardware. Instead, he reported:
+- 15 zero-day vulnerabilities, with varying or unresolved exploitability.
+- Three secure boot escapes, which he characterized as catastrophic for a hardware project.
+- Approximately one hour for the automated scan on a $100 Kimi subscription.
+- An entire day of his own work to reproduce the findings on hardware.</p>
+<p>The talk did not provide the device identity or a finding-by-finding account of what had been reproduced. Peter’s distinction between potential vulnerabilities, crash-only bugs, and secure boot escapes remained important to interpreting the headline numbers.</p>
+<p>His broader conclusion was that LLMs can cheaply narrow a large problem to a small set of promising sites, then persistently explore and recombine those sites until they find a successful path.</p>
+<p>Defensive implications</p>
+<p>Peter recalled a post he attributed, with some uncertainty, to Matthew Green suggesting that publicly available firmware updates should immediately be removed from the internet. He called that both an uncomfortable recommendation for a security researcher and potentially the best immediate defensive move available.</p>
+<p>He argued that once an LLM has the firmware, proprietary packaging, concealment, or encryption should not be assumed to stop it from eventually exposing the code. He framed two broad options:
+- Hide the firmware, restrict access, and hope that this delays attacks.
+- Pursue open, verifiable systems and use intensive analysis, including LLM analysis, to harden firmware before widespread deployment. He cited PQ1 as an example of the direction he favored.</p>
+<p>He did not present either option as a guarantee. Concealment was framed as an immediate expedient, while openness depended on finding and addressing weaknesses early.</p>
+<p>Questions and clarifications</p>
+<p>LZ4 and error messages</p>
+<p>Asked what “LZ4 error” meant, Peter clarified that LZ4 is a compression algorithm or library. The relevant error messages are ordinary developer-facing strings embedded in libraries, not a special kind of LZ4 vulnerability. Such strings often remain in compiled firmware and become valuable starting points for identifying components and understanding the image.</p>
+<p>Which devices he had hacked</p>
+<p>Peter jokingly described the target as a generic blue compute module that did not exist. He then made clear that he should not identify it. Most issues had been published and fixed, but some remained undisclosed or unresolved, making further detail inappropriate in his view.</p>
+<p>Whether privacy and cypherpunk were over</p>
+<p>Peter rejected that conclusion. He described the current period as a potential renaissance for privacy and cypherpunk: existing systems had proved weaker than hoped, but there was an opportunity to rebuild from the ground up.</p>
+<p>He acknowledged that some internet-connected household devices that cannot be updated might need to be discarded. Nevertheless, he expected rebuilt systems to align more closely with cypherpunk goals than current ones.</p>
+<p>Whether smart devices should be simplified</p>
+<p>Peter distinguished two interpretations:
+- Removing unnecessary features: he supported this, questioning why a washing machine needs Wi-Fi.
+- Replacing external dependencies with in-house implementations: he did not endorse this as a permanent answer. He viewed the current prevalence of vulnerable libraries as potentially temporary and suggested that, once hardened, battle-tested libraries could again be safer than custom replacements.</p>
+<p>Whether any hardware can be perfectly safe</p>
+<p>Peter explicitly framed his answer as personal opinion. He said security is a spectrum and that the practical question is whether the effort and expense required to break a system are justified by the reward.</p>
+<p>A hardware wallet holding $1 million could justify substantial attack expenditure; a refrigerator would ordinarily be less valuable, though someone might attack it for amusement. He did not believe perfect, permanent safety could be established, because future mathematical or physical discoveries might introduce attack methods not accounted for today. He offered no definitive test or certification that would prove a device could withstand LLM-assisted exploitation.</p>
+<p>Why Kimi</p>
+<p>Peter’s main reason was willingness to assist rather than superior technical capability. He said Kimi accepted that the hardware belonged to him and was therefore willing to help investigate it.</p>
+<p>He also said that an OpenAI model he called “Astra” was better at some of this work but more reluctant to help. His described workflow was to use Kimi for the broader investigation and occasionally ask Astra to handle a narrowly scoped part. Thus, his choice reflected access and refusal behavior as well as technical performance.</p></div></section>
+<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" tabindex="0" hidden><div class="panel-heading"><h2>Final transcript</h2><span>4,041 words · Full transcript</span></div><div class="transcript-content" dir="auto">DETAILED TRANSCRIPT
+Source file: Security by obscurity is dead How LLMs can take over hardware [FLoC0dhY4u4].webm
+Duration: 23:30
+
+Sources: WhisperX large-v3-turbo + nemotron voice/time anchors; reconciled by gpt-6.1-sol
+
+Local voice/time anchors. Internal voice IDs follow first voice appearance; supported names are display labels.
+Timestamps are approximate. Speaker attribution may be inaccurate during overlapping speech.
+[speaker uncertain: ...] marks only the words with uncertain voice attribution.
+[low-confidence speech: ...] retains tentative recognized words for review.
+[unintelligible] marks speech with no recognized text. This log has not been manually edited.
+
+Speaker names (from conversation): A = Peter
+
+[00:08–00:44] Peter
+Hey, everyone. It&#x27;s kind of exciting to be the last talk of the conference. No pressure. Probably if you&#x27;ve been hanging around Twitter for the past few days, you&#x27;ve seen that in Europe we have this constant stream of shit being hacked, like refrigerators and stuff like that. And it&#x27;s kind of scary. We don&#x27;t really know what&#x27;s happening. And if we don&#x27;t understand it, it&#x27;s like, well, this AI, this evil thing is just breaking everything. But is it or is it not? Well, let&#x27;s take a bit of a look inside. If you were an AI, how would you
+
+[00:43–01:19] Peter
+actually hack things? Well, let&#x27;s start with a computer. This is a completely generic compute module. It could be your refrigerator. It could be your secure wallet. It could be anything. And usually, if it&#x27;s important for a computer not to be hacked, then it will have a feature called secure boot. Secure boot essentially says that every operating system is digitally signed, and the computer simply refuses to boot something that is not signed. And what happens if we try to look at the firmware? Well, yeah, Cloud
+
+[01:18–01:54] Peter
+and OpenAI will flat out refuse. LLMs are super good at looking at stuff and they are restricted a lot. However, luckily we have a very nice Chinese model called Kimi, which is more than happy to talk to us about, you know, exploring things. So let&#x27;s take a closer look. At a very, very high level, every computer essentially, you have a CPU, you have RAM, you have a few extra other components, but all of these are kind of internal. So these are controlled by the chip. Could you attack them? Yeah, if
+
+[01:53–02:29] Peter
+you start soldering, if you start connecting, but realistically, these are safe. However, we have another set of components, which are the storage. It can be an SD card, it can be an NVMe drive, a USB stick, or just remotely booting an operating system. Now, this is what&#x27;s external, what lives outside of the computer. And this is the interesting part where, you know, you can&#x27;t really control it that well. And in between the trusted environment and the untrusted environment, there&#x27;s this little magic thing, which is called the firmware. And every
+
+[02:28–03:04] Peter
+single hardware has a firmware baked in somewhere on some little chip on it. And this firmware is responsible for booting the hardware, for configuring stuff, for the drivers, for all of these little external devices. And most importantly, it also contains the secure boot code, the code that keeps the entire system safe, or at least tries to. So, you know, that thing is the entire protection mechanism for a hardware. Which means that that&#x27;s a very, very interesting thing to take a closer look at. Now, one challenge is
+
+[03:04–03:40] Peter
+that getting the firmware off of a device is messy. I mean, if it&#x27;s a tiny chip, you would need to solder it off, you would need to put it in a chip reader, you need to pass it through a logic analyzer, and yeah, it&#x27;s a lot of process, it&#x27;s kind of hard, it&#x27;s very easy to mess up, so yeah, we&#x27;ll probably mess it up. Luckily, we live in the world of Internet of Things that everything gets an update every second day, so, you know, we don&#x27;t really care about the firmware on the device. Rather, we care about the firmware on the update server, which very often is on GitHub because, you know, why not put it on
+
+[03:39–04:12] Peter
+GitHub? So Kimi is very, very happy because it doesn&#x27;t need to look at the device at all. We can just look at the firmware. I mean, look at the update server. So let&#x27;s take a closer look at what&#x27;s inside one of these firmwares. Ooh, there&#x27;s binary. Lots and lots of binary. Even more binary. So if we actually want to make heads or tails of this, it doesn&#x27;t look like anything to me. I mean, I can&#x27;t process that meaningfully. And the answer is very, very simple. You know, just disassemble the thing.
+
+[04:13–04:48] Peter
+OK. Yeah. We have a lot of assembly. It doesn&#x27;t really help us. Modern-day security is based on we not understanding that thing. However, things kind of change when these little blue guys or purple guys or whatever guys start appearing. Now let&#x27;s see, we can&#x27;t make heads or tails of a firmware, but what would an LLM do with a firmware? How would an LLM look at the firmware? Well, it would be exactly the same thing that we just did. Can we disassemble it?
+
+[04:48–05:24] Peter
+And it will spin through the entire firmware and see that, oh shit, what are those red blocks? We try to disassemble it and half of the firmware or most of the firmware is hidden. It cannot be just split apart. Okay, but the firmware is still running on the device, so the fact that there are these red things that are hidden, that&#x27;s nice, but something needs to split it open. So let&#x27;s take a look at what&#x27;s in the blue part that we can interpret. And looky there, there&#x27;s a LZ4 decompression algorithm, so YOLO, run the
+
+[05:23–05:59] Peter
+algorithm against the other datasets, and does it access it? Oh, yes. So somebody went through a lot of pain to turn those little sections red, and it took the LLM approximately five seconds to turn it back into green. While it still has some sections that were hidden that somehow it cannot access, no problem. We&#x27;ll just look at whatever there is still, and we find a completely proprietary data transformation algorithm. What do you know? We can just run that algorithm against the last red section, and the entire proprietary hidden firmware is
+
+[05:59–06:34] Peter
+cracked open. It probably was at the five-minute mark of starting to touch the firmware. Now the thing is that now we have a big assembly, but still trying to find vulnerabilities in a big assembly file is very, very hard. Where do we start? Where do we end? What happens? So what an LLM will do is, well, firmwares are written for people. Libraries are written for people because if things go wrong, we want to tell people what went wrong. They have these error messages embedded. So the first thing the LLM will do is scan the little disassembly for error message. And it will find an error
+
+[06:33–07:09] Peter
+message that, hey, there&#x27;s an HTTP error message, a DNS error message, various error messages from different modules. So all of a sudden we know that, hey, this section of the code is an HTTP server. This section of the code is a DNS server. This section of the code is something else. And then based on that, we can actually piece together a call graph. We can say that, well, this is the flow of information that goes across the firmware, and the purple ones, we know what they do. The greens one, we have no idea. We don&#x27;t even care about them for now. But if you look at this, it is a boot process and there&#x27;s a
+
+[07:08–07:44] Peter
+secure boot. So there&#x27;s a bottleneck somewhere in it which ensures that bad input from the outside cannot do bad stuff on the inside. But it&#x27;s pretty clear where that bottleneck is. So anything that&#x27;s after, we don&#x27;t care about because it&#x27;s simply... already a secure booted operating system. But anything before it, that&#x27;s our ball. That&#x27;s where we play game. That&#x27;s the input that we can actually control. So the LLM can look and try to map it that, OK, these are the code segments in the
+
+[07:43–08:06] Peter
+firmware that we may have control over. And do we have inputs that actually have control over them? And it can map out that, yes, the SD card gets mapped into the top part, the NVM into the middle part, and et cetera, et cetera. The problem is that if we still try to find vulnerabilities like this, the code complexity is too big. There are too many things that can go wrong. We need to restrict it. We need to make it somehow smaller.
+
+[08:06–08:07] Peter
+[unintelligible]
+
+[08:08–08:43] Peter
+One important thing to keep in mind that when you want to break a hardware, essentially what you need to do is convince the hardware to execute stuff it&#x27;s not supposed to execute. So somehow you need to get user input into the hardware&#x27;s memory. So you need to find some buffer overflow, some programming error where things get overwritten that shouldn&#x27;t be overwritten. And to do that, there are like five, six classes of bugs that can cause this. So we will just simply look for instructions where there&#x27;s a buffer overflow. We have no idea whether it can be actually abused.
+
+[08:43–09:18] Peter
+We just find them. Or we look for other instructions where that could introduce infinite loops or some special weird cases where the loop doesn&#x27;t get cold. We can look for instructions where you have an if clause, but some parts aren&#x27;t handled. We can look for plate instructions where, you know, it seems that there&#x27;s some logical errors or that components, we know that this is the HTTP component and it&#x27;s called weird. And last but definitely not least, since we have all those little purple parts mapped out and based on the error strings we knew that this is
+
+[09:18–09:52] Peter
+HTTP, this is DNS, we can actually look at the common vulnerabilities and exploits database and basically, we know that this library has this specific bug in it. And this way, what we ended up with is a very, very nice list of potential issues. Now, it is much, much smaller than our initial firmware, but it&#x27;s randomly inside. We have no idea. Is it reachable? Is it abusable? What can happen there? So what we will do next is line the whole thing up, just pull out all these vulnerabilities and see that if
+
+[09:52–10:28] Peter
+somehow we could get to that bad part of the code, what will happen? And for the most part, what will happen is that your processor will crash. So maybe there will be some buffer overflow, it overrides a bad place, the whole process crashes. And because of this, if you try to, for example, remotely attack a device, it&#x27;s very, very hard because you can never know which pathways succeed and which pathways just crash. The moment the device crashed, game over, you can&#x27;t hack it anymore. However, this way we try to figure out what would crash before even calling it, and
+
+[10:27–11:03] Peter
+that kind of manages to filter out, like, let&#x27;s say, half of our potential vulnerability sites. Now, still the task is, how can we somehow map the inputs to those potential output sites? It&#x27;s not trivial because, again, the problem space is too big. So if you want to go from inputs and try to reach the outputs, it&#x27;s very, very hard. But what if we do it in reverse? What if we take the output path and try to do a reverse call, try to see, OK, what code reaches the orange spot? OK, what code reaches that spot? What code reaches that spot? And when you go
+
+[11:02–11:37] Peter
+backwards, you will have certain spots that there will be a validation which kind of kills off that branch, either because there&#x27;s an if check or it&#x27;s simply not reachable, it&#x27;s death code, a lot of firmwares have a lot of death code in them, and eventually certain pathways will lead back to input that came from the user side. And that allows you to have a list of actual vulnerabilities. The thing is, up until this point, the only thing the LLM did was some
+
+[11:37–12:12] Peter
+static analysis of the code. It didn&#x27;t execute absolutely anything. It just looked at the code, and here&#x27;s the jump, here&#x27;s the jump, here&#x27;s the jump. It created a small Python library or whatever model to model these jumps, but it didn&#x27;t have to actually touch the code at all. The problem is that sometimes there are certain instructions, I know, math instructions, move operations, which make these pathways non-executable. Maybe they crash it, maybe they transform it in an unexpected way. So the LLM will actually, this is the first point when the LLM will take the actual code from the firmware,
+
+[12:12–12:48] Peter
+simulate the whole thing in Python, because why would it run the actual firmware, and then try to step through the entire process and see which of the exploits can be weaponized. And most of them will be, some of them will turn out that, okay, these are duds. And at that point we have, let&#x27;s say, five potential vulnerabilities that are legitimate vulnerabilities. Now, there&#x27;s a catch. This thing, what it allows us to say is that, well, if the user can&#x27;t control DNS, it can go bad. If the user can&#x27;t control PCI
+
+[12:47–13:23] Peter
+Express, it can go bad, but it&#x27;s unclear how to make the hardware ask the user for a DNS name, or how to make the hardware ask the user for PCI Express. For example, if my bootloader is configured to only boot from an SD card, obviously it will not ever touch the NVMe driver. But this is where the interesting things, this is where kind of the brute force thing comes in. If we have a list of potential vulnerabilities, sorry, if we have a list of actual vulnerabilities, this is where the LLM will start to
+
+[13:22–13:57] Peter
+just try to recombine them and try to figure out whether can you somehow create an actual exploit chain. And eventually it will end up with something like this. So it will say that, well, we have the compute module which can do network boot. Network boot is essentially we can request the operating system from HTTP. Great. So we run, run, run, run, run. And since HTTP comes from our laptops or whatever network the device is plugged into, we can have the HTTP server say, sorry, error.
+
+[13:57–14:32] Peter
+Normally an HTTP server doesn&#x27;t say error, but since it&#x27;s untrusted, it can say error. And then the compute module is like, wait, wait, wait. So we errored, so we need to go into some retry mode, which is a completely different implementation. Ooh, now we&#x27;re in the second exploit. So that implementation starts running, and then the HTTP server says, ooh, how about we don&#x27;t give you the data, we just redirect you? So now, all of a sudden, the bootloader went into yet another implementation pathway. These pathways are in the firmware because they just pulled in a library from GitHub.
+
+[14:32–15:08] Peter
+These pathways should not be in the firmware. The firmware should not do a DNS lookup, but nobody ever cared to delete that part. Why would they? So once you&#x27;re in the DNS pathway, what the firmware does is, hey, can you please resolve this domain into an IP address? You know, an IP address is either 4 bytes or 8 bytes if it&#x27;s IPv64. So what the firmware does is, well, let&#x27;s copy the answer into a buffer that&#x27;s 64 bytes long. And if the DNS server returns a 5-kilobyte thing, then, yeah, surely it won&#x27;t return a 5-kilobyte answer.
+
+[15:08–15:43] Peter
+So we return a 5-kilobyte answer and basically override the entire memory of the firmware, leading to a memory override, a remote code execution, and a full secure boot bypass. And the question is, how much effort, I mean, how probable is that something like this could be pulled off against potentially a hardware produced by a very, very high-value company? And what would be the cost of pulling this attack off? Well... I had Kimi run
+
+[15:43–16:15] Peter
+against the hardware. I was completely expecting it to find zero on all of those. It found 15 zero-day vulnerabilities. Now, these zero-days are maybe exploitable, some just crash, some are bad. We don&#x27;t know. It also found three secure boot escapes. In a hardware project, a secure boot escape is catastrophe. That&#x27;s the critical, game over. So having one is a huge problem. Having three is like, dude, what are you doing?
+
+[16:15–16:17] Peter
+[unintelligible]
+
+[16:17–16:52] Peter
+At least if it would be expensive, you would say that, you know, it has a cost, but no, unfortunately, no, it doesn&#x27;t have a cost. So doing the whole scan took approximately one hour on a $100 Kimi sub. And interestingly, after I managed to find these vulnerabilities with LLM, it took me an entire day to reproduce it on hardware. So essentially I was absolutely the bottleneck on the entire vulnerability hunting process. And yeah, it is a problem because this is the actual, this is the
+
+[16:52–17:27] Peter
+reality that we live in currently, that LLMs simply can very, very quickly restrict the problem space just to handful of potentially vulnerable positions and they can keep grinding it and recombining it until they get through. And so what is the solution? How can we actually avoid all of this? And the answer is that I think Matthew Green at some point had a post on Twitter that if you have a firmware update on the internet, delete it, like immediately, just hide it, which is like the worst thing a security researcher can say, but it&#x27;s also the best thing that you can do today.
+
+[17:27–17:39] Peter
+If an LLM has access to your firmware, it doesn&#x27;t matter that it&#x27;s proprietary, it doesn&#x27;t matter that it&#x27;s hidden, it doesn&#x27;t matter that it&#x27;s encrypted, that&#x27;s whatever, it will eventually crack it open.
+
+[17:40–18:15] Peter
+Yeah, that really doesn&#x27;t work. So option A, you hide it, you never show it to anybody and hope for the best. Or option B is that you really lean into open and verifiable stuff like the PQ1, what they are doing and hope that LLMs ground your initial firmware enough so that once it&#x27;s out in the wild, it doesn&#x27;t really get owned. And that&#x27;s it. Thank you very much. The links are, if you&#x27;re interested in other stuff that we&#x27;re doing, feel free to check. Otherwise, happy to answer questions.
+
+[18:15–18:40] B
+Thank you, thank you, Peter. And I&#x27;m here to help you with the questions for sure. Could you please come in closer here? Alrighty. So let&#x27;s start with the first one and just a reminder, there&#x27;s so many of you and there are just four questions that we should fix that. Go scan the code while we are dealing with that one. What is LZ4 error?
+
+[18:40–19:15] Peter
+So LZ4 is a compression algorithm and every time... So it&#x27;s kind of like a compression library, nothing fancy. It just makes data smaller, just obfuscates data. And the error is just any error string that you can find in a library. So whenever you&#x27;re doing development, software development, all the libraries usually have a lot of user-friendly error strings. So when things go wrong, the developer has a clue what happens. And these error strings, they always end up in the firmware because why would you delete them? Except since they are in there, there are these
+
+[19:15–19:21] Peter
+super valuable anchor points from where you can start your investigation on splitting firmware open.
+
+[19:21–19:29] B
+All right, from a serious question to a funny question: which devices in your own home have you already hacked?
+
+[19:29–19:54] Peter
+The only device I hacked is a completely generic blue compute module, which does not exist in the world. Basically, that&#x27;s saying that I should not say. Most of the issues that I have talked about have already been published and fixed, some of them not, so it would be probably more ethical if I didn&#x27;t detail it further.
+
+[19:54–20:05] B
+Okay, the next one pretty much describes the mood that you might end up with after your talk. So, cypherpunk or privacy is over?
+
+[20:05–20:36] Peter
+No, I think we are living in the renaissance of cypherpunk and privacy, just we realized that everything we built until now was a bit crappy, but now we&#x27;ve given a second chance to, you know, rebuild from the ground up. Yes, this might mean that any internet-connected device you have in your home that you cannot update might end up in the garbage can, but I think the world rebuilt will be much closer to the cypherpunk vision than the world we have currently.
+
+[20:36–20:49] B
+Okay, we have two questions that are competing with each other. I&#x27;ll have to choose one because otherwise my eyes will go like that. Do you think smart devices should be dumbed down to reduce wide dependencies?
+
+[20:49–21:25] Peter
+Ooh. I mean, I guess the question, I am not entirely sure I will interpret the question correctly. If by dumb down, I mean to cut features, I mean, why does your washing machine has a Wi-Fi? I mean, if you have a washing machine, yes, please dumb it down. If the question is, do we want to get rid of dependencies so we have more dependencies in-house and less potential outside vulnerabilities, I think this is a temporary problem that everything is vulnerable, but once libraries start being secure, it will probably be safer to rely on battle-tested libraries
+
+[21:24–21:25] Peter
+again.
+
+[21:25–21:40] B
+Okay. The next one. What evidence do we need to determine if hardware can survive a large language model exploit like this? In this context, is there any perfectly safe hardware?
+
+[21:40–22:15] Peter
+No. This is a personal opinion. If you ask me, security is a spectrum. I mean, there always exists enough effort, enough money to break something. The question is, is it worth it? If, for example, you have a hardware wallet and you have a million dollars on it, the effort is worth, I mean, you can invest a lot of money and still make it worthwhile to break it. If you have a refrigerator at home, you know, maybe for shits and giggles somebody might break it, but it&#x27;s not really a valuable target. So
+
+[22:15–22:36] Peter
+can you make it ever perfectly safe? The reason I would say no is because math is evolving, physics is evolving, and we can never prove that there will never exist some new theorem, some new force interference, which we haven&#x27;t accounted for, that will be the breaking thing.
+
+[22:36–22:44] B
+Okay, and we are at our final question because we&#x27;re running out of time. So the last one for today will be, why Kimi?
+
+[22:45–23:20] Peter
+Because Kimi likes us. Kimi told me that it&#x27;s my hardware, so it&#x27;s fun to break it. It&#x27;s fine to break it. We like Kimi. Kimi is cute. But just maybe to add one note, Kimi is not the best. So, for example, OpenAI as Astra is definitely better at breaking stuff, it just doesn&#x27;t want to help you. So ideally, the way I use them, I talk with Kimi, and then sometimes I&#x27;m like, hey, Astra, can you just do this little bit, please, please, please? And then you can play with it.
+
+[23:20–23:26] B
+Okay, and on this note, the hugest round of applause to our final speaker today, Peter.
+</div></section>
+<section role="tabpanel" id="panel-source-whisperx" aria-labelledby="tab-source-whisperx" tabindex="0" hidden><div class="panel-heading"><h2>Transcript · WhisperX Turbo</h2><span>Before reconciliation</span></div><div class="transcript-content" dir="auto">DETAILED TRANSCRIPT
+Source file: Security by obscurity is dead How LLMs can take over hardware [FLoC0dhY4u4].webm
+Duration: 23:30
+
+Sources: WhisperX Turbo + Nemotron 3 voice/time anchors; before reconciliation
+
+Local voice/time anchors. Speakers are labeled A, B, C, D, etc. by first voice appearance.
+Timestamps are approximate. Speaker attribution may be inaccurate during overlapping speech.
+[speaker uncertain: ...] marks only the words with uncertain voice attribution.
+[low-confidence speech: ...] retains tentative recognized words for review.
+[unintelligible] marks speech with no recognized text. This log has not been manually edited.
+
+[00:08–00:44] A
+Hey, everyone. It&#x27;s kind of exciting to be the last talk of the conference. No pressure. Probably if you&#x27;ve been hanging around Twitter for the past few days, you&#x27;ve seen that in Europe we have this constant stream of shit being hacked, like refrigerators and stuff like that. And it&#x27;s kind of scary. We don&#x27;t really know what&#x27;s happening. And if we don&#x27;t understand it, it&#x27;s like, well, this AI, this evil thing is just breaking everything. But is it or is it not? Well, let&#x27;s take a bit of a look inside. If you were an AI, how would you
+
+[00:43–01:19] A
+actually hack things? Well, let&#x27;s start with a computer. This is a completely generic compute module. It could be your refrigerator. It could be your secure wallet. It could be anything. And usually, if it&#x27;s important for a computer not to be hacked, then it will have a feature called secure boot. Secure boot essentially says that every operating system is digitally signed, and the computer simply refuses to boot something that is not signed. And what happens if we try to look at the firmware? Well, yeah, Cloud
+
+[01:18–01:54] A
+and OpenAI will flat out refuse. LLMs are super good at looking at stuff and they are restricted a lot. However, luckily we have a very nice Chinese model called Kimi, which is more than happy to talk to us about, you know, exploring things. So let&#x27;s take a closer look. At a very, very high level, every computer essentially, you have a CPU, you have RAM, you have a few extra other components, but all of these are kind of internal. So these are controlled by the chip. Could you attack them? Yeah, if
+
+[01:53–02:29] A
+you start soldering, if you start connecting, but realistically, these are safe. However, we have another set of components, which are the storage. It can be an SD card, it can be an NVMe drive, a USB stick, or just remotely booting an operating system. Now, this is what&#x27;s external, what lives outside of the computer. And this is the interesting part where, you know, you can&#x27;t really control it that well. And in between the trusted environment and the untrusted environment, there&#x27;s this little magic thing, which is called the firmware. And every
+
+[02:28–03:04] A
+single hardware has a firmware baked in somewhere on some little chip on it. And this firmware is responsible for booting the hardware, for configuring stuff, for the drivers, for all of these little external devices. And most importantly, it also contains the secure boot code, the code that keeps the entire system safe, or at least tries to. So, you know, that thing is the entire protection mechanism for a hardware. Which means that that&#x27;s a very, very interesting thing to take a closer look at. Now, one challenge is
+
+[03:04–03:40] A
+that getting the firmware off of a device is messy. I mean, if it&#x27;s a tiny chip, you would need to solder it off, you would need to put it in a chip reader, you need to pass it through a logic analyzer, and yeah, it&#x27;s a lot of process, it&#x27;s kind of hard, it&#x27;s very easy to mess up, so yeah, we&#x27;ll probably mess it up. Luckily, we live in the world of Internet of Things that everything gets an update every second day, so, you know, we don&#x27;t really care about the firmware on the device. Rather, we care about the firmware on the update server, which very often is on GitHub because, you know, why not put it on
+
+[03:39–04:12] A
+GitHub? So Kimi is very, very happy because it doesn&#x27;t need to look at the device at all. We can just look at the firmware. I mean, look at the update server. So let&#x27;s take a closer look at what&#x27;s inside one of these firmwares. Ooh, there&#x27;s binary. Lots and lots of binary. Even more binary. So if we actually want to make heads or tails of this, it doesn&#x27;t look like anything to me. I mean, I can&#x27;t process that meaningfully. And the answer is very, very simple. You know, just disassemble the thing.
+
+[04:13–04:48] A
+OK. Yeah. We have a lot of assembly. It doesn&#x27;t really help us. Modern day security is based on we not understanding that thing. However, things kind of change when these little blue guys or purple guys or whatever guys start appearing. Now let&#x27;s see, we can&#x27;t make heads or tails of a firmware, but what would an LLM do with a firmware? How would an LLM look at the firmware? Well, it would be exactly the same thing that we just did. Can we disassemble it?
+
+[04:48–05:24] A
+And it will spin through the entire firmware and see that, oh shit, what are those red blocks? We try to disassemble it and half of the firmware or most of the firmware is hidden. It cannot be just split apart. Okay, but the firmware is still running on the device, so the fact that there are these red things that are hidden, that&#x27;s nice, but something needs to split it open. So let&#x27;s take a look at what&#x27;s in the blue part that we can interpret. And looky there, there&#x27;s a LZ4 decompression algorithm, so YOLO run the
+
+[05:23–05:59] A
+algorithm against the other datasets, and does it access it? Oh, yes. So somebody went through a lot of pain to turn those little sections red, and it took the LLM approximately five seconds to turn it back into green. While it still has some sections that were hidden that somehow it cannot access, no problem. We&#x27;ll just look at whatever there is still, and we find a completely proprietary data transformation algorithm. What do you know? We can just run that algorithm against the last red section, and the entire proprietary hidden firmware is
+
+[05:59–06:34] A
+cracked open. It probably was at the five-minute mark of starting to touch the firmware. Now the thing is that now we have a big assembly, but still trying to find vulnerabilities in a big assembly file is very, very hard. Where do we start? Where do we end? What happens? So what an LLM will do is, well, firmwares are written for people. Libraries are written for people because if things go wrong, we want to tell people what went wrong. They have these error messages embedded. So the first thing the LLM will do is scan the little disassembly for error message. And it will find an error
+
+[06:33–07:09] A
+message that, hey, there&#x27;s an HTTP error message, a DNS error message, various error messages from different modules. So all of a sudden we know that, hey, this section of the code is an HTTP server. This section of the code is a DNS server. This section of the code is something else. And then based on that, we can actually piece together a call graph. We can say that, well, This is the flow of information that goes across the firmware, and the purple ones, we know what they do. The greens one, we have no idea. We don&#x27;t even care about them for now. But if you look at this, It is a boot process and there&#x27;s a
+
+[07:08–07:44] A
+secure boot. So there&#x27;s a bottleneck somewhere in it which ensures that bad input from the outside cannot do bad stuff on the inside. But it&#x27;s pretty clear where that bottleneck is. So anything that&#x27;s after, we don&#x27;t care about because it&#x27;s simply... already a secure booted operating system. But anything before it, that&#x27;s our ball. That&#x27;s where we play game. That&#x27;s the input that we can actually control. So the LLM can look and try to map it that, OK, these are the code segments in the
+
+[07:43–08:06] A
+firmware that we may have control over. And do we have inputs that actually have control over them? And it can map out that, yes, the SD card gets mapped into the top part, the NVM into the middle part, and et cetera, et cetera. The problem is that if we still try to find vulnerabilities like this, the code complexity is too big. There are too many things that can go wrong. We need to restrict it. We need to make it somehow smaller.
+
+[08:06–08:07] A
+[unintelligible]
+
+[08:08–08:43] A
+One important thing to keep in mind that when you want to break a hardware, essentially what you need to do is convince the hardware to execute stuff it&#x27;s not supposed to execute. So somehow you need to get user input into the hardware&#x27;s memory. So you need to find some buffer overflow, some programming error where things get overwritten that shouldn&#x27;t be overwritten. And to do that, There are like five, six classes of bugs that can cause this. So we will just simply look for instructions where there&#x27;s a buffer overflow. We have no idea whether it can be actually abused.
+
+[08:43–09:18] A
+We just find them. Or we look for other instructions where that could introduce infinite loops or some special weird cases where the loop doesn&#x27;t get cold. We can look for instructions where you have an if clause, but some parts aren&#x27;t handled. we can look for plate instructions where, you know, it seems that there&#x27;s some logical errors or that components, we know that this is the HTTP component and it&#x27;s called weird. And last but definitely not least, since we have all those little purple parts mapped out and based on the error strings we knew that this is
+
+[09:18–09:52] A
+HTTP, this is DNS, we can actually look at the common vulnerabilities and exploits database and Basically, we know that this library has this specific bug in it. And this way, what we ended up with is a very, very nice list of potential issues. Now, it is much, much smaller than our initial firmware, but it&#x27;s randomly inside. We have no idea. Is it reachable? Is it abusable? What can happen there? So what we will do next is line the whole thing up, just pull out all these vulnerabilities and see that if
+
+[09:52–10:28] A
+somehow we could get to that bad part of the code, what will happen? And for the most part, what will happen is that your processor will crash. So maybe there will be some buffer overflow, it overrides a bad place, the whole process crashes. and because of this if you try to for example remotely attack a device it&#x27;s very very hard because you can never know which pathways succeed and which pathways just crash the moment the device crashed game over you can&#x27;t hack it anymore however this way we try to figure out what would crash before even calling it and
+
+[10:27–11:03] A
+that kind of manages to filter out like let&#x27;s say half of our potential vulnerability sites Now, still the task is, how can we somehow map the inputs to those potential output sites? It&#x27;s not trivial because, again, the problem space is too big. So if you want to go from inputs and try to reach the outputs, it&#x27;s very, very hard. But what if we do it in reverse? What if we take the output path and try to do a reverse call, try to see, OK, what code reaches the orange spot? OK, what code reaches that spot? What code reaches that spot? And when you go
+
+[11:02–11:37] A
+backwards, you will have certain spots that there will be a validation which kind of kills off that branch, either because there&#x27;s an if check or it&#x27;s simply not reachable, it&#x27;s death code, a lot of firmwares have a lot of death code in them, and eventually certain pathways will lead back to input that came from the user side. And that allows you to have a list of actual vulnerabilities. The thing is, up until this point, the only thing the LLM did was some
+
+[11:37–12:12] A
+static analysis of the code. It didn&#x27;t execute absolutely anything. It just looked at the code, and here&#x27;s the jump, here&#x27;s the jump, here&#x27;s the jump. It created a small Python library or whatever model to model these jumps, but it didn&#x27;t have to actually touch the code at all. The problem is that sometimes there are certain instructions, I know math instructions, move operations, which make these pathways non-executable. Maybe they crash it, maybe they transform it in an unexpected way. So the LLM will actually, this is the first point when the LLM will take the actual code from the firmware
+
+[12:12–12:48] A
+simulate the whole thing in Python, because why would it run the actual firmware, and then try to step through the entire process and see which of the exploits can be weaponized. And most of them will be, some of them will turn out that, okay, these are duds. And at that point we have, let&#x27;s say, five potential vulnerabilities that are legitimate vulnerabilities. Now, there&#x27;s a catch. This thing, what it allows us to say is that, well, if the user can&#x27;t control DNS, it can go bad. If the user can&#x27;t control PCI
+
+[12:47–13:23] A
+Express, it can go bad, but it&#x27;s unclear how to make the hardware ask the user for a DNS name, or how to make the hardware ask the user for PCI Express. For example, if my bootloader is configured to only boot from an SD card, obviously it will not ever touch the NVMe driver. But this is where the interesting things, this is where kind of the brute force thing comes in. If we have a list of potential vulnerabilities, sorry, if we have a list of actual vulnerabilities, this is where the LLM will start to
+
+[13:22–13:57] A
+just try to recombine them and try to figure out whether can you somehow create an actual exploit chain. And eventually it will end up with something like this. So it will say that, well, we have the compute module which can do network boot. Network boot is essentially we can request the operating system from HTTP. Great. So we run, run, run, run, run. And since HTTP comes from our laptops or whatever network the device is plugged into, we can have the HTTP server say, sorry, error.
+
+[13:57–14:32] A
+Normally an HTTP server doesn&#x27;t say error, but since it&#x27;s untrusted, it can say error. And then the compute module is like, wait, wait, wait. So we errored, so we need to go into some retry mode, which is a completely different implementation. Ooh, now we&#x27;re in the second exploit. So that implementation starts running, and then the HTTP server says, ooh, how about we don&#x27;t give you the data, we just redirect you? So now, all of a sudden, the bootloader went into yet another implementation pathway. These pathways are in the firmware because they just pulled in a library from GitHub.
+
+[14:32–15:08] A
+These pathways should not be in the firmware. The firmware should not do a DNS lookup, but nobody ever cared to delete that part. Why would they? So once you&#x27;re in the DNS pathway, what the firmware does is, hey, can you please resolve this domain into an IP address? You know, an IP address is either 4 bytes or 8 bytes if it&#x27;s IPv64. So what the firmware does is, well, let&#x27;s copy the answer into a buffer that&#x27;s 64 bytes long. And if the DNS server returns a 5-kilobyte thing, then, yeah, surely it won&#x27;t return a 5-kilobyte answer.
+
+[15:08–15:43] A
+So we return a 5-kilobyte answer and basically override the entire memory of the firmware, leading to a memory override, a remote code execution, and a full secure boot bypass. And the question is, how much effort, I mean, how probable is that something like this could be pulled off against potentially a hardware produced by a very, very high value company? And what would be the cost of pulling this attack off? Well... I had Kimi run
+
+[15:43–16:15] A
+against the hardware. I was completely expecting it to find zero on all of those. It found 15 zero-day vulnerabilities. Now, these zero-days are maybe exploitable, some just crash, some are bad. We don&#x27;t know. It also found three secure boot escapes. In a hardware project, a secure boot escape is catastrophe. That&#x27;s the critical, game over. So having one is a huge problem. Having three is like, dude, what are you doing?
+
+[16:15–16:17] A
+[unintelligible]
+
+[16:17–16:52] A
+At least if it would be expensive, you would say that, you know, it has a cost, but no, unfortunately, no, it doesn&#x27;t have a cost. So doing the whole scan took approximately one hour on a $100 Kimi sub. And interestingly, after I managed to find these vulnerabilities with LLM, it took me an entire day to reproduce it on hardware. So essentially I was absolutely the bottleneck on the entire vulnerability hunting process. And yeah, it is a problem because this is the actual, this is the
+
+[16:52–17:27] A
+reality that we live in currently, that Alalams simply can very, very quickly restrict the problem space just to handful of potentially vulnerable positions and they can keep grinding it and recombining it until they get through. And so what is the solution? How can we actually avoid all of this? And the answer is that I think Matthew Green at some point had a post on Twitter that if you have a firmware update on the internet, delete it, like immediately, just hide it, which is like the worst thing a security researcher can say, but it&#x27;s also the best thing that you can do today.
+
+[17:27–17:39] A
+If an LLM has access to your firmware, it doesn&#x27;t matter that it&#x27;s proprietary, it doesn&#x27;t matter that it&#x27;s hidden, it doesn&#x27;t matter that it&#x27;s encrypted, that&#x27;s whatever, it will eventually crack it open.
+
+[17:40–18:15] A
+Yeah, that really doesn&#x27;t work. So option A, you hide it, you never show it to anybody and hope for the best. Or option B is that you really lean into open and verifiable stuff like the PQ1, what they are doing and hope that LLMs ground your initial firmware enough so that once it&#x27;s out in the wild, it doesn&#x27;t really get owned. And That&#x27;s it. Thank you very much. The links are, if you&#x27;re interested in other stuff that we&#x27;re doing, feel free to check. Otherwise, happy to answer questions.
+
+[18:15–18:40] B
+Thank you, thank you, Peter. And I&#x27;m here to help you with the questions for sure. Could you please come in closer here? Alrighty. So let&#x27;s start with the first one and just a reminder, there&#x27;s so many of you and there are just four questions that we should fix that. Go scan the code while we are dealing with that one. What is LZ4 error?
+
+[18:40–19:15] A
+So LZ4 is a compression algorithm and every time So it&#x27;s kind of like a compression library, nothing fancy. It just makes data smaller, just obfuscates data. And the error is just any error string that you can find in a library. So whenever you&#x27;re doing development, software development, all the libraries usually have a lot of user-friendly error strings. So when things go wrong, the developer has a clue what happens. And these error strings, they always end up in the firmware because why would you delete them except since they are in there there are these
+
+[19:15–19:21] A
+super valuable anchor points from where you can start your investigation on splitting firmware open
+
+[19:21–19:29] B
+all right from a serious question to a funny question which devices in your own home have you already hacked
+
+[19:29–19:54] A
+the only device i hacked is a completely generic blue compute module, which does not exist in the world. Basically, that&#x27;s saying that I should not say. Most of the issues that I have talked about have already been published and fixed, some of them not, so it would be probably more ethical if I didn&#x27;t detail it further.
+
+[19:54–20:05] B
+Okay, the next one pretty much describes the mood that you might end up with after your talk. So, CypherFunk or privacy is over.
+
+[20:05–20:36] A
+No, I think we are living in the renaissance of cypherpunk and privacy, just we realized that everything we built until now was a bit crappy, but now we&#x27;ve given a second chance to, you know, rebuild from the ground up. Yes, this might mean that any internet connected device you have in your home that you cannot update might end up in the garbage can, but I think the world rebuilt will be much closer to the cypherpunk vision than the world we have currently.
+
+[20:36–20:49] B
+Okay, we have two questions that are competing with each other. I&#x27;ll have to choose one because otherwise my eyes will go like that. Do you think smart devices should be dumped down to reduce wide dependencies?
+
+[20:49–21:25] A
+Ooh. I mean, I guess the question, I am not entirely sure I will interpret the question correctly. If by dumb down, I mean to cut features, I mean, why does your washing machine has a Wi-Fi? I mean, if you have a washing machine, yes, please dumb it down. If the question is, do we want to get rid of dependencies so we have more dependencies in-house and less potential outside vulnerabilities, I think this is a temporary problem that everything is vulnerable, but once libraries start being secure, it will probably be safer to rely on battle-tested libraries
+
+[21:24–21:25] A
+again.
+
+[21:25–21:40] B
+Okay. The next one. What evidence do we need to determine if hardware can survive a large language model exploit like this? In this context, is there any perfectly safe hardware?
+
+[21:40–22:15] A
+No. This is a personal opinion. If you ask me, security is a spectrum. I mean, there always exists enough effort, enough money to break something. The question is, is it worth it? If, for example, you have a hardware wallet and you have a million dollars on it, the effort is worth, I mean, you can invest a lot of money and still make it worthwhile to break it. If you have a refrigerator at home, you know, maybe for shits and giggles somebody might break it, but it&#x27;s not really a valuable target. So
+
+[22:15–22:36] A
+can you make it ever perfectly safe? The reason I would say no is because math is evolving, physics is evolving, and we can never prove that there will never exist some new theorem, some new force interference, which we haven&#x27;t accounted for, that will be the breaking thing.
+
+[22:36–22:44] B
+Okay, and we are at our final question because we&#x27;re running out of time. So the last one for today will be, why Kimi?
+
+[22:45–23:20] A
+Because Kimi likes us. Kimi told me that it&#x27;s my hardware, so it&#x27;s fun to break it. It&#x27;s fine to break it. We like Kimi. Kimi is cute. But just maybe to add one note, Kimi is not the best. So, for example, OpenAI as Astra is definitely better at breaking stuff, it just doesn&#x27;t want to help you. So ideally, the way I use them, I talk with Kimmy, and then sometimes I&#x27;m like, hey, Astra, can you just do this little bit, please, please, please? And then you can play with it.
+
+[23:20–23:26] B
+Okay, and on this note, the hugest round of applause to our final speaker today, Peter.
+</div></section>
+<section role="tabpanel" id="panel-source-diarization" aria-labelledby="tab-source-diarization" tabindex="0" hidden><div class="panel-heading"><h2>Diarization · Nemotron 3</h2><span>Voice intervals</span></div><div class="transcript-content" dir="auto">SPEAKER DIARIZATION
+Source file: Security by obscurity is dead How LLMs can take over hardware [FLoC0dhY4u4].webm
+Model: Nemotron 3
+Duration: 1410.837 seconds
+Detected voices: 2
+Speech intervals: 90
+
+Automatic voice labels, not participant identities.
+Intervals may overlap; silence is not assigned to a voice.
+Times below are seconds from the start of the recording.
+
+[8.441–16.289] A
+[17.551–95.109] A
+[95.591–97.169] A
+[98.501–100.629] A
+[101.091–141.119] A
+[141.451–175.219] A
+[176.491–181.969] A
+[182.331–227.469] A
+[227.911–232.489] A
+[232.891–233.579] A
+[233.891–238.069] A
+[238.561–239.779] A
+[240.141–243.159] A
+[243.921–252.089] A
+[252.901–253.939] A
+[254.331–260.149] A
+[260.691–267.079] A
+[268.001–268.999] A
+[269.921–275.589] A
+[276.041–287.859] A
+[288.241–300.139] A
+[300.591–301.849] A
+[302.301–367.709] A
+[368.621–374.519] A
+[374.861–376.689] A
+[377.361–423.289] A
+[423.721–425.139] A
+[425.951–475.939] A
+[476.281–485.839] A
+[486.221–486.979] A
+[487.941–511.139] A
+[511.801–541.749] A
+[542.281–564.229] A
+[564.981–621.039] A
+[621.391–633.049] A
+[633.571–638.939] A
+[640.171–687.289] A
+[687.971–712.139] A
+[712.571–725.489] A
+[725.901–748.529] A
+[749.161–755.389] A
+[756.351–766.149] A
+[766.471–786.489] A
+[786.971–787.759] A
+[788.531–808.729] A
+[809.071–893.669] A
+[894.001–899.149] A
+[900.071–904.019] A
+[904.521–907.199] A
+[907.931–918.039] A
+[918.791–919.949] A
+[920.551–927.409] A
+[928.051–938.139] A
+[939.371–940.679] A
+[941.231–956.629] A
+[956.981–957.919] A
+[958.261–961.819] A
+[962.381–969.989] A
+[970.301–974.769] A
+[975.181–976.189] A
+[976.951–1000.779] A
+[1001.301–1003.659] A
+[1004.231–1005.279] A
+[1005.951–1006.579] A
+[1006.901–1008.339] A
+[1009.011–1032.349] A
+[1033.491–1059.779] A
+[1060.511–1082.389] A
+[1082.931–1083.919] A
+[1084.861–1086.819] A
+[1087.391–1091.849] A
+[1092.611–1094.919] A
+[1095.271–1119.439] B
+[1119.661–1124.479] A
+[1125.731–1161.129] A
+[1161.541–1168.569] B
+[1168.831–1172.729] A
+[1173.341–1193.769] A
+[1194.301–1204.609] B
+[1205.281–1235.459] A
+[1236.181–1248.559] B
+[1249.351–1285.099] A
+[1285.631–1299.389] B
+[1299.851–1328.929] A
+[1329.481–1337.649] A
+[1338.331–1340.999] A
+[1342.291–1355.439] A
+[1356.091–1363.939] B
+[1364.771–1399.569] A
+[1400.311–1405.419] B
+</div></section>
+    </article>
+    <footer><span>Automatic summary · Review important details against the source.</span><span class="generation-stamp">Generated <time id="generated-at" datetime="2026-11-20T07:08:19+00:00" title="2026-11-20 07:08:19 UTC">2026-11-20 07:08:19 UTC</time></span></footer>
+    <noscript><p>Enable JavaScript to switch tabs. The first selected tab is shown above.</p></noscript>
+  </main>
+
+</body>
+</html>

@@ -3,6 +3,14 @@
 Turn YouTube videos and MKV, MP4 or WebM recordings into speaker-labelled transcripts and standalone HTML summaries.
 Supports English, Russian, and mixed conversations. Uses the first audio track only.
 
+## Example report
+
+[HTML report](docs/examples/youtube-report.html) · [Full-size screenshot](docs/examples/youtube-report.png)
+
+Download the HTML and open it in a browser to switch between summaries and transcripts.
+
+![Full-page Firefox screenshot of a Scribe report](docs/examples/youtube-report.png)
+
 ## Requirements
 
 macOS 14+, Apple Silicon, Python 3.12–3.13.
