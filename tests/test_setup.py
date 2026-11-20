@@ -21,6 +21,7 @@ class SetupTests(unittest.TestCase):
                 with self.subTest(option=option, offline=offline), \
                         runtime_paths(models_dir=models), \
                         patch.object(app, "load_env"), patch.dict(os.environ, {}, clear=True), \
+                        patch.object(app.media_input, "ensure_media_tools") as media, \
                         patch.object(app, "ensure_models") as prepare, \
                         patch.object(app, "process_file") as process, \
                         patch.object(app.urllib.request, "urlopen", side_effect=AssertionError("Network forbidden")):
@@ -29,6 +30,7 @@ class SetupTests(unittest.TestCase):
                         arguments.append("--offline")
                     self.assertEqual(app.main(arguments), 0)
                     prepare.assert_called_once_with(models.resolve(), offline, False, transcription_model="whisperx", diarization_model="nemotron")
+                    self.assertEqual(media.call_count, 0 if offline else 1)
                     process.assert_not_called()
 
     def test_ready_venv_runs_without_a_bundled_python_or_pip_and_stale_one_is_rejected_offline(self):
@@ -68,8 +70,8 @@ class SetupTests(unittest.TestCase):
             for name in (".env", "data/.venv/lib/dependency.py", "data/models/weights.safetensors",
                          "data/.cache/stage.json", "data/recording.mkv", "data/comparison/usage.json",
                          "data/notes.txt", "data/.env", "data/.gitkeep.copy", "data/log/session.log",
-                         "nested/data/log/session.log",
-                         "exports/meeting.summary.html"):
+                         "nested/data/log/session.log", "exports/video.MP4", "exports/video.webm",
+                         "exports/.scribe-youtube/id.json", "exports/meeting.summary.html"):
                 self.assertEqual(subprocess.run(["git", "check-ignore", "-q", name], cwd=root).returncode, 0, name)
             for name in (".env.example", "requirements.txt", "scribe.sh", "src/scribe.py",
                          "src/resources/models-manifest.json", "src/resources/summary.html", "tests/test_setup.py",

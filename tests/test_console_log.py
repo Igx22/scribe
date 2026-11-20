@@ -333,6 +333,7 @@ class LauncherLogTests(unittest.TestCase):
                                     '        monitor_directory = lambda *a: print("FAKE MONITOR") or 0\n'
                                     '        raise SystemExit(main())')
             (checkout / "src/scribe.py").write_text(source)
+            shutil.copy2(app.SOURCE_DIR / "media_input.py", checkout / "src/media_input.py")
             (checkout / "src/resources").mkdir()
             shutil.copy2(app.RESOURCE_DIR / "models-manifest.json", checkout / "src/resources/models-manifest.json")
             inputs = cwd / "inputs"
@@ -364,6 +365,7 @@ class LauncherLogTests(unittest.TestCase):
                 'managed = {APP_DATA / ".venv", APP_DATA / "runtime/python", APP_DATA / "runtime/venv"}',
                 'managed = {Path(sys.prefix)} if os.getenv("_TEST_READY") else set()')
             (checkout / "src/scribe.py").write_text(source)
+            shutil.copy2(app.SOURCE_DIR / "media_input.py", checkout / "src/media_input.py")
             (checkout / "src/resources").mkdir()
             shutil.copy2(app.RESOURCE_DIR / "models-manifest.json", checkout / "src/resources/models-manifest.json")
             python = checkout / "data/runtime/python/bin/python3"

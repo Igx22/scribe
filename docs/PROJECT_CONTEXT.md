@@ -605,3 +605,29 @@ covered memory, latency, factual coverage, uncertainty, bounded context, and
 hierarchical summaries against cached-transcript GPT baselines. These remain
 historical research notes; administrative closure records the user's backlog
 decision rather than a benchmark or model-integration result.
+
+## YouTube ingestion (SCR-101)
+
+`--youtube` identifies one completed video locally and verifies a saved
+recording by its SHA-256 before network access. The destination keeps the full
+media, a source manifest and the ordinary exports. The manifest ties the ID to
+verified bytes. yt-dlp uses default quality and FFmpeg stream-copy merging when
+required. New downloads are decoded and checked against the available source
+duration before publication. The existing recognition cache still uses the
+recording bytes and model/settings compatibility. See the [design](superpowers/specs/2026-11-20-youtube-ingestion-design.md)
+and [usage](USAGE.md#download-one-youtube-video).
+
+On macOS 14.5, Apple Silicon and Python 3.13, fresh setup reused system
+FFmpeg 7.1 without fetching the optional FFmpeg wheel. A limited `PATH` still
+found the remembered binary. Setup without that binary installed FFmpeg 9.0 and
+reused it on the next run. Hardware or operating-system changes can affect full
+media verification time.
+
+The 132-second public excerpt yielded a transcript and report via `-f` in MKV,
+MP4 and WebM. The closing phrase was independently checked on the last ten
+seconds of audio and found in all three reports. The anonymous full-video check
+retained a 23:30.861 WebM with 1080p AV1 and Opus and produced transcript and HTML
+with WhisperX Turbo, Nemotron 3 and `gpt-6.1-sol:medium`. Browser and cookie-file
+sign-in conditions were exercised with test doubles. An equivalent URL
+skipped completed media with network access blocked. A missing HTML
+export was recreated from compatible local checkpoints.

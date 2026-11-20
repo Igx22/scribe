@@ -17,4 +17,7 @@ __pycache__/
 *.summary.err
 *.mkv
 *.MKV
+*.[mM][pP]4
+*.[wW][eE][bB][mM]
+.scribe-youtube/
 *.download

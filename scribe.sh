@@ -7,6 +7,7 @@ DATA_DIR="$APP_DIR/data"
 VENV_DIR="$DATA_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python3"
 REQUIREMENTS="$APP_DIR/requirements.txt"
+FFMPEG_REQUIREMENTS="$APP_DIR/requirements-ffmpeg.txt"
 STAMP="$VENV_DIR/.requirements-sha256"
 LEGACY_PYTHON="$DATA_DIR/runtime/python/bin/python3"
 # Start before platform/setup checks, and keep one supervisor across launcher
@@ -25,12 +26,19 @@ if [[ "${_SCRIBE_CONSOLE_PARENT:-}" != "$PPID" ]]; then
 fi
 OFFLINE=false
 SETUP=false
+YOUTUBE=false
 for option in "$@"; do
     case "$option" in
         --offline) OFFLINE=true ;;
         --setup) SETUP=true ;;
+        --youtube|--youtube=*) YOUTUBE=true ;;
     esac
 done
+
+if $OFFLINE && $YOUTUBE; then
+    echo "ERROR: --youtube requires online mode. Use -f with the saved video in --offline mode." >&2
+    exit 2
+fi
 
 if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
     echo "Scribe requires macOS 14+ and Apple Silicon (M1 or newer)." >&2
@@ -55,7 +63,19 @@ sys.exit(not valid)
 ' "$REQUIREMENTS" "$STAMP" 2>/dev/null
 }
 
+prepare_ffmpeg() {
+    if "$VENV_PYTHON" -I -B "$APP_DIR/src/media_input.py" --prepare-ffmpeg; then
+        return
+    fi
+    echo "Installing bundled FFmpeg (no compatible system FFmpeg found)..."
+    "$VENV_PYTHON" -I -B -m pip install --disable-pip-version-check --no-input --force-reinstall \
+        --only-binary=:all: --cache-dir "$DATA_DIR/.cache/pip" -r "$FFMPEG_REQUIREMENTS"
+}
+
 if environment_ready; then
+    if $SETUP && ! $OFFLINE; then
+        prepare_ffmpeg
+    fi
     exec "$VENV_PYTHON" -I -B "$APP_DIR/src/scribe.py" "$@"
 fi
 
@@ -98,6 +118,7 @@ mkdir -p "$DATA_DIR/.cache/pip"
 echo "Installing Scribe dependencies (internet required on the first run)..."
 "$VENV_PYTHON" -I -B -m pip install --disable-pip-version-check --no-input \
     --only-binary=:all: --cache-dir "$DATA_DIR/.cache/pip" -r "$REQUIREMENTS"
+prepare_ffmpeg
 "$VENV_PYTHON" -I -B -c \
     'import hashlib,sys; from pathlib import Path; Path(sys.argv[2]).write_text(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()+"\n")' \
     "$REQUIREMENTS" "$STAMP"

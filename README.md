@@ -1,6 +1,6 @@
 # scribe
 
-Turn MKV recordings into speaker-labelled transcripts and standalone HTML summaries.
+Turn YouTube videos and MKV, MP4 or WebM recordings into speaker-labelled transcripts and standalone HTML summaries.
 Supports English, Russian, and mixed conversations. Uses the first audio track only.
 
 ## Requirements
@@ -10,7 +10,7 @@ An OpenAI API key is required for GPT processing; `--offline` needs no key.
 
 ## Pipeline
 
-capture MKV data ⇒
+select or download a recording ⇒
 extract 1st audio track ⇒
 transcribe and detect speakers (multiple formats)  ⇒
 aggregate using GPT 6 API ⇒ clean transcription with speakers
@@ -19,7 +19,23 @@ aggregate using GPT 6 API ⇒ clean transcription with speakers
 
 If this is your first installation, follow the setup steps below.
 
-## Quick Example
+## Quick start
+
+```bash
+./scribe.sh --setup
+./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID"
+./scribe.sh -f ./talk.mp4
+```
+
+Scribe saves the complete YouTube video with audio at yt-dlp’s default quality
+alongside its transcript and HTML report in `./data` or `--output-dir DIR`.
+Repeating the command reuses a verified local download by video ID before
+contacting YouTube. The new report opens in the default browser.
+
+Downloads start anonymously. If YouTube requires sign-in, sign in on the
+selected browser and rerun with `--cookies-from-browser`, for example
+`./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID" --cookies-from-browser brave`.
+Alternatively, use `--cookies FILE` with a Netscape cookie file.
 
 Process all MKV recordings in `./data` and save logs and `.summary.html` reports
 to the same folder:
@@ -95,8 +111,18 @@ browser. See [Finder setup and permissions](docs/USAGE.md#finder-quick-action-ma
 | `./scribe.sh --setup --transcription-model mlx` | MLX Turbo + Nemotron 3 (**1.73 GB**) |
 | `./scribe.sh --setup --transcription-model all` | WhisperX Turbo + MLX Turbo + Nemotron 3 (**4.99 GB**) |
 
-Models are saved to `data/models`; sizes exclude Python packages.
+Models are saved to `data/models`. Model sizes exclude Python packages.
 Setup makes no paid API calls. Repeated setup reuses valid downloads.
+
+| Media component | Version | Approximate first-install download on Apple Silicon |
+| --- | --- | --- |
+| yt-dlp | `2026.10.26` | 3.2 MB |
+| YouTube JavaScript support (`yt-dlp-ejs`) | `0.8.0` | 53 KB |
+| Deno | `2.9.8` | 38.8 MB |
+| FFmpeg | Existing `6+`, or bundled `9.0` from `imageio-ffmpeg` `0.8.1` | 0 MB when reused, otherwise 22.6 MB |
+
+Scribe uses FFmpeg for verification, merging and audio extraction. It has no
+separate ffprobe dependency.
 For other installation paths and Community-1 setup, see [the usage guide](docs/USAGE.md#setup-from-github-start-here).
 
 ## Outputs
@@ -241,22 +267,24 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `-h`, `--help` | — | Show English help. |
-| `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Repeat to select several files; bare names search `./data` and `~/Movies`. Cannot combine with `--input-dir`. |
+| `-f FILE`, `--file FILE` | Scan `--input-dir` or `./data` | Select MKV, MP4 or WebM. Repeat to select several files. Bare names search `./data` and `~/Movies`. |
+| `--youtube URL` | Off | Download one completed video at default quality with download and merge progress. Alternative to `-f`, `--input-dir` and `--monitor-dir`. Requires online mode. |
+| `--cookies-from-browser BROWSER[:PROFILE]`, `--cookies FILE` | Anonymous | Choose a browser session or Netscape cookie file for YouTube sign-in. Scribe tries anonymously first. |
 | `--input-dir DIR` | Working directory's `data` | Scan all MKV files in this folder, without subfolders. Cannot combine with `-f`; does not change the output directory. |
-| `--monitor-dir [DIR]` | Off | Watch growing MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
+| `--monitor-dir [DIR]` | Off | Watch growing OBS MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
 | `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers; every ordinary mode then runs GPT text reconciliation. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Report and final GPT reconciliation model/effort; none disables reports, not reconciliation. |
 | `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; levels keep their order within the Summary menu. Always writes standalone HTML. |
-| `--offline` | Off | Force local recognition, no summary, no API calls or downloads. |
-| `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports and error files to DIR. Does not enable monitoring. |
+| `--offline` | Off | Force local recognition without summaries, API calls or downloads. For a saved YouTube video, use `-f`. |
+| `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports, error files and YouTube downloads to DIR. |
 | `--force` | Off | Bypass completion skipping and recognition/API caches; may repeat paid calls. |
 | `--transcribe-only` | Off | Create only the log; equivalent to `--summarize-model none`. Final GPT reconciliation still runs unless offline. |
 | `--summary-only` | Off | Regenerate HTML from validated internal final JSON, without audio processing/reconciliation; a log export is optional. |
 | `--verify-models` | Off | Verify SHA-256 hashes as well as sizes when preparing local models. |
 | `--show-prompt` | Off | Print the rendered final summary prompt for the selected detail, without processing or API calls. |
 | `--version` | — | Print the version. |
-| `--setup` | Off | Prepare the isolated Python environment through the launcher, prepare selected models, and exit without recordings or paid API calls. |
+| `--setup` | Off | Prepare the isolated Python environment, media tools and selected models without recordings or paid API calls. |
 
 `--transcribe-only` and `--summary-only` are mutually exclusive.
 Monitor mode also excludes `-f`, `--input-dir`, `--force`, `--summary-only`,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scribe: MKV → selectable recognition and diarization → log and summary.
+"""scribe: media → selectable recognition and diarization → log and summary.
 
 Run with ./scribe.sh; SUMMARIZATION_PROMPT below is intentionally editable.
 API mode uploads audio; local mode uploads only text if a summary is requested.
@@ -39,6 +39,10 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 SOURCE_DIR = Path(__file__).resolve().parent
+if str(SOURCE_DIR) not in sys.path:
+    sys.path.insert(0, str(SOURCE_DIR))  # Isolated (-I) launcher imports local helpers explicitly.
+import media_input
+
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
@@ -1077,13 +1081,13 @@ def ensure_models(models_dir, offline=False, verify=False, *,
 
 
 def extract_audio(source, wav_path):
-    import imageio_ffmpeg
-    command = [imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
-               "-y", "-i", str(source), "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000",
+    command = [media_input.ffmpeg_executable(), "-nostdin", "-hide_banner", "-loglevel", "error",
+               "-abort_on", "empty_output_stream", "-y", "-i", str(source), "-map", "0:a:0", "-vn",
+               "-ac", "1", "-ar", "16000",
                "-c:a", "pcm_s16le", str(wav_path)]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode:
-        raise AppError("FFmpeg could not extract the first audio track:\n" + result.stderr[-2500:])
+        raise AppError("FFmpeg could not read the first audio track:\n" + result.stderr[-2500:])
 
 
 def diarize(wav_path, models_dir, backend="nemotron"):
@@ -1842,7 +1846,7 @@ def extract_report_metadata(transcript, key, model, effort, cache, force=False, 
     return {"topic": topics[0] if topics else "", "roles": roles}
 
 
-def report_header(source, transcript, metadata):
+def report_header(source, transcript, metadata, *, youtube=False):
     turns = report_turns(transcript)
     roster = report_roster(turns)
     participants = [{"name": label, "role": metadata.get("roles", {}).get(label, "")} for label in roster]
@@ -1863,7 +1867,8 @@ def report_header(source, transcript, metadata):
     filename = re.search(r"^Source file: ([^\r\n]+)$", block, re.M)
     stem = Path(filename[1]).stem if filename else source.stem
     choices = [(explicit[1], "Date from transcript metadata")] if explicit else []
-    choices.append((stem, "Date from recording filename"))
+    if not youtube:
+        choices.append((stem, "Date from recording filename"))
     months = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
     for value, note in choices:
         pattern = r"(\d{4}-\d{2}-\d{2})(?:[ T_](\d{2})[-:](\d{2})(?:[-:](\d{2}))?)?"
@@ -1915,7 +1920,7 @@ def final_transcript_badge(transcript):
 
 
 def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None,
-                 summary_model=None):
+                 summary_model=None, youtube=None):
     """Render model text as escaped data in a self-contained, offline report."""
     selection = tabs if tabs is not None else [*summaries, "transcript"]
     buttons, transcript_items, detail_items = [], [], []
@@ -2038,14 +2043,22 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
     if generated_at.utcoffset() is None:
         raise AppError("Report generation time must include a timezone.")
     generated_at = generated_at.astimezone(timezone.utc).replace(microsecond=0)
-    values = {"TITLE": html.escape(metadata["topic"]), "SOURCE": html.escape(source.name),
-              "TOPIC": html.escape(metadata["topic"]), "PARTICIPANTS": participants,
+    title = metadata["topic"]
+    source_label = html.escape(source.name)
+    heading = "Topic"
+    if youtube and media_input.VIDEO_ID.fullmatch(youtube.get("id", "")):
+        source_label += f' · <a href="{media_input.watch_url(youtube["id"])}">Watch on YouTube</a>'
+        if youtube.get("title"):
+            title = youtube["title"]
+            heading = "Video"
+    values = {"TITLE": html.escape(title), "SOURCE": source_label,
+              "HEADING": heading, "TOPIC": html.escape(title), "PARTICIPANTS": participants,
               "DURATION": html.escape(metadata["duration"]), "DATE": html.escape(metadata["date"]),
               "DATE_NOTE": " · " + html.escape(metadata["date_note"]) if metadata.get("date_note") else "",
               "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": warning + "\n".join(panels),
               "GENERATED_ISO": generated_at.isoformat(),
               "GENERATED_FULL": generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")}
-    return re.sub(r"@@(TITLE|SOURCE|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS|GENERATED_ISO|GENERATED_FULL)@@",
+    return re.sub(r"@@(TITLE|SOURCE|HEADING|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS|GENERATED_ISO|GENERATED_FULL)@@",
                   lambda match: values[match[1]], template)
 
 
@@ -2654,8 +2667,10 @@ def collect_files(file_args, cwd, input_dir=None):
     for path in unique:
         if not path.is_file():
             raise AppError(f"File not found: {path}")
-        if path.suffix.lower() != ".mkv":
-            raise AppError(f"Expected an MKV file: {path}")
+        extensions = media_input.MEDIA_EXTENSIONS if file_args else {".mkv"}
+        if path.suffix.lower() not in extensions:
+            expected = "an MKV, MP4 or WebM file" if file_args else "an MKV file"
+            raise AppError(f"Expected {expected}: {path}")
     return unique
 
 
@@ -3404,9 +3419,18 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
             say(f"  Reusing summary detail {level}/10.")
         summaries[level] = answer
     processing_stage("report header", model=model, effort=effort)
-    extracted = extract_report_metadata(transcript, key, model, effort, cache, args.force)
-    content = summary_html(source, summaries, report_header(source, transcript, extracted),
-                           transcript=transcript, tabs=args.report_tabs, source_reports=source_reports, summary_model=model)
+    youtube = getattr(args, "youtube_metadata", None)
+    try:
+        extracted = extract_report_metadata(transcript, key, model, effort, cache, args.force)
+    except AppError as exc:
+        if youtube is None:
+            raise
+        say("  YouTube report header inference failed; publishing the transcript and summaries with source details.")
+        diagnostic("report header", exc, fallback="YouTube source details")
+        extracted = {}
+    content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube is not None),
+                           transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
+                           summary_model=model, youtube=youtube)
     if source_snapshot(source) != snapshot:
         raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
     if summary_path.exists():
@@ -3542,14 +3566,21 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="scribe.py",
         allow_abbrev=False,
-        description="scribe: MKV to a speaker-labeled transcript and an OpenAI summary. "
-                    "Scan --input-dir (default: ./data), select -f files, or watch growing MKVs with --monitor-dir. "
+        description="scribe: media to a speaker-labeled transcript and an OpenAI summary. "
+                    "Select --youtube, -f files, --input-dir (default: ./data), or --monitor-dir for OBS. "
                     "Bare -f names search ./data and ~/Movies. "
                     "Outputs default to the monitored folder in monitor mode, otherwise ./data relative to the launch directory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     inputs = p.add_mutually_exclusive_group()
     inputs.add_argument("-f", "--file", action="append", default=[],
-                        help="MKV filename or explicit path; repeat -f to process multiple files")
+                        help="MKV, MP4 or WebM filename or explicit path; repeat -f to process multiple files")
+    inputs.add_argument("--youtube", action="append", metavar="URL",
+                        help="Download one completed YouTube video with audio to the output directory; requires online mode")
+    cookies = p.add_mutually_exclusive_group()
+    cookies.add_argument("--cookies-from-browser", metavar="BROWSER[:PROFILE]",
+                         help="Use the selected browser session if a YouTube download requires sign-in")
+    cookies.add_argument("--cookies", type=Path, metavar="FILE",
+                         help="Use a Netscape cookie file if a YouTube download requires sign-in")
     inputs.add_argument("--input-dir", type=Path, metavar="DIR",
                         help="Scan MKV files in this directory without subfolders; defaults to ./data; cannot combine with -f")
     inputs.add_argument("--monitor-dir", type=Path, metavar="DIR", nargs="?", const=True,
@@ -3579,9 +3610,9 @@ def build_parser():
     group = p.add_mutually_exclusive_group()
     group.add_argument("--transcribe-only", action="store_true", help="Alias for --summarize-model none; final GPT reconciliation still uses the API unless --offline")
     group.add_argument("--summary-only", action="store_true", help="Generate HTML reports from internal final JSON; preserve existing log exports")
-    p.add_argument("--offline", action="store_true", help="Force local recognition and no summary; retain explicit mlx, otherwise use whisperx; no API calls/downloads")
+    p.add_argument("--offline", action="store_true", help="Force local recognition; no API calls, downloads, HTML reports or --youtube; retain explicit mlx, otherwise use whisperx")
     p.add_argument("--setup", action="store_true",
-                   help="Prepare local models and exit; scribe.sh also prepares data/.venv. No MKV files or API key required")
+                   help="Prepare media tools and local models and exit; scribe.sh also prepares data/.venv. No recordings or API key required")
     p.add_argument("--verify-models", action="store_true", help="Verify model SHA-256 hashes as well as sizes")
     p.add_argument("--show-prompt", action="store_true", help="Print the summary prompt and exit")
     p.add_argument("--version", action="version", version=VERSION)
@@ -3590,7 +3621,19 @@ def build_parser():
 
 def main(argv=None):
     load_env()
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.youtube and args.offline:
+        parser.error(media_input.YOUTUBE_OFFLINE_ERROR)
+    if args.youtube and (len(args.youtube) != 1 or args.setup or args.show_prompt):
+        parser.error("--youtube takes exactly one URL and cannot be combined with --setup or --show-prompt.")
+    if not args.youtube and (args.cookies is not None or args.cookies_from_browser is not None):
+        parser.error("--cookies and --cookies-from-browser require --youtube.")
+    if args.youtube:
+        try:
+            video_id = media_input.youtube_id(args.youtube[0])
+        except media_input.MediaError as exc:
+            parser.error(str(exc))
     if args.monitor_dir is not None and (args.summary_only or args.force or args.setup or args.show_prompt):
         raise AppError("--monitor-dir cannot be combined with --summary-only, --force, --setup, or --show-prompt.")
     if args.show_prompt:
@@ -3613,14 +3656,40 @@ def main(argv=None):
         say("Report generation is disabled; nothing to do.")
         return 0
     if args.setup:
+        if not args.offline:
+            try:
+                media_input.ensure_media_tools(say)
+            except media_input.MediaError as exc:
+                raise AppError(str(exc)) from None
         ensure_models(args.models_dir, args.offline, args.verify_models,
                       transcription_model=args.transcription_model, diarization_model=args.diarization_model)
         say("API-only mode needs no local models." if args.transcription_model == ONLINE_MODE else "Selected models are ready.")
         return 0
     if args.monitor_dir is not None:
         return monitor_directory(args)
+    if args.youtube:
+        return process_youtube(video_id, args)
     files = collect_files(args.file, Path.cwd(), args.input_dir)
     return process_files(files, args)
+
+
+def process_youtube(video_id, args):
+    try:
+        with media_input.youtube_lock(args.output_dir, video_id, say) as state:
+            source, args.youtube_metadata = media_input.obtain_youtube(
+                video_id, args.output_dir, state, args, say=say, read_json=read_json,
+                save_json=save_json, digest_file=digest_file)
+            _, report = output_paths(source, args.output_dir)
+            previous = source_snapshot(report) if report.is_file() else None
+            result = process_files([source], args)
+            if result == 0 and report.is_file() and source_snapshot(report) != previous:
+                try:
+                    subprocess.run(["/usr/bin/open", str(report)], check=True, capture_output=True)
+                except (OSError, subprocess.CalledProcessError):
+                    say(f"  Open this report in your browser: {report}")
+            return result
+    except (media_input.MediaError, OSError) as exc:
+        raise AppError(str(exc)) from None
 
 
 def process_files(files, args):

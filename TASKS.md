@@ -148,3 +148,4 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-095 | Process the newest Movies recording and save results beside it | Done | 2026-11-09 | 2026-11-09 |
 | SCR-096 | [Design a second single-screen desktop interface concept with large direct controls](data/comparison/desktop-ui-concept-2/VERIFICATION.md) | Done | 2026-11-10 | 2026-11-10 |
 | SCR-097 | [Add configurable macOS Finder action registration](docs/USAGE.md#finder-quick-action-macos) | Done | 2026-11-11 | 2026-11-12 |
+| SCR-101 | [Add YouTube URL input with retained full video and explicit authentication](docs/superpowers/specs/2026-11-20-youtube-ingestion-design.md) | Done | 2026-11-20 | 2026-11-20 |

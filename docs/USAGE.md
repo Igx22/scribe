@@ -52,7 +52,12 @@ recognition needs no API key; online downloads are still needed to prepare it on
 
 Default setup prepares:
 
-- Python environment in `data/.venv`, required libraries and FFmpeg.
+- Python environment in `data/.venv` with required libraries, yt-dlp, its EJS
+  challenge solver and Deno.
+- An existing FFmpeg 6 or newer from `PATH` or `IMAGEIO_FFMPEG_EXE`, or the
+  bundled FFmpeg wheel when a compatible binary is unavailable. Setup remembers
+  a compatible system binary for launches with a limited `PATH`. Run setup
+  again if that binary is moved or removed.
 - **WhisperX Turbo**, English and Russian word-alignment models, and tokenizer data.
 - **Nemotron 3** and its native runtime for speaker segmentation.
 
@@ -113,9 +118,56 @@ python3 src/scribe.py -f "recording.mkv"
 ```
 
 An explicit relative path is relative to the Terminal working directory. The
-launcher preserves that directory. Only MKV files are accepted; `.MKV` also works.
+launcher preserves that directory. `-f` accepts MKV, MP4 and WebM, including
+uppercase extensions. FFmpeg extracts the first audio track directly from the
+selected file. A missing or unreadable first track stops before recognition.
 Missing inputs, empty input directories, and output-name collisions are reported.
 Repeated references or symlinks to the same resolved file are processed once.
+
+## Download one YouTube video
+
+After setup, pass one completed video's watch or share URL.
+
+```bash
+./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID"
+./scribe.sh --youtube "https://youtu.be/VIDEO_ID" --output-dir ~/Movies/talks
+```
+
+A watch link with a playlist selects only the referenced video. Playlist-only
+links, multiple URLs and active or upcoming streams are rejected. Cookie flags
+apply only to this input. For local processing without API calls or downloads,
+use `./scribe.sh -f ./saved-video.webm --offline`.
+
+Scribe keeps picture and sound in the downloaded container. When yt-dlp selects
+separate tracks at its default quality, FFmpeg merges them by copying the
+streams. Scribe shows transfer statistics when available and elapsed time during
+long merges. Setup manages the downloader and runtime independently of your shell
+`PATH`.
+
+The media and ordinary exports share the selected output folder. A title and
+video ID identify the media file. Scribe records source details and the verified
+file hash in the output folder’s `.scribe-youtube` directory. Keep that directory
+alongside the media for repeat downloads. A completed pair skips processing and a
+missing export resumes through Scribe's ordinary checkpoints. A failed report
+leaves the verified source in place. Interrupted downloads are ineligible for
+reuse. A new report opens in the default browser and links to the video.
+
+Scribe tries anonymously even when credentials are supplied. When YouTube
+indicates that sign-in is required, sign in with the account that can view the
+video. On macOS, grant any requested permission to read the browser session.
+
+```bash
+./scribe.sh --youtube "https://youtu.be/VIDEO_ID" --cookies-from-browser brave
+./scribe.sh --youtube "https://youtu.be/VIDEO_ID" --cookies-from-browser "brave:Profile 1"
+./scribe.sh --youtube "https://youtu.be/VIDEO_ID" --cookies ./cookies.txt
+```
+
+Use one cookie source. The file must use Netscape format and contain a current
+YouTube session. Scribe leaves it untouched. If the session expired, sign in
+again or refresh the export. For denied browser or Keychain access, check the
+selected browser profile or use a cookie file. An HTTP 403 or network error
+alone does not trigger any cookie access. Run `./scribe.sh --setup` to check the
+JavaScript and media tools if extraction reports a tool error. [Cookie format and export details](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp).
 
 ## Finder Quick Action (macOS)
 

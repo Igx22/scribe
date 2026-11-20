@@ -1,0 +1,2 @@
+# Installed by scribe.sh only when FFmpeg 6+ is unavailable.
+imageio-ffmpeg==0.8.1

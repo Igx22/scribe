@@ -179,6 +179,7 @@
     .participant-role { color: var(--muted); font-size: .76em; font-weight: 400; letter-spacing: 0; }
     .source { margin: 26px 0 0; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
     .source strong { color: var(--secondary); font-weight: 500; }
+    .source a { color: var(--accent); }
     .tabs-wrap { position: sticky; top: 0; z-index: 1; padding: 0 40px; background: var(--surface); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line); }
     [role="tablist"] { display: flex; flex-wrap: wrap; gap: 0 20px; overflow: visible; }
     [role="tab"] { flex: 0 0 auto; min-height: 76px; padding: 14px 2px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
@@ -270,7 +271,7 @@
       <header>
         <p class="eyebrow">Conversation summary</p>
         <dl class="meeting-facts">
-          <div class="fact"><dt>Topic:</dt><dd><h1>@@TOPIC@@</h1></dd></div>
+          <div class="fact"><dt>@@HEADING@@:</dt><dd><h1>@@TOPIC@@</h1></dd></div>
           <div class="fact"><dt>Participants:</dt><dd class="participants">@@PARTICIPANTS@@</dd></div>
           <div class="fact"><dt>Duration:</dt><dd>@@DURATION@@</dd></div>
           <div class="fact"><dt>Date:</dt><dd>@@DATE@@</dd></div>

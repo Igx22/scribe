@@ -18,5 +18,8 @@ torchcodec==0.7.0
 transformers==4.57.6
 nltk==3.10.4
 soundfile==0.14.0
-imageio-ffmpeg==0.8.1
+# Managed YouTube downloader and its JavaScript challenge solver/runtime.
+yt-dlp==2026.10.26
+yt-dlp-ejs==0.8.0
+deno==2.9.8
 certifi==2026.10.23
