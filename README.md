@@ -9,7 +9,9 @@ Supports English, Russian, and mixed conversations. Uses the first audio track o
 
 Download the HTML and open it in a browser to switch between summaries and transcripts.
 
-![Full-page Firefox screenshot of a Scribe report](docs/examples/youtube-report.png)
+<a href="docs/examples/youtube-report.png">
+  <img src="docs/examples/youtube-report.png" alt="Full-page Firefox screenshot of a Scribe report" width="96">
+</a>
 
 ## Requirements
 
