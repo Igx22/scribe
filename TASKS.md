@@ -150,3 +150,4 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-097 | [Add configurable macOS Finder action registration](docs/USAGE.md#finder-quick-action-macos) | Done | 2026-11-11 | 2026-11-12 |
 | SCR-101 | [Add YouTube URL input with retained full video and explicit authentication](docs/superpowers/specs/2026-11-20-youtube-ingestion-design.md) | Done | 2026-11-20 | 2026-11-20 |
 | SCR-102 | [Show a full-page Firefox screenshot and standalone report in the README](README.md#example-report) | Done | 2026-11-20 | 2026-11-20 |
+| SCR-107 | [Retrieve and summarize viewer comments at each selected YouTube report detail level](docs/superpowers/specs/2026-11-21-youtube-comments-design.md) | In Progress | 2026-11-20 | — |
