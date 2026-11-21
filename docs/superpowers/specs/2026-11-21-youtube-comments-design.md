@@ -8,9 +8,10 @@ should be one menu selection away, including when the HTML is opened offline.
 
 ## What the current reports show
 
-Scribe already resolves one list of report tabs for both `--youtube` and
-`-f`. The built-in selection is `1,3,5,10,transcript`. The CLI overrides the
-environment, which overrides `.env`, which overrides the built-in default.
+The current implementation resolves one mixed list of numeric levels and an
+optional Transcript entry for both `--youtube` and `-f`. Its default includes
+four Summary levels and Transcript. The CLI overrides the environment, which
+overrides `.env`, which overrides the built-in default.
 The URL path passes the same arguments to the file pipeline. Both the shipped
 YouTube example and a saved full-video run contain all four numeric panels.
 A second saved SCR-101 report for the same video contains only level 1. Its
@@ -20,13 +21,38 @@ Summary menu shows just the active selection, normally `Key points · 1/10`.
 An ordinary rerun also skips an existing log/report pair.
 [Example report](../../examples/youtube-report.html) · [Report selection](../../USAGE.md#report-tabs-and-summary-detail)
 
-Preserve one resolver and test the generated HTML through both entry points.
-For an existing one-level report with a verified video and a selected internal
-transcript, the following command explicitly requests all default levels and
-rebuilds the HTML from that transcript.
+## Report-wide rule for Transcript
+
+Every HTML report must contain exactly one **Transcript** menu with the full
+final transcript and available source views. This applies to YouTube, local
+files, directory batches, monitor mode and HTML rebuilt with `--summary-only`.
+Modes that produce only a log still produce only a log.
+
+`--report-tabs` and `SCRIBE_REPORT_TABS` select the numeric **Summary**
+levels (1 through 10) in display order. The default is `1,3,5,10`. For
+example, `--report-tabs 3` produces an Overview and the full Transcript.
+Every YouTube HTML report also includes **Transcript → Comments**, regardless
+of the numeric selection. A recipient of the standalone HTML can read its
+embedded transcript and any retrieved YouTube comments.
+
+For compatibility, accept the old `transcript` token in existing CLI commands
+and configuration. Discard it when collecting numeric levels. An old list
+containing only that token retains its transcript-only report with zero
+numeric levels. Omission of the option still selects the configured defaults.
+
+Use one numeric resolver across all entry points. Schedule summary work from
+its result and have the HTML renderer add Transcript exactly once, including
+for callers that pass numeric levels directly. Apply the same rule to
+regeneration from saved state. Normalize legacy tab lists on read and reuse
+compatible per-level artifacts. During implementation update the CLI help,
+prompt preview, `.env.example`, README, usage guide, project context and
+tests together. Use numeric-only examples throughout current user guidance.
+
+This command rebuilds an existing one-level YouTube report from its verified
+video and selected internal transcript with all four default Summary levels.
 
 ```sh
-./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID" --summary-only --report-tabs 1 3 5 10 transcript
+./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID" --summary-only --report-tabs 1 3 5 10
 ```
 
 ## What the reader sees
@@ -46,10 +72,10 @@ short digest even at 10/10. Under the **Comments** heading show when the
 snapshot was taken and the retrieved counts of top-level comments and replies.
 Mark partial coverage wherever those counts appear.
 
-Append **Comments** to the existing Transcript menu after its current items.
-Keep one raw panel for the entire report. Summary-only tab selections omit raw
-comment text from the HTML, including hidden data. A transcript-only tab
-selection includes the raw panel and makes zero comment-summary requests.
+Append **Comments** to the YouTube Transcript menu after its current items.
+Embed one raw panel per report, shared by every Summary level. A legacy
+transcript-only selection also includes this panel and makes zero
+comment-summary requests.
 The two existing menus retain their accessible names, keyboard navigation,
 independent selected labels and light/dark presentation. The report embeds
 displayable content and opens independently of the cache. Escape all viewer
@@ -102,7 +128,8 @@ the same way for a fresh or previously downloaded video.
 | `--youtube … --summary-only` | With the existing verified media and internal final, use the cached snapshot. Fetch comments on a cache miss, including for pre-feature reports. Preserve the user's log. Reuse matching per-level digests. |
 | `--summary-only --force` with URL | Apply the same snapshot rule. Recompute selected AI digests under the existing forced report-regeneration behavior. |
 | Ordinary forced URL run | Attempt a fresh snapshot alongside the existing forced processing. An unsuccessful refresh preserves the last usable snapshot and labels its capture date and the refresh failure. |
-| `-f`, directory, monitor or offline processing | Keep existing file behavior. A YouTube-looking filename alone cannot turn on comment fetching or rendering. |
+| `-f`, directory or monitor processing | Include Transcript in every HTML report. Comment acquisition requires URL input. |
+| Offline processing | Produce the usual log only, with no HTML or comment requests. |
 
 ## Prompt and coverage
 
@@ -172,14 +199,24 @@ ownership and backup checks.
 
 - With clean configuration, a mocked ordinary URL run and an equivalent
   `-f` run both render levels 1, 3, 5, 10 and Transcript. Inspect the actual
-  panel IDs and content. Exercise CLI and environment overrides, a single
-  level, a non-default selection such as `7 2 transcript` and both single-menu
-  cases. Only the URL report gets viewer content.
+  panel IDs and content. Exercise CLI, environment and `.env` overrides.
+  Verify `--report-tabs 3` and `--report-tabs 7 2` produce exactly the
+  requested Summary levels in order, plus one full Transcript with available
+  sources. Check file, batch, monitor, regenerated HTML and direct renderer
+  calls. Only the URL report gets viewer content.
+- Load a legacy mixed list from the CLI and from configuration and verify
+  the same panels as its numeric equivalent. A legacy transcript-only list
+  yields one Transcript menu with zero numeric summary calls. Rebuilding an
+  older numeric-only HTML report adds the embedded transcript from the
+  selected final, reusing compatible summaries. The normal completed-pair
+  skip still preserves existing HTML until regeneration is requested.
 - Switch Summary from 1 to 5 and find the matching video and comment digests
   together, separated by a horizontal rule. Select **Transcript → Comments**
   by keyboard. Verify thread order, nested and orphan replies, escaped markup,
   emoji and line breaks. Open the standalone HTML in Firefox with the cache
-  unavailable. Check both themes and that summary-only HTML omits raw text.
+  unavailable. Check both themes. Verify that a YouTube report rebuilt with
+  `--summary-only --report-tabs 3` embeds the final transcript and original
+  comments once each and generates a comment digest only for level 3.
 - With mocked YouTube and AI clients, verify call counts for each mode above.
   Regenerate a legacy one-level URL report from the saved final, fetch comments
   once, then repeat with YouTube blocked. Confirm that completed pairs skip,
