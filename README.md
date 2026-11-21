@@ -43,8 +43,9 @@ Repeating the command reuses a verified local download by video ID before
 contacting YouTube. The new report opens in the default browser.
 
 YouTube reports show the video's publication date when available. The **Comments**
-menu offers discussion digests at the configured detail levels and a
-**Full comments** view with the original discussion and replies for offline reading.
+menu offers discussion digests, **Best comments** with detailed summaries of
+long entries that add specific observations or perspectives, and **Full comments** for
+reading the original discussion and replies offline.
 See the [YouTube usage guide](docs/USAGE.md#youtube-comments).
 
 Downloads start anonymously. If YouTube requires sign-in, sign in on the

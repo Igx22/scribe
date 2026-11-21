@@ -47,6 +47,22 @@ class ReportDropdownTests(unittest.TestCase):
         self.assertTrue(any(a.get('id') == 'transcript-toggle' for _, a in elements))
         self.assertIn('Raw &amp;', content)
 
+    def test_youtube_pickers_and_panels_follow_the_same_order(self):
+        for levels, expected_groups, initial_tab in (
+                ([5, 1], ['detail', 'comments', 'transcript'], 'tab-5'),
+                ([], ['comments', 'transcript'], 'tab-transcript')):
+            with self.subTest(levels=levels):
+                content = self.render(tabs=levels, youtube={'id': 'FLoC0dhY4u4'})
+                elements = Elements(content).elements
+                pickers = [a['id'] for _, a in elements if a.get('class') == 'report-picker']
+                self.assertEqual(pickers, [f'{group}-picker' for group in expected_groups])
+                tabs = [a for _, a in elements if a.get('role') == 'tab']
+                panels = [a for _, a in elements if a.get('role') == 'tabpanel']
+                self.assertLess([a['id'] for a in tabs].index('tab-full-comments'),
+                                [a['id'] for a in tabs].index('tab-transcript'))
+                self.assertEqual([a['aria-controls'] for a in tabs], [a['id'] for a in panels])
+                self.assertEqual([a['id'] for a in tabs if a['aria-selected'] == 'true'], [initial_tab])
+
     def test_final_badge_uses_saved_log_instead_of_assuming_gpt(self):
         for provenance, badge in [
             ('WhisperX large-v3-turbo + nemotron voice/time anchors', 'WhisperX Turbo'),

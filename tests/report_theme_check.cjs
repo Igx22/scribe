@@ -84,6 +84,7 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   // Theme initialization runs in the head, before content is displayed.
   const beforeReady = root.dataset.theme;
   ready();
+  const initialIndex = tabs.findIndex(tab => tab.attrs['aria-selected'] === 'true');
   assert.equal(toggle.hidden, false);
   function theme(expected) {
     assert.equal(beforeReady === 'light' || beforeReady === 'dark', true);
@@ -110,13 +111,28 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
     });
   }
   function checkNavigation() {
-    active(0);
+    active(initialIndex);
     tabs.forEach((tab, i) => { tab.listeners.click(); active(i); });
     for (const [start, key, expected] of [[0, 'End', tabs.length - 1], [tabs.length - 1, 'ArrowRight', 0],
                                          [0, 'ArrowLeft', tabs.length - 1], [tabs.length - 1, 'Home', 0]]) {
       let prevented = false;
       tabs[start].listeners.keydown({key, preventDefault() { prevented = true; }});
       assert.ok(prevented); active(expected); assert.equal(focused, tabs[expected]);
+    }
+    if (names.includes('comments')) {
+      assert.deepEqual(names, names.includes('detail') ? ['detail', 'comments', 'transcript']
+                                                     : ['comments', 'transcript']);
+      for (let i = 0; i + 1 < groupFixtures.length; i++) {
+        const last = groupFixtures[i].tabs.at(-1);
+        const first = groupFixtures[i + 1].tabs[0];
+        last.listeners.keydown({key: 'ArrowRight', preventDefault() {}});
+        active(tabs.indexOf(first));
+        assert.equal(focused, first);
+        first.listeners.keydown({key: 'ArrowLeft', preventDefault() {}});
+        active(tabs.indexOf(last));
+        assert.equal(focused, last);
+      }
+      documentListeners.pointerdown({target: toggle});
     }
     for (const group of groupFixtures) {
       const {name, picker, choice, options, tabs: groupTabs} = group;

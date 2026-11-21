@@ -130,7 +130,9 @@ class CommentRenderingTests(unittest.TestCase):
         report = app.summary_html(Path("video.webm"), {1: "Video brief", 5: "Video expanded"},
                                   transcript="Final words", youtube={"id": VIDEO}, discussion=discussion,
                                   comment_digests={1: [{"title": "", "text": "Brief discussion"}],
-                                                   5: [{"title": "Theme", "text": "Expanded <discussion>"}]})
+                                                   5: [{"title": "Theme", "text": "Expanded <discussion>"}]},
+                                  best_comments=[{"author": "@Alice <viewer>", "title": "Experience & detail",
+                                                  "text": "An account of working with <equipment>."}])
         summary = report.split('id="panel-1"', 1)[1].split('</section>', 1)[0]
         brief = report.split('id="panel-comments-1"', 1)[1].split('</section>', 1)[0]
         expanded = report.split('id="panel-comments-5"', 1)[1].split('</section>', 1)[0]
@@ -139,11 +141,17 @@ class CommentRenderingTests(unittest.TestCase):
         self.assertIn("Brief discussion", brief)
         self.assertNotIn("Video brief", brief)
         self.assertIn("Expanded &lt;discussion&gt;", expanded)
-        self.assertLess(report.index('id="detail-picker"'), report.index('id="transcript-picker"'))
-        self.assertLess(report.index('id="transcript-picker"'), report.index('id="comments-picker"'))
+        self.assertLess(report.index('id="detail-picker"'), report.index('id="comments-picker"'))
+        self.assertLess(report.index('id="comments-picker"'), report.index('id="transcript-picker"'))
         comments_menu = report.split('id="comments-options">')[1].split('</div></div>', 1)[0]
         self.assertLess(comments_menu.index('id="tab-comments-1"'), comments_menu.index('id="tab-comments-5"'))
-        self.assertLess(comments_menu.index('id="tab-comments-5"'), comments_menu.index('id="tab-full-comments"'))
+        self.assertLess(comments_menu.index('id="tab-comments-5"'), comments_menu.index('id="tab-best-comments"'))
+        self.assertLess(comments_menu.index('id="tab-best-comments"'), comments_menu.index('id="tab-full-comments"'))
+        best = report.split('id="panel-best-comments"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("@Alice &lt;viewer&gt;", best)
+        self.assertIn("Experience &amp; detail", best)
+        self.assertIn("&lt;equipment&gt;", best)
+        self.assertNotIn("Same reply", best)
         transcript_menu = report.split('id="transcript-options">')[1].split('</div></div>', 1)[0]
         self.assertNotIn('id="tab-full-comments"', transcript_menu)
         self.assertEqual(report.count('id="panel-full-comments"'), 1)
@@ -160,6 +168,7 @@ class CommentRenderingTests(unittest.TestCase):
         self.assertIn('id="comments-choice-description">Full comments</span>', report)
         self.assertIn('id="panel-full-comments"', report)
         self.assertNotIn('id="tab-comments-1"', report)
+        self.assertNotIn('id="tab-best-comments"', report)
         self.assertNotIn('id="detail-picker"', report)
 
     @staticmethod
@@ -252,6 +261,69 @@ class CommentDigestTests(unittest.TestCase):
             self.assertEqual(len(seen), 10)
 
 
+class BestCommentsTests(unittest.TestCase):
+    def test_rank_uses_own_words_and_keeps_snapshot_order_on_ties(self):
+        comments = [row("first", text="example " * 70), row("longest", text="example " * 90),
+                    row("second", "first", "example " * 70), row("below-cutoff", text="example " * 70)]
+        comments.extend(row(str(i), text="example " * 59 + "🙂 " * 100) for i in range(5))
+        self.assertEqual([item["id"] for item in app.best_comment_candidates(comments)], ["longest", "first", "second"])
+        self.assertEqual(app.best_comment_candidates(comments[4:]), [])
+
+    def test_experience_selection_uses_best_candidates_context_order_and_cache(self):
+        phrase_a = "I have lived here for seven years."
+        phrase_b = "I worked with the equipment for a decade."
+        comments = [{**row("a", "parent", phrase_a + " observation" * 70), "author": "@resident"},
+                    {**row("b", text=phrase_b + " example" * 65), "author": "@operator"},
+                    row("parent", text="This is what the resident replied to.")]
+        comments.extend(row(str(i), text="lower ranked " * 16) for i in range(2))
+        snapshot = {"video_id": VIDEO, "comments": comments}
+        answer = {"themes": [
+            {"title": "Field use", "text": "The operator reports working with the equipment for ten years.",
+             "comment_ids": ["b"], "experience_evidence": phrase_b},
+            {"title": "Local account", "text": "The resident reports seven years of living here.",
+             "comment_ids": ["a"], "experience_evidence": phrase_a},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", return_value=json.dumps(answer)) as api:
+            args = (Path(tmp), snapshot, "The video compares two observations.", "English", "key", "model", "medium")
+            result = app.youtube_best_comments(*args)
+            self.assertEqual([item["author"] for item in result], ["@resident", "@operator"])
+            self.assertEqual(result, app.youtube_best_comments(*args))
+            api.assert_called_once()
+            request = json.loads(api.call_args.args[4])
+            self.assertIn("video compares", request["video_context"])
+            self.assertEqual([record["id"] for record in request["comments"]], ["a", "b"])
+            self.assertIn("resident replied", request["comments"][0]["parent_context"])
+            instructions = " ".join(api.call_args.args[3].lower().split())
+            self.assertIn("weight to experience", instructions)
+            self.assertIn("practical familiarity", instructions)
+            self.assertIn("qualifies without a biographical statement", instructions)
+            self.assertIn("concrete insight", instructions)
+            self.assertIn("overlooked perspective", instructions)
+            fields = api.call_args.kwargs["schema"]["properties"]["themes"]["items"]["required"]
+            self.assertIn("experience_evidence", fields)
+
+    def test_parent_evidence_and_fabricated_quotes_are_rejected(self):
+        comments = [row("reply", "parent", "This reply describes specific outcomes. " + "example " * 66),
+                    row("parent", text="I have worked on this for fifteen years.")]
+        for quote in ("I have worked on this for fifteen years.", "I have worked on this for ten years.",
+                      ".", "his reply describes", "specific outcomes"):
+            model_answer = {"themes": [{"title": "Reply", "text": "Experience claim.",
+                                        "comment_ids": ["reply"], "experience_evidence": quote}]}
+            with self.subTest(quote=quote), tempfile.TemporaryDirectory() as tmp, \
+                    patch.object(app, "api_request", return_value=json.dumps(model_answer)):
+                with self.assertRaisesRegex(app.AppError, "invalid experience evidence"):
+                    app.youtube_best_comments(Path(tmp), {"video_id": VIDEO, "comments": comments},
+                                              "context", "English", "key", "model", "medium")
+                self.assertFalse(list(Path(tmp).glob("*.json")))
+
+    def test_short_discussion_makes_no_requests(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request") as api:
+            result = app.youtube_best_comments(Path(tmp), {"video_id": VIDEO, "comments": [row("short")]},
+                                               "context", "English", "key", "model", "medium")
+        self.assertEqual(result, [])
+        api.assert_not_called()
+
+
 class CommentPipelineTests(unittest.TestCase):
     def test_log_only_url_run_caches_comments_without_any_report_requests(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,6 +370,8 @@ class CommentPipelineTests(unittest.TestCase):
                                  return_value=("complete", [row("one", text="Viewer evidence")])) as fetch, \
                     patch.object(app, "summarize", side_effect=lambda *a, detail: f"Video detail {detail}") as video, \
                     patch.object(app, "extract_report_metadata", return_value={}), \
+                    patch.object(app, "youtube_best_comments", side_effect=[app.AppError("Best digest failure."),
+                                 [{"author": "@Author", "title": "Experience", "text": "Relevant firsthand details."}]]), \
                     patch.object(app, "extract_audio") as audio, patch.object(app, "api_request", side_effect=answer), \
                     patch.object(app.subprocess, "run"):
                 self.assertEqual(app.main(request), 0)
@@ -307,12 +381,14 @@ class CommentPipelineTests(unittest.TestCase):
                 first = report.read_text()
                 self.assertIn("Video detail 5", first)
                 self.assertIn("Comment summary unavailable.", first)
+                self.assertIn("Best comments unavailable.", first)
                 self.assertIn("Viewer evidence", first)
                 self.assertEqual(app.main(regen), 0)
                 second = report.read_text()
                 self.assertIn("Discussion answer 1", second)
                 self.assertIn("Discussion answer 3", second)
                 self.assertNotIn("Comment summary unavailable.", second)
+                self.assertIn("Relevant firsthand details.", second)
                 fetch.assert_called_once()
                 audio.assert_not_called()
                 self.assertEqual(video.call_count, 2)

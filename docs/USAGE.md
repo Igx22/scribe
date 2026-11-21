@@ -175,10 +175,20 @@ JavaScript and media tools if extraction reports a tool error. [Cookie format an
 ### YouTube comments
 
 Scribe uses yt-dlp to retrieve available comments and replies in newest-first
-order. The **Comments** menu independently selects a discussion digest from
-the configured levels. **Comments → Full comments** opens the original
-discussion inside the standalone HTML, including replies in their threads.
+order. YouTube reports order the controls as **Summary → Comments → Transcript**.
+The **Comments** menu independently selects a discussion digest from the
+configured levels. **Comments → Full comments** opens the original discussion
+inside the standalone HTML, including replies in their threads.
 A partial snapshot is labeled with its capture time and retrieved counts.
+
+**Best comments** appears above **Full comments** when summary levels are
+enabled. Scribe takes the longest quarter of individual comments and replies
+and applies a 60-word minimum. The configured summary model checks topic
+relevance and favors firsthand experience and practical familiarity. Specific
+comparisons and well-developed perspectives the video overlooks can also qualify.
+Each selected entry has its own detailed summary and author attribution. Short discussions
+can yield an empty selection. Best comments results are cached with the
+candidate text, video context, model, effort and prompt.
 
 Comment snapshots are cached by source content and YouTube video ID. Ordinary
 runs skip existing completed pairs. To add comments to an existing report or
@@ -189,9 +199,10 @@ change its detail levels, regenerate it from its saved internal transcript.
 ```
 
 Regeneration uses the cached discussion, requesting it from YouTube when the
-snapshot is missing or invalid. `--summary-only --force` recomputes digests from
-that snapshot. An ordinary `--force` run attempts to refresh the discussion
-alongside its normal reprocessing. A failed refresh can reuse the last usable
+snapshot is missing or invalid. `--summary-only --force` recomputes the
+discussion digests and Best comments from that snapshot. An ordinary `--force`
+run attempts to refresh the discussion alongside its normal reprocessing.
+A failed refresh can reuse the last usable
 snapshot. If a digest fails, the report shows the original discussion and any
 successful digests. A requested regeneration retries missing digests.
 

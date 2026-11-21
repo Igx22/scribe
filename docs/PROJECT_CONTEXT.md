@@ -711,6 +711,24 @@ backfilled 20 November 2026 and reused the video, transcript and AI caches. The
 report retained all 107 comments and 28 replies. Firefox opened Full comments
 and switched to 5/10 with Summary still set to 1/10.
 
+### Best comments and picker order (SCR-111 and SCR-112)
+
+Report controls and keyboard navigation follow Summary, Comments, Transcript.
+Best comments considers the longest quarter of individual entries with at
+least 60 words. The summary model gives priority to firsthand experience and
+practical knowledge. A specific comparison or an overlooked perspective can
+also qualify. Each selected entry has one detailed digest in candidate order.
+Scribe validates the supporting excerpt against the author's own text and uses
+the original handle for attribution. Best comments caches are independent of
+the ordinary discussion digests.
+
+On 2026-11-21, 326 mocked tests passed. A live Bali regeneration using
+`gpt-6.1-sol:medium` reviewed six length-qualified entries and selected five.
+The result included all three requested examples of local familiarity, travel
+comparison and an overlooked perspective. The final request used 2,850 input
+and 1,342 output tokens and reused the video, transcript, discussion and
+existing summaries. Firefox displayed Best comments above Full comments.
+
 ### YouTube ingestion verification
 
 On macOS 14.5, Apple Silicon and Python 3.13, fresh setup reused system

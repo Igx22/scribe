@@ -211,6 +211,8 @@
     .picker-options .detail-option { padding-right: 70px; }
     .detail-level { position: absolute; right: 11px; top: 22px; color: var(--muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
     .picker-options .detail-option[data-current="true"]::after { right: 48px; top: 21px; }
+    #comments-options [role="tab"] { min-height: 44px; }
+    #comments-options .detail-level, #comments-options [data-current="true"]::after { top: 13px; }
     .picker-divider { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
     .menu-footer { margin-top: 5px; padding: 10px; border-top: 1px solid var(--line); }
     .menu-footer .processing-badge { display: inline-block; max-width: 100%; }
@@ -233,6 +235,10 @@
     .reconciliation-warning { margin: 20px 40px 0; padding: 12px; border: 1px solid var(--selected-line); border-radius: 6px; color: var(--ink); background: var(--selected-fill); font-size: 13px; line-height: 1.5; }
     .transcript-content { margin-top: 24px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.85; }
     .comment-digest li + li { margin-top: .65em; }
+    .best-comments > ul { list-style: none; margin: 0; padding: 0; }
+    .best-comments li + li { border-top: 1px solid var(--line-soft); margin-top: 20px; padding-top: 20px; }
+    .best-comments h3 { font-size: 16px; margin: 0; }
+    .best-comments p.comment-time { font-size: 12px; margin: 0 0 7px; }
     .comment-thread-list { padding: 0; margin: 0; list-style: none; }
     .comment-thread-list .comment-thread-list { padding-inline-start: 28px; }
     .comment-thread-list .comment-thread-list .comment-thread-list .comment-thread-list { padding-inline-start: 0; }
