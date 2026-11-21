@@ -707,6 +707,41 @@ with 108 at 40. It retained five of six useful entries and omitted all 25
 clear reactions in the original spot check. The 400-comment comparison
 showed poorer decisions in a separate review of disagreements (SCR-123).
 
+On 2026-11-21, a saved discussion with 4,304 entries (906,604 UTF-8 bytes
+in the digest input) yielded 22 batches. At all four levels, the first batch
+returned valid themes exceeding Scribe's 15,000-byte notes limit. Validation
+precedes caching, so each level requested the same batch again. The API
+completed all four requests, but no level reached its final digest request.
+Full comments and Best comments remained available (SCR-116).
+
+On the same snapshot, excluding entries of four words or fewer removed 589 of
+4,304 entries (13.68%) but only 6.58% of serialized digest input bytes. It also
+discarded timestamp references and specific viewer requests. An experimental
+filter limited to standalone reactions removed 86 entries (2.00%). These
+figures describe one video; neither filter was enabled in Scribe (SCR-117).
+
+In a separate experiment on this snapshot, GPT-5 nano at minimal effort
+classified 1,698 entries of up to ten words and flagged 992 for omission
+(23.05% of all entries). In a spot check of 20 flagged entries the reviewer
+would keep eight. Identical top-level suggestions received opposite decisions.
+The filter remains experimental. See the local SCR-118 record for decisions,
+usage, and sampling details.
+
+With stricter inclusion criteria, a full-discussion GPT-5 nano request
+retained one of 4,304 comments with boolean arrays. A keep-ID variant
+retained 603 comments, all within the first 650 input positions. A control
+with batches of 40 dropped 2,547 entries (59.18%) and retained comments
+throughout the input. A 36-entry review found both missed contributions and
+retained filler. See the local SCR-119 record for results and usage.
+
+YouTube Data API supports sorting top-level threads by relevance with up to
+100 threads per page. It exposes like and reply counts but no public comment
+dislike totals or explicit sort by likes. The bundled yt-dlp supports
+`comment_sort=top` and thread and reply limits. The full snapshot requests all
+available comments in `new` order and omits like counts (SCR-120).
+See the [YouTube API parameters](https://developers.google.com/youtube/data/reference/rest/v3/commentThreads/list)
+and [yt-dlp options](https://github.com/yt-dlp/yt-dlp#youtube).
+
 Verification on 2026-11-21 passed 317 mocked tests, including keyboard selection
 of Full comments, comment-cache recovery and bounded batch coverage. Firefox
 showed paired Summary sections and nested replies from an isolated HTML file in
@@ -732,17 +767,21 @@ Report controls and keyboard navigation follow Summary, Comments, Transcript.
 Best comments considers the longest quarter of the retained entries with at
 least 60 words. The summary model gives priority to firsthand experience and
 practical knowledge. A specific comparison or an overlooked perspective can
-also qualify. Each selected entry has one detailed digest in candidate order.
+also qualify. Each selected entry has one retelling in candidate order. The
+prompt retains narrative sequence, examples, caveats and tone in dense entries.
+The expand control opens the original in a dialog from the same embedded
+comment snapshot used by Full comments.
 Scribe validates the supporting excerpt against the author's own text and uses
 the original handle for attribution. Best comments caches are independent of
 the ordinary discussion digests.
 
-On 2026-11-21, 326 mocked tests passed. A live Bali regeneration using
+On 2026-11-21, 327 mocked tests passed. A live Bali regeneration using
 `gpt-6.1-sol:medium` reviewed six length-qualified entries and selected five.
 The result included all three requested examples of local familiarity, travel
-comparison and an overlooked perspective. The final request used 2,850 input
-and 1,342 output tokens and reused the video, transcript, discussion and
-existing summaries. Firefox displayed Best comments above Full comments.
+comparison and an overlooked perspective. The retelling of the longest
+example went from 135 to 239 words on this sample. The request used 2,901 input
+and 1,896 output tokens and reused the video, transcript, discussion and
+existing summaries. Firefox opened the selected original from Best comments.
 
 ### Ranked comments and model labels (SCR-122)
 

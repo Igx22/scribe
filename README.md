@@ -44,7 +44,7 @@ contacting YouTube. The new report opens in the default browser.
 
 YouTube reports show the video's publication date when available. The **Comments**
 menu offers discussion digests and detailed retellings in **Smartest comments**.
-**Top 100 YouTube
+Use the expand icon beside a retelling to read its original. **Top 100 YouTube
 comments** contains up to 100 original top-level comments in YouTube's order.
 **Full comments** contains the full retrieved discussion and replies for offline
 reading. The **Summary** and **Comments** menus identify the models used for
