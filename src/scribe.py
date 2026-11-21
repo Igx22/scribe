@@ -874,27 +874,28 @@ def save_artifact(cache, stage, settings, payload, *, provenance=None):
     return {"file": path.name, "payload_sha256": saved["payload_sha256"]}
 
 
-def youtube_comments_snapshot(cache, video_id, args):
+def youtube_comments_snapshot(cache, video_id, args, *, top=False):
     """Select one validated snapshot while the recording's source lock is held."""
     if not media_input.VIDEO_ID.fullmatch(video_id):
         raise AppError("Invalid YouTube video ID for the comment cache.")
-    stage = "youtube.comments"
+    stage = "youtube.comments-top" if top else "youtube.comments"
     pointer = cache / f"{stage}.{video_id.encode().hex()}.selected.json"
     reference = read_json(pointer)
     previous = None
-    if isinstance(reference, dict) and re.fullmatch(r"youtube\.comments\.[a-f0-9]{64}\.json",
+    if isinstance(reference, dict) and re.fullmatch(rf"{re.escape(stage)}\.[a-f0-9]{{64}}\.json",
                                                    str(reference.get("file", ""))):
         saved = load_artifact(cache / reference["file"], stage)
         if saved and saved["payload_sha256"] == reference.get("payload_sha256"):
             candidate = saved["payload"]
-            if valid_comment_snapshot(candidate, video_id):
+            if valid_comment_snapshot(candidate, video_id, top=top):
                 previous = candidate
     refresh = args.force and not args.summary_only
     if previous is not None and not refresh:
         return previous
-    processing_stage("YouTube comments")
+    stage_label = "Top YouTube comments" if top else "YouTube comments"
+    processing_stage(stage_label)
     try:
-        status, comments = media_input.fetch_youtube_comments(video_id, args, say)
+        status, comments = media_input.fetch_youtube_comments(video_id, args, say, top=top)
     except (media_input.MediaError, OSError, RuntimeError):
         status, comments = "unavailable", []
     parents = sum(row["parent"] == "root" for row in comments)
@@ -904,22 +905,22 @@ def youtube_comments_snapshot(cache, video_id, args):
     preserve = previous is not None and (status == "unavailable" or
         status == "partial" and previous["status"] in ("complete", "empty", "disabled"))
     if status in ("unavailable", "partial"):
-        message = "YouTube comments unavailable." if status == "unavailable" else "YouTube comment retrieval was partial."
+        message = f"{stage_label} unavailable." if status == "unavailable" else f"{stage_label} retrieval was partial."
         say(f"  {message}" + (" Using the previous snapshot." if preserve else ""))
-        diagnostic("YouTube comments", message, previous_snapshot=preserve)
+        diagnostic(stage_label, message, previous_snapshot=preserve)
     if status != "unavailable":
         try:
             ref = save_artifact(cache, stage, {"video_id": video_id, "snapshot": json_identity(snapshot)}, snapshot)
             if not preserve:
                 save_json(pointer, ref)
         except OSError:
-            message = "Could not cache the YouTube discussion. Its retrieved comments are still available for this report."
+            message = f"Could not cache {stage_label}. Retrieved comments are still available for this report."
             say(f"  {message}")
-            diagnostic("YouTube comments", message)
+            diagnostic(stage_label, message)
     return {**previous, "refresh_failed": True} if preserve else snapshot
 
 
-def valid_comment_snapshot(snapshot, video_id):
+def valid_comment_snapshot(snapshot, video_id, *, top=False):
     if (not isinstance(snapshot, dict) or snapshot.get("schema") != 1 or snapshot.get("video_id") != video_id
             or not isinstance(snapshot.get("comments"), list)):
         return False
@@ -931,6 +932,8 @@ def valid_comment_snapshot(snapshot, video_id):
         return False
     rows, invalid = media_input.normalize_youtube_comments(snapshot["comments"])
     parents = sum(row["parent"] == "root" for row in rows)
+    if top and (len(rows) != parents or parents > media_input.YOUTUBE_TOP_COMMENT_LIMIT):
+        return False
     statuses = ("complete", "partial") if rows else ("empty", "disabled")
     return (not invalid and rows == snapshot["comments"] and snapshot.get("status") in statuses
             and snapshot.get("top_level") == parents and snapshot.get("replies") == len(rows) - parents)
@@ -1741,6 +1744,24 @@ def record_text_usage(result, model, effort):
             "status": result.get("status"), "service_tier": result.get("service_tier")})
 
 
+def record_report_models(models, settings, responses):
+    if models is None:
+        return
+    # Use returned modes where recorded. Legacy results still have validated request settings.
+    completed = [item for item in responses if isinstance(item, dict) and item.get("status") == "completed"]
+    for result in completed or [{}]:
+        model = result.get("model") or settings["model"]
+        tier = result.get("service_tier") or settings.get("tier")
+        reasoning = result.get("reasoning") or {}
+        effort = reasoning.get("effort") or settings.get("effort")
+        label = "GPT-6 Luna" if model == "gpt-6-luna" else re.sub(r"^gpt-", "GPT-", model)
+        if tier and tier not in ("default", "auto"):
+            label += f" {tier.title()}"
+        if effort:
+            label += " · no reasoning" if effort == "none" else f" · {effort} reasoning"
+        models.add(label)
+
+
 def api_request(key, model, effort, instructions, text, schema=None, max_output_tokens=12000, *, service_tier=None):
     if not key:
         raise AppError("OPENAI_API_KEY is required for text fusion and summaries; the local log is saved.")
@@ -2127,11 +2148,12 @@ def ordered_comments(rows):
             stack.extend((child, depth + 1) for child in reversed(children.get(row["id"], ())))
 
 
-def discussion_header(discussion):
+def discussion_header(discussion, *, top=False):
     if not discussion or discussion["status"] == "unavailable":
         return "", "YouTube comments unavailable."
     date = datetime.fromisoformat(discussion["captured_at"]).strftime("%Y-%m-%d %H:%M UTC")
-    info = f'{discussion["top_level"]:,} top-level · {discussion["replies"]:,} replies · {date}'
+    scope = "YouTube order" if top else f'{discussion["replies"]:,} replies'
+    info = f'{discussion["top_level"]:,} top-level · {scope} · {date}'
     if discussion["status"] == "partial":
         info = "Partial discussion · " + info
     if discussion.get("refresh_failed"):
@@ -2140,7 +2162,7 @@ def discussion_header(discussion):
                   "empty": "No comments were present when this discussion was retrieved."}.get(discussion["status"], "")
 
 
-def full_comments_html(discussion, fallback):
+def original_comments_html(discussion, fallback):
     rows = discussion.get("comments", []) if discussion else []
     if not rows:
         return f'<p class="comment-status">{html.escape(fallback)}</p>'
@@ -2185,7 +2207,7 @@ def comment_digest_html(themes, fallback):
 
 def best_comments_html(entries, fallback, originals):
     if entries is None:
-        return f'<p>{html.escape(fallback or "Best comments unavailable.")}</p>'
+        return f'<p>{html.escape(fallback or "Smartest comments unavailable.")}</p>'
     if not entries:
         return "<p>No retrieved comments met the length and experience criteria.</p>"
     items = []
@@ -2220,8 +2242,8 @@ def best_comments_html(entries, fallback, originals):
 
 
 def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None,
-                 summary_model=None, youtube=None, discussion=None, comment_digests=None, best_comments=None,
-                 comment_filter=None):
+                 summary_models=(), youtube=None, discussion=None, top_comments=None, comment_digests=None,
+                 best_comments=None, comment_filter=None, comment_filter_models=(), comment_summary_models=()):
     """Render model text as escaped data in a self-contained, offline report."""
     levels = list(summaries) if tabs is None else list(dict.fromkeys(summary_levels(tabs)))
     labels = {
@@ -2231,8 +2253,14 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
         10: ("In depth", "All substantive threads"),
     }
     buttons, panels = [], []
-    model_label = re.sub(r"^gpt-", "GPT-", summary_model) if summary_model else ""
-    summary_badge = f'<span class="processing-badge">{html.escape(model_label)}</span>' if model_label else ""
+
+    def model_footer(*groups):
+        rows = []
+        for label, models in groups:
+            badges = "".join(f'<span class="processing-badge">{html.escape(model)}</span>' for model in sorted(models))
+            if badges:
+                rows.append(f'<div class="model-row"><span>{label}</span>{badges}</div>' if label else badges)
+        return '<div class="menu-footer">' + "".join(rows) + '</div>' if rows else ""
 
     def picker(identifier, title, description, items, icon):
         return (f'<div class="report-picker" id="{identifier}-picker">'
@@ -2255,6 +2283,14 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                 f'<span class="tab-title">{label}</span>{subtitle}'
                 f'<span class="detail-level">{detail}/10</span></button>')
 
+    def comment_item(identifier, label, icon):
+        return (f'<button type="button" role="tab" id="tab-{identifier}" data-choice-label="{label}" '
+                f'aria-controls="panel-{identifier}" aria-selected="false" tabindex="-1">'
+                '<span class="tab-title comment-option-title">'
+                '<svg class="comment-option-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" '
+                f'aria-hidden="true" focusable="false">{icon}</svg><span>{label}</span></span></button>')
+
     def panel(identifier, heading, body, *, meta="", active=False):
         panels.append(f'<section role="tabpanel" id="panel-{identifier}" aria-labelledby="tab-{identifier}" '
                       f'tabindex="0"{"" if active else " hidden"}>'
@@ -2275,8 +2311,7 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
         icon = ('<svg class="picker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
                 'stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">'
                 '<path d="M4 6h16M4 12h12M4 18h8"/></svg>')
-        if summary_badge:
-            detail_items.append(f'<div class="menu-footer">{summary_badge}</div>')
+        detail_items.append(model_footer(("", summary_models)))
         first = levels[0]
         buttons.append(picker("detail", "Summary", f"{level_label(first)} · {first}/10", detail_items, icon))
 
@@ -2298,19 +2333,25 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                   meta=f'<span>{meta}</span>')
         if comment_items:
             comment_items.append('<hr class="picker-divider">')
-            comment_items.append('<button type="button" role="tab" id="tab-best-comments" '
-                                 'data-choice-label="Best comments" aria-controls="panel-best-comments" '
-                                 'aria-selected="false" tabindex="-1"><span class="tab-title">Best comments</span></button>')
+            comment_items.append(comment_item("smartest-comments", "Smartest comments",
+                '<path d="M12 5a3 3 0 0 0-6-.5 4 4 0 0 0-2.1 6A4 4 0 0 0 6 18a3 3 0 0 0 6 1V5Zm0 0a3 3 0 0 1 6-.5 '
+                '4 4 0 0 1 2.1 6A4 4 0 0 1 18 18a3 3 0 0 1-6 1M6 4.5A4 4 0 0 0 8 8m-4.1 2.5A4 4 0 0 1 7 12'
+                'm-1 6a4 4 0 0 1 2-3m10-10.5A4 4 0 0 1 16 8m4.1 2.5A4 4 0 0 0 17 12m1 6a4 4 0 0 0-2-3"/>'))
             best_info = " · ".join(part for part in (
                 f"{len(best_comments):,} selected" if best_comments is not None else "", digest_info) if part)
             original_ids = {row["id"] for row in (discussion or {}).get("comments", [])}
-            panel("best-comments", "Best comments", best_comments_html(best_comments, comment_fallback, original_ids),
+            panel("smartest-comments", "Smartest comments", best_comments_html(best_comments, comment_fallback, original_ids),
                   meta=f"<span>{html.escape(best_info)}</span>" if best_info else "")
-        comment_items.append('<button type="button" role="tab" id="tab-full-comments" '
-                             'data-choice-label="Full comments" aria-controls="panel-full-comments" '
-                             'aria-selected="false" tabindex="-1"><span class="tab-title">Full comments</span></button>')
+        comment_items.append(comment_item("top-comments", "Top 100 YouTube comments",
+            '<rect x="2.5" y="5.5" width="19" height="13" rx="3"/><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none"/>'))
+        top_info, top_fallback = discussion_header(top_comments, top=True)
+        panel("top-comments", "Top 100 YouTube comments", original_comments_html(top_comments, top_fallback),
+              meta=f"<span>{html.escape(top_info)}</span>" if top_info else "")
+        comment_items.append(comment_item("full-comments", "Full comments",
+            '<path d="M5 3h9l5 5v13H5zM14 3v5h5M8 11h8m-8 3h8m-8 3h6"/>'))
         comment_meta = f"<span>{html.escape(comment_info)}</span>" if comment_info else ""
-        panel("full-comments", "Full comments", full_comments_html(discussion, comment_fallback), meta=comment_meta)
+        panel("full-comments", "Full comments", original_comments_html(discussion, comment_fallback), meta=comment_meta)
+        comment_items.append(model_footer(("Filter", comment_filter_models), ("Summaries", comment_summary_models)))
         icon = ('<svg class="picker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
                 'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" '
                 'aria-hidden="true" focusable="false">'
@@ -2458,7 +2499,7 @@ def comment_parent_context(row, parents):
     return parent[:400] if parent is not None and row["parent"] != row["id"] else ""
 
 
-def filter_youtube_comments(cache, snapshot, title, key, force=False):
+def filter_youtube_comments(cache, snapshot, title, key, force=False, *, models=None):
     """Save reusable filter decisions separately from the original discussion."""
     comments = snapshot["comments"]
     parents = {row["id"]: row["text"] for row in comments}
@@ -2515,6 +2556,7 @@ def filter_youtube_comments(cache, snapshot, title, key, force=False):
         ids = saved.get("kept") if isinstance(saved, dict) else None
         if isinstance(ids, list) and all(isinstance(i, str) and i in local.values() for i in ids):
             kept.update(ids)
+            record_report_models(models, batch_settings, saved.get("responses") or [])
         else:
             pending.append(batch)
 
@@ -2540,6 +2582,7 @@ def filter_youtube_comments(cache, snapshot, title, key, force=False):
                 else:
                     kept.update(ids)
                     save_artifact(cache, stage, batch_settings, {"kept": ids, "responses": responses})
+                    record_report_models(models, batch_settings, responses)
                 if index == len(pending) or index % 10 == 0:
                     say(f"  YouTube comment filter: {index}/{len(pending)} batches finished.")
     selected = []
@@ -2617,7 +2660,7 @@ def comment_request_ids(payload, ids):
 
 
 def comment_model_stage(cache, stage, settings, payload, ids, key, *, output_tokens, force=False, note_limit=None,
-                        experience_sources=None):
+                        experience_sources=None, models=None):
     coverage = [{"id": row["id"], "part": row.get("part", 1)} for row in payload.get("comments", ())]
 
     def checked_themes(result):
@@ -2633,9 +2676,12 @@ def comment_model_stage(cache, stage, settings, payload, ids, key, *, output_tok
     saved = artifact_payload(cache, stage, settings, force)
     if isinstance(saved, dict) and saved.get("coverage", []) == coverage:
         try:
-            return checked_themes(saved)
+            themes = checked_themes(saved)
         except AppError:
             pass
+        else:
+            record_report_models(models, settings, saved.get("responses") or [])
+            return themes
     stage_label = stage.replace(".", " ")
     processing_stage(stage_label, model=settings["model"], effort=settings["effort"])
     request_payload, source_ids = comment_request_ids(payload, ids)
@@ -2657,6 +2703,7 @@ def comment_model_stage(cache, stage, settings, payload, ids, key, *, output_tok
         {**theme, "comment_ids": [source_ids[i] for i in theme["comment_ids"]]} for theme in themes
     ]})
     save_artifact(cache, stage, settings, {"themes": themes, "responses": responses, "coverage": coverage})
+    record_report_models(models, settings, responses)
     return themes
 
 
@@ -2738,7 +2785,7 @@ def comment_batches(ordered, limit):
         yield {"comments": pending}
 
 
-def youtube_comment_digest(cache, snapshot, language, level, key, model, effort, force=False):
+def youtube_comment_digest(cache, snapshot, language, level, key, model, effort, force=False, *, models=None):
     ordered = [({field: row[field] for field in ("id", "parent", "text", "parent_context") if field in row}, depth)
                for row, depth in ordered_comments(snapshot["comments"])]
     payload = {"comments": [row for row, _ in ordered]}
@@ -2761,9 +2808,12 @@ def youtube_comment_digest(cache, snapshot, language, level, key, model, effort,
     cached = artifact_payload(cache, stage, settings, force)
     if cached is not None:
         try:
-            return validate_comment_themes(cached, ids)
+            themes = validate_comment_themes(cached, ids)
         except AppError:
             pass
+        else:
+            record_report_models(models, settings, cached.get("responses") or [])
+            return themes
     if len(reconciliation_json(payload).encode()) > limit:
         note_limit = limit // 4
         note_prompt = COMMENT_NOTES_PROMPT.format(language=language, limit=note_limit)
@@ -2816,7 +2866,7 @@ def youtube_comment_digest(cache, snapshot, language, level, key, model, effort,
         if not payload["notes"]:
             return []
     return comment_model_stage(cache, stage, settings, payload, ids, key,
-                               output_tokens=min(output, max(12000, level * 1000 + 6000)), force=force)
+                               output_tokens=min(output, max(12000, level * 1000 + 6000)), force=force, models=models)
 
 
 def comment_word_count(text):
@@ -2829,7 +2879,7 @@ def best_comment_candidates(comments):
     return [row for count, row in ranked[:math.ceil(len(ranked) / 4)] if count >= BEST_COMMENT_MIN_WORDS]
 
 
-def youtube_best_comments(cache, snapshot, video_context, language, key, model, effort, force=False):
+def youtube_best_comments(cache, snapshot, video_context, language, key, model, effort, force=False, *, models=None):
     candidates = best_comment_candidates(snapshot["comments"])
     if not candidates:
         return []
@@ -2853,7 +2903,8 @@ def youtube_best_comments(cache, snapshot, video_context, language, key, model, 
         settings = {"video_id": snapshot["video_id"], "model": model, "effort": effort,
                     "prompt": prompt, "source": json_identity(payload)}
         themes = comment_model_stage(cache, "youtube.best-comments", settings, payload, sources.keys(), key,
-                                     output_tokens=min(output, 16000), force=force, experience_sources=sources)
+                                     output_tokens=min(output, 16000), force=force, experience_sources=sources,
+                                     models=models)
         chosen.update((theme["comment_ids"][0], theme) for theme in themes)
     return [{"comment_id": row["id"], "author": row["author"], "title": chosen[row["id"]]["title"],
              "text": chosen[row["id"]]["text"]}
@@ -4247,14 +4298,17 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
     discussion = youtube_comments_snapshot(cache, youtube["id"], args) if youtube is not None else None
     if args.summarize_model is None:
         return
+    top_comments = youtube_comments_snapshot(cache, youtube["id"], args, top=True) if youtube is not None else None
     model, effort = args.summarize_model
     summaries = {}
+    summary_models = set()
     for level in summary_levels(args.report_tabs):
         summary_settings = {"final": reference, "transcript": transcript_hash, "model": model, "effort": effort,
                             "detail": level, "prompt": summary_prompt(level), "notes_prompt": notes_prompt(level)}
         stage = f"summary.level-{level}"
         payload = artifact_payload(cache, stage, summary_settings, args.force)
         answer = payload.get("text") if isinstance(payload, dict) else None
+        responses = (payload.get("responses") or []) if isinstance(payload, dict) else []
         if answer is None and context and not args.force:
             old_path = context["output"] / "summary-pending.json"
             pending = read_json(old_path, {})
@@ -4266,6 +4320,7 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
                     and isinstance(pending.get("answers"), dict)):
                 answer = pending["answers"].get(str(level))
                 if isinstance(answer, str) and answer.strip():
+                    responses = []
                     save_artifact(cache, stage, summary_settings, {"text": answer, "responses": []},
                                   provenance=legacy_provenance(old_path))
         if not isinstance(answer, str) or not answer.strip():
@@ -4282,35 +4337,41 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
             save_artifact(cache, stage, summary_settings, {"text": answer, "responses": responses})
         else:
             say(f"  Reusing summary detail {level}/10.")
+        record_report_models(summary_models, summary_settings, responses)
         summaries[level] = answer
     comment_digests = {}
     best_comments = None
     comment_filter = None
+    filter_models, comment_models = set(), set()
     if discussion and discussion["comments"] and summaries:
         language = discussion_language(final)
         try:
             selected, comment_filter = filter_youtube_comments(
-                cache, discussion, youtube.get("title") or "", key, args.force)
+                cache, discussion, youtube.get("title") or "", key, args.force, models=filter_models)
         except (AppError, OSError) as exc:
             say("  YouTube comment filter unavailable; keeping the original discussion for the digests.")
             diagnostic("YouTube comment filter", exc, fallback="keep original")
             selected = discussion
+            filter_models.clear()
             comment_filter = {"kept": len(discussion["comments"]), "unfiltered": len(discussion["comments"])}
         for level in summaries:
             try:
                 comment_digests[level] = (youtube_comment_digest(
                     cache, selected, language, level, key, COMMENT_SUMMARY_MODEL, COMMENT_SUMMARY_EFFORT,
-                    args.force) if selected["comments"] else [])
+                    args.force, models=comment_models) if selected["comments"] else [])
             except (AppError, OSError) as exc:
                 say(f"  Comment summary unavailable at {level}/10.")
                 diagnostic(f"YouTube comment summary {level}/10", exc)
         try:
             video_context = (youtube.get("title") or "") + "\n\n" + summaries[min(summaries)]
+            best_models = set()
             best_comments = youtube_best_comments(cache, selected, video_context, language, key,
-                                                 COMMENT_SUMMARY_MODEL, COMMENT_SUMMARY_EFFORT, args.force)
+                                                 COMMENT_SUMMARY_MODEL, COMMENT_SUMMARY_EFFORT, args.force,
+                                                 models=best_models)
+            comment_models.update(best_models)
         except (AppError, OSError) as exc:
-            say("  Best comments unavailable.")
-            diagnostic("YouTube best comments", exc)
+            say("  Smartest comments unavailable.")
+            diagnostic("YouTube Smartest comments", exc)
     processing_stage("report header", model=model, effort=effort)
     try:
         extracted = extract_report_metadata(transcript, key, model, effort, cache, args.force)
@@ -4322,8 +4383,10 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
         extracted = {}
     content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
-                           summary_model=model, youtube=youtube, discussion=discussion,
-                           comment_digests=comment_digests, best_comments=best_comments, comment_filter=comment_filter)
+                           summary_models=summary_models, youtube=youtube, discussion=discussion,
+                           top_comments=top_comments, comment_digests=comment_digests, best_comments=best_comments,
+                           comment_filter=comment_filter, comment_filter_models=filter_models,
+                           comment_summary_models=comment_models)
     if not source_unchanged(source, snapshot, signature):
         raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
     if summary_path.exists():
@@ -4492,8 +4555,8 @@ def build_parser():
                    cache_dir=APP_DATA / ".cache")
     p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
                    default=os.getenv("SCRIBE_SUMMARIZE_MODEL", f"{DEFAULT_MODEL}:{DEFAULT_EFFORT}"),
-                   help="Recording summary and final GPT reconciliation model/effort. YouTube comment sections "
-                        "use Luna medium. none disables reports; reconciliation then uses Sol medium unless --offline")
+                   help="Recording summary and final GPT reconciliation model/effort. YouTube discussion digests and "
+                        "retellings use Luna medium. none disables reports; reconciliation then uses Sol medium unless --offline")
     p.add_argument("--report-tabs", type=parse_report_tabs, action=ReportTabsAction,
                    nargs="+", metavar="LEVEL[,LEVEL]",
                    default=os.getenv("SCRIBE_REPORT_TABS", DEFAULT_REPORT_TABS),

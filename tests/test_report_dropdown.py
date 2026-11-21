@@ -88,7 +88,7 @@ class ReportDropdownTests(unittest.TestCase):
         log = app.transcript_text(Path('meeting.mkv'), 1, [], provenance=
             'GPT-Transcribe text + WhisperX / nemotron voice/time anchors; reconciled by gpt-6-luna')
         content = app.summary_html(Path('meeting.mkv'), {10: 'Detailed.', 1: 'Brief.', 5: 'Expanded.'},
-            transcript=log, tabs=[10, 1, 5, 'transcript'], summary_model='gpt-6.1-sol')
+            transcript=log, tabs=[10, 1, 5, 'transcript'], summary_models=['GPT-6.1-sol'])
         menu = content.split('id="detail-options">')[1].split('</div></div>')[0]
         elements = Elements(menu).elements
         self.assertEqual([a['id'] for _, a in elements if a.get('role') == 'tab'],
@@ -103,11 +103,11 @@ class ReportDropdownTests(unittest.TestCase):
         self.assertIn('<div class="menu-footer"><span class="processing-badge">GPT-6.1-sol</span></div>', content)
 
     def test_detail_badges_do_not_guess_unknown_provenance_and_escape_model_labels(self):
-        for model, expected in [(None, None), ('<img src=x>', '&lt;img src=x&gt;')]:
-            content = self.render(tabs=[1], summary_model=model)
+        for models, expected in [((), []), (['<img src=x>'], ['&lt;img src=x&gt;'])]:
+            content = self.render(tabs=[1], summary_models=models)
             menu = content.split('id="detail-options">')[1].split('</div></div>')[0]
             badges = re.findall(r'class="processing-badge">([^<]+)', menu)
-            self.assertEqual(badges, [] if expected is None else [expected])
+            self.assertEqual(badges, expected)
             self.assertNotIn('<img', content)
 
     def test_pipeline_passes_the_summary_model_and_grouped_selections_keep_their_order(self):
@@ -119,16 +119,25 @@ class ReportDropdownTests(unittest.TestCase):
             args.cache_dir = root / 'cache'
             log, report = app.output_paths(source, args.output_dir)
             seed_final(source, args, 'Saved final log.')
-            with patch.object(app, 'summarize', return_value='Summary.'), \
+
+            def summarize(*_args, detail):
+                app.CURRENT_RESPONSES.get().append({'status': 'completed', 'model': 'gpt-6-luna-snapshot',
+                                                     'reasoning': {'effort': 'low'}})
+                return f'Summary {detail}.'
+
+            with patch.object(app, 'summarize', side_effect=summarize) as generate, \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'fixture-key')
+                app.process_file(source, args, 'fixture-key')
+                self.assertEqual(generate.call_count, 2)
             content = report.read_text()
             elements = Elements(content).elements
             tabs = [a for _, a in elements if a.get('role') == 'tab']
             panels = [a for _, a in elements if a.get('role') == 'tabpanel']
             self.assertEqual([a['id'] for a in tabs], ['tab-10', 'tab-1', 'tab-transcript'])
             self.assertEqual([a['aria-controls'] for a in tabs], [a['id'] for a in panels])
-            self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', content), ['GPT-6-luna'])
+            self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', content),
+                             ['GPT-6-luna-snapshot · low reasoning'])
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is optional for offline JavaScript checks')
     def test_keyboard_and_theme_work_for_all_report_menus(self):

@@ -336,6 +336,7 @@ def download_attempt(url, scratch, say, *, cookie_file=None, browser=None):
 
 
 COMMENT_FIELDS = ("id", "parent", "author", "text")
+YOUTUBE_TOP_COMMENT_LIMIT = 100
 
 
 def normalize_youtube_comments(entries):
@@ -387,8 +388,8 @@ class CommentMessages(DownloadMessages):
         self.incomplete = True
 
 
-def fetch_youtube_comments(video_id, args, say):
-    """Retrieve all available threads without transferring the video or its audio."""
+def fetch_youtube_comments(video_id, args, say, *, top=False):
+    """Retrieve the full discussion or YouTube's top threads without downloading media."""
     try:
         from yt_dlp import YoutubeDL
         from yt_dlp.cookies import CookieLoadError
@@ -396,17 +397,22 @@ def fetch_youtube_comments(video_id, args, say):
     except ImportError:
         raise MediaError("YouTube comment extraction tools are unavailable.") from None
     credentials = (args.cookies, args.cookies_from_browser)
+    extractor_args = {"comment_sort": ["top" if top else "new"], "raise_incomplete_data": ["true"]}
+    if top:
+        # yt-dlp limits total comments, parents, replies, and replies per thread.
+        limit = str(YOUTUBE_TOP_COMMENT_LIMIT)
+        extractor_args["max_comments"] = [limit, limit, "0", "0"]
+    stage = "Fetching top YouTube comments" if top else "Fetching YouTube comments"
     for cookie_file, browser in ((None, None), credentials) if any(credentials) else ((None, None),):
         logger = CommentMessages()
         options = {"getcomments": True, "noplaylist": True, "allowed_extractors": ["youtube"],
                    "ignore_no_formats_error": True, "ignoreerrors": True,
                    "cachedir": False, "quiet": True, "logger": logger, "socket_timeout": 20,
-                   "extractor_args": {"youtube": {"comment_sort": ["new"],
-                                                  "raise_incomplete_data": ["true"]}},
+                   "extractor_args": {"youtube": extractor_args},
                    "js_runtimes": {"deno": {"path": str(deno_executable())}}}
         try:
             options.update(youtube_credentials(cookie_file, browser))
-            with DownloadProgress(say, initial_stage="Fetching YouTube comments"), YoutubeDL(options) as downloader:
+            with DownloadProgress(say, initial_stage=stage), YoutubeDL(options) as downloader:
                 info = downloader.extract_info(watch_url(video_id), download=False)
         except DownloadError as exc:
             logger.error(str(exc))
@@ -422,6 +428,10 @@ def fetch_youtube_comments(video_id, args, say):
         count = info.get("comment_count")
         if isinstance(raw, list):
             rows, malformed = normalize_youtube_comments(raw)
+            if top:
+                parents = [row for row in rows if row["parent"] == "root"]
+                malformed |= len(parents) != len(rows)
+                rows = parents[:YOUTUBE_TOP_COMMENT_LIMIT]
             if rows:
                 status = "partial" if malformed or count is None or logger.incomplete else "complete"
                 return status, rows

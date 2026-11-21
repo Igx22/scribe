@@ -694,7 +694,7 @@ See the [design](superpowers/specs/2026-11-21-youtube-comments-design.md) and
 [regeneration workflow](USAGE.md#youtube-comments).
 
 Scribe filters the saved discussion using GPT-6 Luna Fast with reasoning set
-to `none`. Luna with medium reasoning generates the digests and Best comments.
+to `none`. Luna with medium reasoning generates the digests and Smartest comments.
 Failed filter batches remain in review and are retried on regeneration.
 Full comments uses the raw snapshot. Digests use short request-local
 supporting IDs mapped back to the originals. Over-budget notes trigger
@@ -743,6 +743,24 @@ The result included all three requested examples of local familiarity, travel
 comparison and an overlooked perspective. The final request used 2,850 input
 and 1,342 output tokens and reused the video, transcript, discussion and
 existing summaries. Firefox displayed Best comments above Full comments.
+
+### Ranked comments and model labels (SCR-122)
+
+The **Top 100 YouTube comments** view uses an independent yt-dlp snapshot with
+`comment_sort=top`, a 100-parent cap and zero replies. It embeds the returned text
+in extraction order. **Smartest comments** keeps the existing retellings and
+original-text dialogs. The Summary and Comments footers use model, effort and
+service tier from successful responses when available, falling back to the
+validated settings of reused artifacts that predate response recording.
+
+On 2026-11-21, a live request for `m94OMx1eBy0` returned 100 top-level comments.
+Firefox matched all IDs and full texts in order, checked the updated menus and
+confirmed the same summaries and transcript as the preserved Luna report. The
+new report reused `gpt-6.1-sol:medium` for the video, `gpt-6-luna` Fast with
+reasoning `none` for filtering, and `gpt-6-luna:medium` for four digests and
+18 retellings. Reusing the prior 40-comment filter batches kept the identical
+838-comment selection. The regeneration made no model requests. All 335 mocked
+tests passed.
 
 ### YouTube ingestion verification
 

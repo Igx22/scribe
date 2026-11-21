@@ -30,8 +30,22 @@ class ExtractionTests(unittest.TestCase):
                 VIDEO, SimpleNamespace(cookies=None, cookies_from_browser=None), Mock())
         downloader.extract_info.assert_called_once_with(app.media_input.watch_url(VIDEO), download=False)
         self.assertTrue(client.call_args.args[0]["getcomments"])
+        self.assertEqual(client.call_args.args[0]["extractor_args"]["youtube"]["comment_sort"], ["new"])
         self.assertEqual(status, "complete")
         self.assertEqual(comments, [row("one"), {**row("two", "one", "<tag>\nтекст"), "published": "2 days ago"}])
+
+    def test_top_requests_only_100_parents_in_youtube_order(self):
+        entries = [row(str(i), text=f"{i}: <original>\n🙂") for i in reversed(range(102))]
+        with patch("yt_dlp.YoutubeDL") as client:
+            downloader = client.return_value.__enter__.return_value
+            downloader.extract_info.return_value = {"id": VIDEO, "comments": entries, "comment_count": len(entries)}
+            status, comments = app.media_input.fetch_youtube_comments(
+                VIDEO, SimpleNamespace(cookies=None, cookies_from_browser=None), Mock(), top=True)
+        downloader.extract_info.assert_called_once_with(app.media_input.watch_url(VIDEO), download=False)
+        options = client.call_args.args[0]["extractor_args"]["youtube"]
+        self.assertEqual(options["comment_sort"], ["top"])
+        self.assertEqual(options["max_comments"], ["100", "100", "0", "0"])
+        self.assertEqual((status, comments), ("complete", entries[:100]))
 
     def test_empty_disabled_interrupted_and_indeterminate_are_distinct(self):
         for fields, expected in (({"comments": [], "comment_count": 0}, "empty"),
@@ -120,6 +134,23 @@ class SnapshotTests(unittest.TestCase):
                 self.assertEqual(app.youtube_comments_snapshot(cache, VIDEO, args)["status"], "empty")
             self.assertEqual(fetch.call_count, 4)
 
+    def test_ranked_snapshot_is_independent_and_cannot_replace_full_discussion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            args = SimpleNamespace(force=False, summary_only=True)
+            full_rows = [row("new"), row("reply", "new"), row("popular")]
+            top_rows = [row("popular"), row("new")]
+            with patch.object(app.media_input, "fetch_youtube_comments",
+                              side_effect=[("complete", full_rows), ("complete", top_rows)]) as fetch:
+                full = app.youtube_comments_snapshot(cache, VIDEO, args)
+                top = app.youtube_comments_snapshot(cache, VIDEO, args, top=True)
+                self.assertEqual(full["comments"], full_rows)
+                self.assertEqual(top["comments"], top_rows)
+                self.assertEqual(app.youtube_comments_snapshot(cache, VIDEO, args), full)
+                self.assertEqual(app.youtube_comments_snapshot(cache, VIDEO, args, top=True), top)
+                self.assertFalse(app.valid_comment_snapshot(full, VIDEO, top=True))
+            self.assertEqual([call.kwargs["top"] for call in fetch.call_args_list], [False, True])
+
 
 class CommentRenderingTests(unittest.TestCase):
     def test_comments_menu_has_its_own_levels_and_one_escaped_raw_view(self):
@@ -145,9 +176,8 @@ class CommentRenderingTests(unittest.TestCase):
         self.assertLess(report.index('id="comments-picker"'), report.index('id="transcript-picker"'))
         comments_menu = report.split('id="comments-options">')[1].split('</div></div>', 1)[0]
         self.assertLess(comments_menu.index('id="tab-comments-1"'), comments_menu.index('id="tab-comments-5"'))
-        self.assertLess(comments_menu.index('id="tab-comments-5"'), comments_menu.index('id="tab-best-comments"'))
-        self.assertLess(comments_menu.index('id="tab-best-comments"'), comments_menu.index('id="tab-full-comments"'))
-        best = report.split('id="panel-best-comments"', 1)[1].split("</section>", 1)[0]
+        self.assertLess(comments_menu.index('id="tab-comments-5"'), comments_menu.index('id="tab-smartest-comments"'))
+        best = report.split('id="panel-smartest-comments"', 1)[1].split("</section>", 1)[0]
         self.assertIn("@Alice &lt;viewer&gt;", best)
         self.assertIn("Experience &amp; detail", best)
         self.assertIn("&lt;equipment&gt;", best)
@@ -173,8 +203,31 @@ class CommentRenderingTests(unittest.TestCase):
         self.assertIn('id="comments-choice-description">Full comments</span>', report)
         self.assertIn('id="panel-full-comments"', report)
         self.assertNotIn('id="tab-comments-1"', report)
-        self.assertNotIn('id="tab-best-comments"', report)
+        self.assertIn('id="tab-top-comments"', report)
+        self.assertNotIn('id="tab-smartest-comments"', report)
         self.assertNotIn('id="detail-picker"', report)
+
+    def test_ranked_comments_keep_original_text_and_raw_views_have_no_model_labels(self):
+        ranked = [row("z", text="A <tag> & line\n" + "🙂 " * 500), row("a", text="Second")]
+        top = {"comments": ranked, "status": "complete", "top_level": 2, "replies": 0,
+               "captured_at": "2026-11-21T07:13:00+00:00"}
+        report = app.summary_html(
+            Path("video.webm"), {1: "Video brief"}, transcript="Final words", youtube={"id": VIDEO},
+            top_comments=top, comment_filter_models=["GPT-6 Luna Fast · no reasoning"],
+            comment_summary_models=["GPT-6 Luna · medium reasoning"])
+        menu = report.split('id="comments-options">')[1].split('</div></div>', 1)[0]
+        labels = ["Smartest comments", "Top 100 YouTube comments", "Full comments"]
+        self.assertEqual(sorted(labels, key=lambda label: menu.index(f'>{label}</span>')), labels)
+        self.assertEqual(menu.count('class="comment-option-icon"'), 3)
+        self.assertGreater(menu.index('class="menu-footer"'), menu.index('>Full comments</span>'))
+        self.assertIn('>Filter</span><span class="processing-badge">GPT-6 Luna Fast · no reasoning', menu)
+        self.assertIn('>Summaries</span><span class="processing-badge">GPT-6 Luna · medium reasoning', menu)
+        top_panel = report.split('id="panel-top-comments"', 1)[1].split('</section>', 1)[0]
+        self.assertEqual(self.comment_elements(top_panel), ['z', 'a'])
+        self.assertIn('A &lt;tag&gt; &amp; line\n' + '🙂 ' * 500, top_panel)
+        self.assertIn('2 top-level · YouTube order', top_panel)
+        full_panel = report.split('id="panel-full-comments"', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn('processing-badge', top_panel + full_panel)
 
     @staticmethod
     def comment_elements(report):
@@ -475,9 +528,12 @@ class CommentPipelineTests(unittest.TestCase):
             calls = []
 
             def answer(_key, model, effort, prompt, raw, **kwargs):
+                responses = app.CURRENT_RESPONSES.get()
                 if kwargs.get("service_tier") == "priority":
                     self.assertEqual((model, effort), ("gpt-6-luna", "none"))
                     self.assertIn("Excluded reaction", raw)
+                    responses.append({"status": "completed", "model": model, "service_tier": "fast",
+                                      "reasoning": {"effort": effort}})
                     return '{"1":true,"2":false}'
                 self.assertEqual((model, effort), ("gpt-6-luna", "medium"))
                 calls.append(prompt)
@@ -485,13 +541,19 @@ class CommentPipelineTests(unittest.TestCase):
                 self.assertNotIn("Excluded reaction", raw)
                 if len(calls) == 2:
                     raise app.AppError("Temporary failure.")
+                responses.append({"status": "completed", "model": "gpt-6-luna-snapshot",
+                                  "service_tier": "default", "reasoning": {"effort": effort}})
                 return CommentDigestTests.answer("one", text=f"Discussion answer {len(calls)}")
+
+            def fetch_comments(_video_id, _args, _say, *, top):
+                if top:
+                    return "complete", [row("top", text="Ranked original")]
+                return "complete", [row("one", text="Viewer evidence"), row("two", text="Excluded reaction")]
 
             with runtime_paths(cache_dir=args.cache_dir), patch.object(app, "load_env"), \
                     patch.object(app.media_input, "obtain_youtube", return_value=(source, {"id": VIDEO})), \
                     patch.object(app.media_input, "fetch_youtube_comments",
-                                 return_value=("complete", [row("one", text="Viewer evidence"),
-                                                              row("two", text="Excluded reaction")])) as fetch, \
+                                 side_effect=fetch_comments) as fetch, \
                     patch.object(app, "summarize", side_effect=lambda *a, detail: f"Video detail {detail}") as video, \
                     patch.object(app, "extract_report_metadata", return_value={}), \
                     patch.object(app, "youtube_best_comments", side_effect=[app.AppError("Best digest failure."),
@@ -505,7 +567,8 @@ class CommentPipelineTests(unittest.TestCase):
                 first = report.read_text()
                 self.assertIn("Video detail 5", first)
                 self.assertIn("Comment summary unavailable.", first)
-                self.assertIn("Best comments unavailable.", first)
+                self.assertIn("Smartest comments unavailable.", first)
+                self.assertIn("Ranked original", first)
                 self.assertIn("Viewer evidence", first)
                 self.assertIn("Excluded reaction", first)
                 self.assertIn("1 of 2 comments retained for review", first)
@@ -515,7 +578,9 @@ class CommentPipelineTests(unittest.TestCase):
                 self.assertIn("Discussion answer 3", second)
                 self.assertNotIn("Comment summary unavailable.", second)
                 self.assertIn("Relevant firsthand details.", second)
-                fetch.assert_called_once()
+                self.assertIn("GPT-6 Luna Fast · no reasoning", second)
+                self.assertIn("GPT-6-luna-snapshot · medium reasoning", second)
+                self.assertEqual([call.kwargs["top"] for call in fetch.call_args_list], [False, True])
                 audio.assert_not_called()
                 self.assertEqual(video.call_count, 2)
             self.assertEqual(["1/10" in p for p in calls], [True, False, False])

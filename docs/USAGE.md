@@ -177,9 +177,12 @@ JavaScript and media tools if extraction reports a tool error. [Cookie format an
 Scribe uses yt-dlp to retrieve available comments and replies in newest-first
 order. YouTube reports order the controls as **Summary → Comments → Transcript**.
 The **Comments** menu independently selects a discussion digest from the
-configured levels. **Comments → Full comments** opens the original discussion
-inside the standalone HTML, including replies in their threads.
-A partial snapshot is labeled with its capture time and retrieved counts.
+configured levels. **Top 100 YouTube comments** uses a separate yt-dlp request
+with `comment_sort=top` to retrieve up to 100 public top-level comments. The
+standalone HTML shows their full original text in the returned order. This
+view needs no YouTube Data API key or model requests. **Full comments** opens
+the original discussion, including replies in their threads. A partial snapshot
+is labeled with its capture time and retrieved counts.
 
 After saving the original discussion, Scribe sends comments to GPT-6 Luna Fast
 with reasoning set to `none`. Each batch contains at most 100 comments and
@@ -192,8 +195,8 @@ review. Failed batches and comments that exceed the input budget on their own
 are kept for review and marked as unfiltered. The original snapshot supplies
 the complete **Full comments** view.
 
-**Best comments** appears above **Full comments** when summary levels are
-enabled. Scribe takes the longest quarter of retained comments and replies
+**Smartest comments** appears above **Top 100 YouTube comments** when summary
+levels are enabled. Scribe takes the longest quarter of retained comments and replies
 and applies a 60-word minimum. GPT-6 Luna checks topic
 relevance and favors firsthand experience and practical familiarity. Specific
 comparisons and well-developed perspectives the video overlooks can also qualify.
@@ -201,25 +204,31 @@ Each selected entry has its own detailed retelling and author attribution.
 Long entries can retain their sequence, concrete details, caveats and tone.
 Use the expand icon beside an entry to read the full original in the report.
 Close it with **Close** or **Esc**. Short discussions can yield an empty
-selection. Best comments results are cached with the
+selection. Smartest comments results are cached with the
 candidate text, video context, model, effort and prompt.
 
-Comment snapshots are cached by source content and YouTube video ID. Ordinary
-runs skip existing completed pairs. To add comments to an existing report or
-change its detail levels, regenerate it from its saved internal transcript.
+The **Summary** menu footer shows the model and reasoning effort that produced
+its video summaries. The **Comments** footer reports filter and summary settings
+separately, including the filter's service tier. Reused results use their saved
+response metadata when available. The two original-text panels carry no model
+labels.
+
+The full and Top 100 snapshots are cached separately by source content and
+YouTube video ID. Ordinary runs skip existing completed pairs. To add comments
+to an existing report or change its detail levels, regenerate it from its saved
+internal transcript.
 
 ```bash
 ./scribe.sh --youtube "https://youtu.be/VIDEO_ID" --summary-only --report-tabs 1 3 5 10
 ```
 
-Regeneration uses the cached discussion, requesting it from YouTube when the
-snapshot is missing or invalid. `--summary-only --force` recomputes the
-comment filter, discussion digests and Best comments from that snapshot.
+Regeneration uses cached snapshots and requests any missing or invalid snapshot
+from YouTube. `--summary-only --force` recomputes the comment filter, discussion
+digests and Smartest comments from the full snapshot.
 Successful filter batches are reusable on ordinary regeneration. For long
 discussions, the digest reuses notes and splits batches if their notes exceed
-the size budget. An ordinary `--force`
-run attempts to refresh the discussion alongside its normal reprocessing.
-A failed refresh can reuse the last usable
+the size budget. An ordinary `--force` run attempts to refresh the snapshots
+alongside its normal reprocessing. A failed refresh can reuse the last usable
 snapshot. If a digest fails, the report shows the original discussion and any
 successful digests. A requested regeneration retries missing digests.
 

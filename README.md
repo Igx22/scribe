@@ -43,11 +43,12 @@ Repeating the command reuses a verified local download by video ID before
 contacting YouTube. The new report opens in the default browser.
 
 YouTube reports show the video's publication date when available. The **Comments**
-menu offers discussion digests, **Best comments** with detailed summaries of
-long entries that add specific observations or perspectives, and **Full comments** for
-reading the original discussion and replies offline.
-GPT-6 Luna Fast screens the saved discussion, then GPT-6 Luna with medium
-reasoning writes the comment sections.
+menu offers discussion digests and detailed retellings in **Smartest comments**.
+**Top 100 YouTube
+comments** contains up to 100 original top-level comments in YouTube's order.
+**Full comments** contains the full retrieved discussion and replies for offline
+reading. The **Summary** and **Comments** menus identify the models used for
+the video summary, comment filtering, and comment summaries.
 See the [YouTube usage guide](docs/USAGE.md#youtube-comments).
 
 Downloads start anonymously. If YouTube requires sign-in, sign in on the
@@ -249,7 +250,8 @@ SCRIBE_REPORT_TABS=1,3,5,10
 CLI options override environment variables, then `.env`, then built-in defaults.
 
 `--summarize-model MODEL[:EFFORT]` selects the model for reconciliation, recording
-summaries and report metadata. YouTube comment sections use Luna with medium reasoning.
+summaries and report metadata. GPT-6 Luna Fast screens the saved YouTube discussion,
+then GPT-6 Luna with medium reasoning writes the discussion digests and retellings.
 A bare model uses `medium`; supported effort values are `low`, `medium`, `high`,
 `xhigh`, and `max`, subject to model support. `none` disables reports while
 reconciliation still uses `gpt-6.1-sol:medium`.
