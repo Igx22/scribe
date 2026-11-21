@@ -46,7 +46,7 @@ import media_input
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
-VERSION = "2.21.0"
+VERSION = "2.22.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "medium"
@@ -191,6 +191,20 @@ SINGLE_SOURCE_PROMPT = FUSION_PROMPT.replace(
     "Correct punctuation and clearly supported spelling only; retain uncertain words and all\n"
     "uncertainty markers. Never guess a replacement using outside knowledge.\n"
     "Return empty unassigned_text: all original speech already belongs to the fixed anchors.")
+
+FULL_CONTEXT_PROMPT = """
+The request includes the ENTIRE recording, including all SOURCE A chunks and all
+SOURCE B anchors. Use distant introductions, terminology and later clarifications
+throughout the recording when interpreting the requested speech.
+output_scope identifies the source interval assigned to this response. Return all
+source_b_fixed_anchors exactly once, in order, retaining their entire speech even
+when an assigned anchor straddles an output_scope boundary. source_b_context_anchors contain
+the rest of the recording and are read-only. SOURCE A chunks marked primary may
+be several adjacent chunks: account for unassigned speech from those chunks only.
+All other SOURCE A chunks and additional_local_source are context, never extra
+speech to copy into the output. Name evidence may cite any supplied anchor.
+The original fixed voice IDs, times and uncertainty rules still apply.
+"""
 
 # This is the actual prompt sent as Responses API instructions.
 SUMMARIZATION_PROMPT = """You write an accurate conversation summary.
@@ -693,14 +707,35 @@ def digest_file(path):
 def source_signature(path):
     before = source_snapshot(path)
     signature = {"size": before[2], "sha256": digest_file(path)}
-    if source_snapshot(path) != before:
-        raise AppError("Source changed while hashing; retry with a stable recording.")
+    after = source_snapshot(path)
+    if after != before:
+        # File identity/size must stay fixed. Timestamp drift may be metadata only;
+        # confirm the same bytes with a stable second read before trusting them.
+        if after[:3] != before[:3]:
+            raise AppError("Source changed while hashing; retry with a stable recording.")
+        confirmed = digest_file(path)
+        if source_snapshot(path) != after or confirmed != signature["sha256"]:
+            raise AppError("Source changed while hashing; retry with a stable recording.")
     return signature
 
 
 def source_snapshot(path):
     stat = path.stat()
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def source_unchanged(path, snapshot, signature):
+    """Accept metadata drift only after revalidating the original full content."""
+    try:
+        current = source_snapshot(path)
+        if current == snapshot:
+            return True
+        if current[:3] != snapshot[:3]:
+            return False
+        verified = source_signature(path)
+        return verified == signature and source_snapshot(path)[:3] == snapshot[:3]
+    except (AppError, OSError):
+        return False
 
 
 def json_identity(value):
@@ -1571,9 +1606,11 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(API_URL, data=data, method="POST", headers={
         "Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    # Whole-recording answers can legitimately take longer than small parts.
+    timeout = max(600, min(3600, math.ceil(max_output_tokens / 40)))
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(request, timeout=600, context=ssl_context()) as response:
+            with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
                 result = json.load(response)
             break
         except urllib.error.HTTPError as exc:
@@ -2371,18 +2408,118 @@ def reconciliation_inputs(chunks, local_turns, additional_turns, name_candidates
         yield position, chunk, primary, context_anchors, context, payload
 
 
+def reconciliation_model_limits(model):
+    """Documented API profiles; unknown models use conservative fallback budgets."""
+    for name in ("gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"):
+        if model == name or re.fullmatch(re.escape(name) + r"-\d{4}-\d{2}-\d{2}", model):
+            return 1050000, 128000
+    return 128000, 16000
+
+
+def reconciliation_policy(model):
+    context, output = reconciliation_model_limits(model)
+    return {"version": 1, "context_tokens": context, "output_tokens": output,
+            "input_estimator": "utf8-upper-bound", "output_expansion": 1.35,
+            "reasoning_reserve": min(25000, output // 4), "context_reserve": min(8192, context // 8)}
+
+
+def reconciliation_json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def reconciliation_input_tokens(payload, prompt):
+    # A UTF-8 byte is a conservative token upper bound for text BPEs. Counting
+    # locally avoids tokenizer downloads, extra API calls and model-name guesses.
+    return sum(len(value.encode("utf-8")) for value in
+               (reconciliation_json(payload), prompt, reconciliation_json(fusion_schema()))) + 1024
+
+
+def reconciliation_output_tokens(primary, source_chunks, policy):
+    sample = {"turns": [{"id": a["id"], "text": a["text"]} for a in primary],
+              "unassigned_text": "", "speaker_names": []}
+    visible = len(reconciliation_json(sample).encode("utf-8"))
+    anchor_text = sum(len(a["text"].encode("utf-8")) for a in primary)
+    source_text = sum(len(c["text"].encode("utf-8")) for c in source_chunks if c["primary"])
+    return math.ceil((visible + max(0, source_text - anchor_text)) * policy["output_expansion"]) + policy["reasoning_reserve"]
+
+
+def plan_reconciliation(chunks, local_turns, additional_turns, model, prompt):
+    """Merge time windows to fit output budgets; every request sees every source."""
+    if not chunks:
+        return []
+    policy = reconciliation_policy(model)
+    units = list(reconciliation_inputs(chunks, local_turns, additional_turns, []))
+    anchors = [{"id": i, "start": t["start"], "end": t["end"],
+                "speaker": speaker_label(t["speaker"]) if t["speaker"] else "UNKNOWN SPEAKER",
+                "text": t["text"]} for i, t in enumerate(local_turns)]
+    roster = units[0][-1]["speaker_context"]
+
+    def group(start, stop):
+        primary = [a for unit in units[start:stop] for a in unit[2]]
+        primary_ids = {a["id"] for a in primary}
+        context_anchors = [a for a in anchors if a["id"] not in primary_ids]
+        sources = [{**c, "primary": start <= i < stop} for i, c in enumerate(chunks)]
+        scope = {"start": chunks[start]["start"], "end": chunks[stop - 1]["end"]}
+        payload = {"source_a_chunks": sources, "source_b_fixed_anchors": primary,
+                   "source_b_context_anchors": context_anchors, "speaker_context": roster,
+                   "established_speaker_names": {}, "output_scope": scope}
+        if additional_turns is not None:
+            payload["additional_local_source"] = additional_turns
+            payload["additional_source_note"] = "Independent MLX words for comparison only; never change fixed SOURCE B anchors."
+        budget = reconciliation_output_tokens(primary, sources, policy)
+        size = reconciliation_input_tokens(payload, prompt)
+        return {"chunk": scope, "primary": primary, "context_anchors": context_anchors,
+                "context": sources, "payload": payload, "max_output_tokens": budget,
+                "input_tokens": size, "stop": stop, "policy": policy}
+
+    def fits(part):
+        return (part["max_output_tokens"] <= policy["output_tokens"]
+                and part["input_tokens"] + part["max_output_tokens"] + policy["context_reserve"] <= policy["context_tokens"])
+
+    whole = group(0, len(chunks))
+    if fits(whole):
+        return [whole]
+    if whole["input_tokens"] + policy["context_reserve"] >= policy["context_tokens"]:
+        raise AppError(f"Full-recording reconciliation context is too large for {model}: "
+                       f"input estimate {whole['input_tokens']} tokens (UTF-8 upper bound), "
+                       f"context limit {policy['context_tokens']}. Source text retained; no context was truncated.")
+    parts, start = [], 0
+    while start < len(chunks):
+        low, high, best = start + 1, len(chunks), None
+        while low <= high:
+            stop = (low + high) // 2
+            part = group(start, stop)
+            if fits(part):
+                best, low = part, stop + 1
+            else:
+                high = stop - 1
+        if best is None:
+            raise AppError(f"A reconciliation output window cannot fit {model}'s context/output budget "
+                           "while preserving full context and fixed anchors. Source text retained.")
+        parts.append(best)
+        start = best["stop"]
+    return parts
+
+
 def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False, call=None,
                      *, single_source=False, additional_turns=None, issues=None):
     """Edit text and propose display names; never change voice IDs or timestamps."""
     call = call or api_request
-    prompt = SINGLE_SOURCE_PROMPT if single_source else FUSION_PROMPT
+    prompt = (SINGLE_SOURCE_PROMPT if single_source else FUSION_PROMPT) + FULL_CONTEXT_PROMPT
+    parts = plan_reconciliation(chunks, local_turns, additional_turns, model, prompt)
+    if parts:
+        say(f"  Reconciliation plan: full recording context, {len(parts)} output part(s); "
+            f"input estimate <= {max(p['input_tokens'] for p in parts)} tokens (UTF-8 upper bound), "
+            f"output budget up to {max(p['max_output_tokens'] for p in parts)} tokens including reasoning.")
     corrected, supplements, name_candidates = {}, [], []
-    for position, chunk, primary, context_anchors, context, payload in reconciliation_inputs(
-            chunks, local_turns, additional_turns, name_candidates):
+    for position, part in enumerate(parts):
+        chunk, primary, context_anchors, context = (part[k] for k in ("chunk", "primary", "context_anchors", "context"))
+        payload = {**part["payload"], "established_speaker_names": resolve_speaker_names(name_candidates)}
         signature = hashlib.sha256(json.dumps(
             {"payload": payload, "model": model, "effort": effort, "prompt": prompt},
             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        settings = {"payload": payload, "model": model, "effort": effort, "prompt": prompt, "validator": 3}
+        settings = {"payload": payload, "model": model, "effort": effort, "prompt": prompt, "validator": 3,
+                    "planning": part["policy"], "max_output_tokens": part["max_output_tokens"]}
         stage = f"reconciliation.part-{position + 1:04d}"
         envelope = None if force else load_artifact(artifact_path(cache, stage, settings), stage, settings)
         stored = envelope["payload"] if envelope else None
@@ -2399,15 +2536,19 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
             answer = None
             try:
                 if result is None:
-                    say(f"  GPT final reconciliation: {model}, reasoning={effort}, part {position + 1}/{len(chunks)}, attempt {attempt + 1}/3...")
+                    say(f"  GPT final reconciliation: {model}, reasoning={effort}, "
+                        f"full context, output part {position + 1}/{len(parts)}, attempt {attempt + 1}/3...")
                     request = dict(payload)
                     if failure:
-                        request["validation_feedback"] = {"error": failure,
+                        request["validation_feedback"] = {"error": failure[:2000],
                             "instruction": "Correct this validation failure using the original sources. Return all primary anchors."}
                     token = CURRENT_RESPONSES.set(responses)
                     try:
-                        answer = call(key, model, effort, prompt, json.dumps(request, ensure_ascii=False),
-                                      schema=fusion_schema(), max_output_tokens=20000)
+                        if (reconciliation_input_tokens(request, prompt) + part["max_output_tokens"]
+                                + part["policy"]["context_reserve"] > part["policy"]["context_tokens"]):
+                            raise AppError("Reconciliation context and reserved output exceed the model budget; source text retained.")
+                        answer = call(key, model, effort, prompt, reconciliation_json(request),
+                                      schema=fusion_schema(), max_output_tokens=part["max_output_tokens"])
                     finally:
                         CURRENT_RESPONSES.reset(token)
                     try:
@@ -2443,7 +2584,8 @@ def fuse_transcripts(chunks, local_turns, cache, key, model, effort, force=False
             failure = None
             break
         if failure:
-            issue = {"part": position + 1, "start": chunk["start"], "end": chunk["end"], "error": redacted(failure, key)}
+            issue = {"part": position + 1, "total_parts": len(parts), "start": chunk["start"],
+                     "end": chunk["end"], "error": redacted(failure, key)}
             if issues is not None:
                 issues.append(issue)
             corrected.update({a["id"]: a["text"] for a in primary})
@@ -3270,7 +3412,7 @@ def _process_file(source, args, key, *, prepare_models=False):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise AppError("Another application instance is already processing this recording content; retry later.") from None
-        if source_snapshot(source) != snapshot:
+        if not source_unchanged(source, snapshot, signature):
             raise AppError("Source changed before cache access; retry with a stable recording.")
         cache.mkdir(parents=True, exist_ok=True)
         open_manifest(cache, signature, source)
@@ -3296,7 +3438,8 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
     fusion_model, fusion_effort = args.summarize_model or (DEFAULT_MODEL, DEFAULT_EFFORT)
     if not args.offline:
         selection["fusion"] = {"model": fusion_model, "effort": fusion_effort,
-            "prompt": hashlib.sha256((FUSION_PROMPT + SINGLE_SOURCE_PROMPT).encode()).hexdigest(), "version": 3}
+            "prompt": hashlib.sha256((FUSION_PROMPT + SINGLE_SOURCE_PROMPT + FULL_CONTEXT_PROMPT).encode()).hexdigest(),
+            "version": 4, "planning": reconciliation_policy(fusion_model)}
     request = {"settings": settings, "selection": selection}
     state_path = output_state_path(cache, log_path)
     state = read_json(state_path, {})
@@ -3348,7 +3491,7 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
             reference = persist_final(cache, request, final)
         select_final(cache, reference, log_path, request)
     transcript = materialize_final(cache, reference, final, source)
-    if source_snapshot(source) != snapshot:
+    if not source_unchanged(source, snapshot, signature):
         raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
     transcript_hash = hashlib.sha256(transcript.encode()).hexdigest()
     old_summary = state.get("summary")
@@ -3431,7 +3574,7 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
     content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube is not None),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
                            summary_model=model, youtube=youtube)
-    if source_snapshot(source) != snapshot:
+    if not source_unchanged(source, snapshot, signature):
         raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
     if summary_path.exists():
         atomic_write(state_path.parent / f"previous-{time.time_ns()}.summary.html", summary_path.read_text(encoding="utf-8"))
@@ -3470,7 +3613,7 @@ def compute_final(source, args, key, cache, settings, selection, snapshot, prepa
         say("  Extracting audio (first audio track)...")
         processing_stage("audio extraction")
         extract_audio(source, wav_path)
-        if source_snapshot(source) != snapshot:
+        if not source_unchanged(source, snapshot, settings["source"]):
             raise AppError("Source changed during audio extraction; no recognition request was started.")
         forecast_local(wav_path, cache, settings, args)
         if args.transcription_model in (ONLINE_MODE, COMBINED_MODE, ALL_MODE):
@@ -3528,7 +3671,7 @@ def reconcile_final(source, args, key, cache, selection, local, gpt_chunks, mlx_
         chunks = gpt_chunks if gpt_chunks is not None else transcript_chunks(anchors)
         restore = restore_legacy_turns if cache_only else fuse_transcripts
         turns, supplements = restore(chunks, anchors, cache, key, model, effort, args.force, **options)
-        all_failed = bool(issues) and len(issues) == len(chunks)
+        all_failed = bool(issues) and len(issues) == issues[0].get("total_parts", len(chunks))
         if not all_failed:
             provenance = (provenance if single_source else
                           f"GPT-Transcribe text + WhisperX / {args.diarization_model} voice/time anchors"

@@ -329,6 +329,20 @@ recreated from internal JSON. Add `--force` to bypass only summary/header reuse:
 ./scribe.sh -f "recording.mkv" --summary-only --force
 ```
 
+### Source stability during conversion
+
+Opening a recording in a player can update macOS last-used metadata and its
+`ctime` without changing the recording bytes. An `mtime` or `ctime` change alone
+no longer cancels a running conversion: Scribe rechecks the full SHA-256 against
+the original source identity. File replacement, size changes, changed content,
+or a source that cannot be verified safely still stop publication. If metadata
+changes during hashing, a matching stable second read is required.
+
+Cached stages and final JSON are retained after a rejection. An ordinary retry
+without `--force` reuses matching completed stages/finals; any still-missing
+summaries may require their normal text API calls. Source-stability checks do
+not add processing retries or weaken output ownership protection.
+
 ## Processing cache and exports
 
 The application stores processing artifacts in
@@ -596,6 +610,31 @@ conservatively marking the entire corrected turn uncertain; the precise original
 spans remain in raw sources. Structural checks still protect voice/time anchors,
 and single-source review cannot discard speech or invent unassigned speech.
 Summary-only rendering preserves incomplete notices without repeating reconciliation.
+
+### Whole-recording reconciliation
+
+GPT receives the entire recording's source text, fixed voice/time anchors, and
+any MLX comparison text in every reconciliation request. Scribe uses one request
+when the estimated input and complete answer fit the selected model's context
+and output budgets. Otherwise it returns several output parts while keeping
+the full recording as context in each request. Each part may return only its
+assigned anchors and unassigned speech; voice IDs and timestamps stay fixed.
+
+The planner counts UTF-8 bytes as a conservative input-token upper bound and
+estimates answer size with expansion and reasoning reserves. It needs no extra
+API calls or tokenizer downloads. GPT-6.1 Sol/Terra and GPT-6 Sol/Astra/Luna
+profiles use a 1,050,000-token context and 128,000-token output limit; unknown
+model names use conservative 128,000/16,000 budgets. Estimates can select more
+parts than an exact tokenizer would. The console prints the chosen part count
+and budgets. If full context or a fixed output window cannot fit, Scribe reports
+the problem and retains source text instead of silently truncating the recording.
+
+New reconciliation requests have separate cache identities, including their
+planning policy and output budgets. Original recognition checkpoints remain
+reusable. Successful output parts are checkpointed normally. Existing completed
+exports keep the standard skip behavior; `--summary-only` still uses the selected
+internal final JSON without repeating reconciliation. Historical JSON migration
+retains the original request format.
 
 **Local recognition does not mean a fully offline run.** Ordinary runs use
 `--summarize-model gpt-6.1-sol:medium` for final text reconciliation and reports.

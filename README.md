@@ -140,6 +140,9 @@ For other installation paths and Community-1 setup, see [the usage guide](docs/U
 For `meeting.mkv`, Scribe writes `meeting.log.md` and `meeting.summary.html`.
 Reports include summary levels, the final transcript, available source views, and a dark theme.
 Input recordings are never modified.
+Timestamp-only changes during processing (for example, opening a recording in a
+player) are accepted after its full content hash is revalidated. Changed bytes
+or a replaced source still stop publication and preserve cached work.
 
 Each invocation also saves console stdout/stderr to `./data/log/` in the launch
 directory. Runs have separate UTF-8 files and rotate at local midnight, regardless

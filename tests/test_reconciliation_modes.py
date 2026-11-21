@@ -71,7 +71,7 @@ class ReconciliationModeTests(unittest.TestCase):
                     self.assertIn('additional_local_source', payloads[0][1])
                 if mode in ['whisperx', 'mlx']:
                     self.assertEqual(audio, 0, 'Local recognition must upload text only')
-                    self.assertEqual(payloads[0][0], app.SINGLE_SOURCE_PROMPT)
+                    self.assertEqual(payloads[0][0], app.SINGLE_SOURCE_PROMPT + app.FULL_CONTEXT_PROMPT)
 
     def test_api_only_reconciles_without_inventing_speakers_or_loading_local_models(self):
         with tempfile.TemporaryDirectory() as tmp:

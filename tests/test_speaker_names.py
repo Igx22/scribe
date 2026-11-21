@@ -77,7 +77,7 @@ class SpeakerNameTests(unittest.TestCase):
                                "unassigned_text": "", "speaker_names": []})
         with tempfile.TemporaryDirectory() as tmp:
             fused, _ = app.fuse_transcripts(chunks, turns, Path(tmp), "k", "m", "medium", call=reply)
-        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(seen), 1)
         for payload in seen:
             self.assertEqual(payload["speaker_context"], {"speaker_ids": ["A", "B", "C"],
                 "observed_speaker_count": 3, "has_unattributed_speech": True})
@@ -138,9 +138,9 @@ class SpeakerNameTests(unittest.TestCase):
             for _ in range(2):
                 fused, _ = app.fuse_transcripts(chunks, turns, Path(tmp), "k", "m", "medium", call=fake)
                 self.assertEqual([t.get("speaker_name") for t in fused], ["Bob", None, "Bob", "Bob"])
-        self.assertEqual(len(calls), 3)
-        self.assertIn(2, [a["id"] for a in calls[0]["source_b_context_anchors"]])
-        self.assertEqual(calls[1]["established_speaker_names"], {"B": "Bob"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([a["id"] for a in calls[0]["source_b_fixed_anchors"]], [0, 1, 2, 3])
+        self.assertEqual(calls[0]["source_b_context_anchors"], [])
 
     def test_conflicts_keep_letters_unless_a_later_explicit_correction_resolves_them(self):
         turns = [self.turn(0, 1, "I'm Alice."), self.turn(2, 1, "Actually, my name is Bob.")]

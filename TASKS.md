@@ -148,6 +148,44 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-095 | Process the newest Movies recording and save results beside it | Done | 2026-11-09 | 2026-11-09 |
 | SCR-096 | [Design a second single-screen desktop interface concept with large direct controls](data/comparison/desktop-ui-concept-2/VERIFICATION.md) | Done | 2026-11-10 | 2026-11-10 |
 | SCR-097 | [Add configurable macOS Finder action registration](docs/USAGE.md#finder-quick-action-macos) | Done | 2026-11-11 | 2026-11-12 |
+| SCR-098 | [Allow metadata-only source changes during conversion](docs/PROJECT_CONTEXT.md#source-stability-scr-098) | Done | 2026-11-12 | 2026-11-12 |
+| SCR-099 | [Budget reconciliation with whole-recording context](docs/USAGE.md#whole-recording-reconciliation) | Done | 2026-11-12 | 2026-11-12 |
+| SCR-100 | [Download the supplied YouTube video and generate a Scribe HTML report](data/youtube/FLoC0dhY4u4/VERIFICATION.md) | Done | 2026-11-20 | 2026-11-20 |
 | SCR-101 | [Add YouTube URL input with retained full video and explicit authentication](docs/superpowers/specs/2026-11-20-youtube-ingestion-design.md) | Done | 2026-11-20 | 2026-11-20 |
 | SCR-102 | [Show a full-page Firefox screenshot and standalone report in the README](README.md#example-report) | Done | 2026-11-20 | 2026-11-20 |
+| SCR-103 | Add `--browser [BROWSER]` to open the finished HTML report in the system default or named browser | Planned | 2026-11-20 | — |
+| SCR-104 | Include slides or still images from the source video in generated summaries | Planned | 2026-11-20 | — |
+| SCR-105 | Investigate how a small AI model can discover and use Scribe from the CLI or its GitHub repository | Planned | 2026-11-20 | — |
+| SCR-106 | Add a Scribe action to the Google Chrome page context menu | Planned | 2026-11-20 | — |
 | SCR-107 | [Retrieve and summarize viewer comments at each selected YouTube report detail level](docs/superpowers/specs/2026-11-21-youtube-comments-design.md) | In Progress | 2026-11-20 | — |
+| SCR-108 | [Export public comments and replies from the supplied YouTube video to a text file](data/youtube/_EAPUOsb3oQ/comments.txt) | Done | 2026-11-21 | 2026-11-21 |
+
+### SCR-105
+
+Use an agent backed by a modest, non-frontier model with no prior knowledge of
+Scribe. Give it the same task in two fresh sessions: transcribe a supplied local
+recording and return the path to the transcript.
+
+1. **CLI entry.** Scribe is installed and the agent knows only the launcher name,
+   `scribe.sh`. Observe how it lists capabilities, finds the file-input command
+   and its arguments, and locates the result.
+2. **GitHub entry.** Give the agent only the repository URL as its starting point.
+   Observe how it learns what Scribe does, finds the setup instructions, discovers
+   the launcher and chooses a working command from the repository's documentation.
+
+Record the model used and whether each session reaches the transcript unaided.
+Note which instructions the agent found, where it guessed or needed a hint, and
+any environment or permission issue that affected the outcome. Compare remedies
+for the observed gaps, such as a copyable README example, searchable CLI help, a
+machine-readable capability list or an agent tool interface. Recommend the
+smallest useful changes and describe how to repeat both checks with the same model.
+
+### SCR-106
+
+Draft idea for a Google Chrome extension. A user right-clicks a web page and
+chooses **Scribe**, much as they choose **Scribe — Local conversion** for an MKV
+in Finder. Leave the supported pages and the exact action on selection for design.
+
+Explore how to install the extension and connect the menu action to the local
+`scribe.sh`. Consider whether a shell script similar to `macos-register-finder-hooks`
+could register the necessary handler and which steps would take place in Chrome.

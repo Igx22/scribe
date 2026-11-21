@@ -64,8 +64,14 @@ class LanguageProbeTests(unittest.TestCase):
 
 
 class RecoveryTests(unittest.TestCase):
+    def setUp(self):
+        limits = patch.object(app, 'reconciliation_model_limits', return_value=(1050000, 2500))
+        limits.start()
+        self.addCleanup(limits.stop)
+
     def turns(self):
-        return [dict(start=i * 600, end=i * 600 + 2, speaker=1, text=f'Original {i}') for i in range(3)]
+        return [dict(start=i * 600, end=i * 600 + 2, speaker=1,
+                     text=f'Original {i} ' + 'word ' * 200) for i in range(3)]
 
     def test_only_failed_part_retries_and_later_parts_survive_then_resume(self):
         turns = self.turns()
@@ -82,7 +88,7 @@ class RecoveryTests(unittest.TestCase):
             cache = Path(tmp)
             issues = []
             fused, _ = app.fuse_transcripts(chunks, turns, cache, 'secret-key', 'model', 'high', call=call, issues=issues)
-            self.assertEqual([t['text'] for t in fused], ['Corrected 0', 'Original 1', 'Corrected 2'])
+            self.assertEqual([t['text'] for t in fused], ['Corrected 0', turns[1]['text'], 'Corrected 2'])
             self.assertEqual([t['start'] for t in fused], [0, 600, 1200])
             self.assertEqual(len(requests), 5)
             self.assertEqual([i['part'] for i in issues], [2])
@@ -214,7 +220,8 @@ class ErrorHistoryTests(unittest.TestCase):
                 anchors = json.loads(a[4])['source_b_fixed_anchors']
                 return json.dumps(dict(turns=[] if anchors[0]['id'] == 1 else [dict(id=t['id'], text='Corrected') for t in anchors],
                                        unassigned_text='', speaker_names=[]))
-            with patch.object(app, 'extract_audio'), patch.object(app, 'local_recognition', return_value=local), \
+            with patch.object(app, 'reconciliation_model_limits', return_value=(1050000, 2500)), \
+                    patch.object(app, 'extract_audio'), patch.object(app, 'local_recognition', return_value=local), \
                     patch.object(app, 'transcribe_gpt', return_value=chunks), patch.object(app, 'api_request', side_effect=reply), \
                     patch.object(app, 'summarize', return_value='Summary'), \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):

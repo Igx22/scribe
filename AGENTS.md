@@ -14,6 +14,9 @@
 ## Development agreements
 
 - Keep code, comments, CLI messages, and repository documentation in English.
+- For browser verification, open local HTML explicitly in Mozilla Firefox and
+  pass the file path, for example `open -a Firefox "/absolute/path/report.summary.html"`.
+  This avoids the system browser chooser.
 - When listing supported languages, put English before Russian. Use Alice, Bob,
   or other conventional English names in examples; actual recordings keep the
   participants' names in their original language and script.

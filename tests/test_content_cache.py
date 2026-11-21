@@ -43,6 +43,161 @@ class ContentCacheTests(unittest.TestCase):
             with patch.object(app, 'digest_file', side_effect=changed), self.assertRaisesRegex(app.AppError, 'changed while hashing'):
                 app.source_signature(source)
 
+    def test_hashing_accepts_one_metadata_update_after_verifying_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'meeting.mkv'
+            source.write_bytes(b'recording')
+            digest = app.digest_file
+            changed = False
+            def touch_after_hash(path):
+                nonlocal changed
+                result = digest(path)
+                if not changed:
+                    changed = True
+                    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
+                return result
+            with patch.object(app, 'digest_file', side_effect=touch_after_hash):
+                signature = app.source_signature(source)
+            self.assertEqual(signature, {'size': 9, 'sha256': hashlib.sha256(b'recording').hexdigest()})
+
+    def test_metadata_change_after_hashing_does_not_block_cache_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, _ = self.fixture(Path(tmp), '--transcribe-only')
+            signature = app.source_signature
+            changed = False
+            def touch_after_signature(path):
+                nonlocal changed
+                result = signature(path)
+                if not changed:
+                    changed = True
+                    path.chmod(0o600)
+                return result
+            with patch.object(app, 'source_signature', side_effect=touch_after_signature):
+                self.run_pipeline(source, args)
+            self.assertTrue(app.output_paths(source, args.output_dir)[0].is_file())
+
+    def test_metadata_update_during_extraction_continues_processing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, _ = self.fixture(Path(tmp), '--transcribe-only')
+            extract = test_all_mode.AllModeTests.extract
+            def touch_after_extract(path, output):
+                extract(path, output)
+                os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
+            with patch.object(test_all_mode.AllModeTests, 'extract', staticmethod(touch_after_extract)):
+                self.run_pipeline(source, args)
+            self.assertTrue(app.output_paths(source, args.output_dir)[0].is_file())
+
+    def test_timestamp_and_ctime_only_updates_do_not_block_log_publication(self):
+        for change in ('mtime', 'ctime'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                source, args, cache = self.fixture(Path(tmp), '--transcribe-only')
+                before = app.source_snapshot(source)
+                materialize = app.materialize_final
+                def touch_after_materializing(*values):
+                    text = materialize(*values)
+                    if change == 'ctime':
+                        source.chmod(0o600)
+                    else:
+                        os.utime(source, ns=(source.stat().st_atime_ns, source.stat().st_mtime_ns + 1_000_000))
+                    return text
+                with patch.object(app, 'materialize_final', side_effect=touch_after_materializing):
+                    self.run_pipeline(source, args)
+                after = app.source_snapshot(source)
+                self.assertEqual(before[:3], after[:3])
+                self.assertNotEqual(before, after)
+                if change == 'ctime':
+                    self.assertEqual(before[3], after[3])
+                self.assertEqual(source.read_bytes(), b'recording')
+                self.assertTrue(app.output_paths(source, args.output_dir)[0].is_file())
+                saved = app.final_reference(cache, app.read_json(cache / 'manifest.json')['selected_final'], required=True)
+                self.assertTrue(saved['payload']['pipeline_complete'])
+
+    def test_metadata_update_during_report_generation_publishes_html(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, _ = self.fixture(Path(tmp))
+            render = app.summary_html
+            def touch_after_render(*values, **options):
+                html = render(*values, **options)
+                source.chmod(0o600)
+                return html
+            with patch.object(app, 'summary_html', side_effect=touch_after_render):
+                self.run_pipeline(source, args)
+            log, report = app.output_paths(source, args.output_dir)
+            self.assertEqual(PanelText(report.read_text()).text['panel-transcript'], log.read_text())
+
+    def test_same_size_content_changes_and_replacements_still_block_exports(self):
+        for change in ('content', 'replacement'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                source, args, cache = self.fixture(Path(tmp), '--transcribe-only')
+                stamp = source.stat()
+                materialize = app.materialize_final
+                def change_after_materializing(*values):
+                    text = materialize(*values)
+                    if change == 'content':
+                        source.write_bytes(b'RECORDING')
+                    else:
+                        replacement = source.with_name('replacement.mkv')
+                        replacement.write_bytes(source.read_bytes())
+                        replacement.replace(source)
+                    os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    return text
+                with patch.object(app, 'materialize_final', side_effect=change_after_materializing):
+                    with self.assertRaisesRegex(app.AppError, 'Source changed during processing'):
+                        self.run_pipeline(source, args)
+                self.assertFalse(app.output_paths(source, args.output_dir)[0].exists())
+                self.assertTrue(list(cache.glob('reconciliation.final-transcript.*.json')))
+
+    def test_replacement_before_content_rehash_does_not_publish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, _ = self.fixture(Path(tmp), '--transcribe-only')
+            materialize, signature = app.materialize_final, app.source_signature
+            revalidating = False
+            replaced = False
+            def trigger_revalidation(*values):
+                nonlocal revalidating
+                text = materialize(*values)
+                source.chmod(0o600)
+                revalidating = True
+                return text
+            def replace_before_hash(path):
+                nonlocal replaced
+                if revalidating and not replaced:
+                    replaced = True
+                    replacement = source.with_name('replacement.mkv')
+                    replacement.write_bytes(source.read_bytes())
+                    replacement.replace(source)
+                return signature(path)
+            with patch.object(app, 'materialize_final', side_effect=trigger_revalidation), \
+                 patch.object(app, 'source_signature', side_effect=replace_before_hash):
+                with self.assertRaisesRegex(app.AppError, 'Source changed during processing'):
+                    self.run_pipeline(source, args)
+            self.assertFalse(app.output_paths(source, args.output_dir)[0].exists())
+
+    def test_content_change_during_metadata_revalidation_blocks_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, args, _ = self.fixture(Path(tmp), '--transcribe-only')
+            materialize, digest = app.materialize_final, app.digest_file
+            revalidating = False
+            mutated = False
+            def trigger_revalidation(*values):
+                nonlocal revalidating
+                text = materialize(*values)
+                source.chmod(0o600)
+                revalidating = True
+                return text
+            def mutate_after_read(path):
+                nonlocal mutated
+                result = digest(path)
+                if path == source and revalidating and not mutated:
+                    mutated = True
+                    source.write_bytes(b'RECORDING')
+                return result
+            with patch.object(app, 'materialize_final', side_effect=trigger_revalidation), \
+                 patch.object(app, 'digest_file', side_effect=mutate_after_read):
+                with self.assertRaisesRegex(app.AppError, 'Source changed during processing'):
+                    self.run_pipeline(source, args)
+            self.assertFalse(app.output_paths(source, args.output_dir)[0].exists())
+
     def test_same_bytes_rename_date_and_output_change_reuse_final_and_refresh_display(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -256,8 +411,18 @@ class LegacyCacheTests(unittest.TestCase):
         selection = {'transcription_model': 'whisperx', 'fusion': {'model': app.DEFAULT_MODEL, 'effort': app.DEFAULT_EFFORT,
             'version': 3, 'prompt': hashlib.sha256((app.FUSION_PROMPT + app.SINGLE_SOURCE_PROMPT).encode()).hexdigest()}}
         reply = json.dumps(dict(turns=[dict(id=0, text='Corrected words.')], unassigned_text='', speaker_names=[]))
-        with patch.object(app, 'api_request', return_value=reply):
-            final = app.reconcile_final(source, args, 'key', old, selection, local, None)
+        # Build actual historical requests, rather than labelling the current
+        # planner's artifacts as legacy JSON after its request policy changes.
+        for _, _, _, _, _, payload in app.reconciliation_inputs(app.transcript_chunks(local['turns']), local['turns'], None, []):
+            old_request = {'payload': payload, 'model': app.DEFAULT_MODEL,
+                           'effort': app.DEFAULT_EFFORT, 'prompt': app.SINGLE_SOURCE_PROMPT}
+            identity = hashlib.sha256(json.dumps(old_request, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            app.save_json(old / 'fusion' / (identity + '.json'), json.loads(reply))
+        token = app.CURRENT_LEGACY.set({'directory': old})
+        try:
+            final = app.reconcile_final(source, args, 'key', old, selection, local, None, cache_only=True)
+        finally:
+            app.CURRENT_LEGACY.reset(token)
         for path in old.glob('reconciliation.part-*.json'):
             saved = app.read_json(path)
             old_settings = {k: v for k, v in saved['settings'].items() if k != 'validator'}

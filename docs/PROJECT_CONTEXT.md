@@ -137,6 +137,28 @@ insufficient state/log-only results fail without reading exported logs. Legacy
 rename lookup and missing raw/duration/final checkpoints are recovery limitations;
 [Usage](USAGE.md#older-json-checkpoints) owns detailed prerequisites.
 
+### Source stability (SCR-098)
+
+The conversion guard retains device/inode/size checks. Timestamp drift triggers
+full-content revalidation instead of automatic rejection; unchanged snapshots
+keep the fast path. Hashing that observes timestamp drift confirms the same
+content with a stable second read, and identity is checked again after
+revalidation to catch replacement races. Monitor readiness timing is unchanged.
+
+A failed Finder run on 2026-11-12 retained a valid complete final and all eight
+reconciliation parts. Its current SHA-256 matched the starting identity, while
+`com.apple.lastuseddate#PS` and changed ctime were only 125,974 ns apart. The user
+confirmed concurrent VLC playback. VLC/macOS recent-document handling is the
+likely writer, not an audited process attribution. A synthetic xattr update
+reproduced the old false rejection without changing file bytes. Private evidence
+is under ignored `data/comparison/source-change-investigation/`.
+
+Verification: **275 tests passed**, including eight new regressions for metadata
+changes during hashing, cache access, extraction and log/HTML publication, plus
+real byte changes and replacement races. No production recording was reprocessed
+and no paid API/model requests were made. Existing reconciliation can be reused
+on an ordinary retry; missing report generation still uses its configured model.
+
 The CLI uses automatic language detection and no custom vocabulary prompt. Internal
 backend fields retain those default values and the existing checkpoint schema,
 so removing their CLI overrides does not invalidate default recognition caches.
@@ -307,8 +329,9 @@ pair is still skipped unless explicitly regenerated.
 
 Audio is converted to mono 16 kHz PCM and divided into non-overlapping chunks of
 at most 10 minutes, below a conservative 24 MB upload limit. Successful GPT chunks
-are checkpointed immediately. Fusion processes every primary chunk, using adjacent
-chunks only as context. Responses API calls use `store=false`, no tools/web search,
+are checkpointed immediately. Text reconciliation independently budgets one
+whole-recording answer or several output parts, each with full-recording context.
+Responses API calls use `store=false`, no tools/web search,
 and strict JSON output for fusion. Audio and text are subject to the API account's
 applicable data policies.
 
@@ -605,6 +628,44 @@ covered memory, latency, factual coverage, uncertainty, bounded context, and
 hierarchical summaries against cached-transcript GPT baselines. These remain
 historical research notes; administrative closure records the user's backlog
 decision rather than a benchmark or model-integration result.
+
+### Whole-recording reconciliation (SCR-099)
+
+Reconciliation planning is independent of ten-minute audio upload windows. A
+locally computed UTF-8 input upper bound includes the prompt, JSON payload and
+response schema. An answer estimate includes fixed-anchor JSON, source-A speech
+that may need unassigned output, 35% expansion, and a reasoning reserve. Known
+GPT-6 profiles use their documented 1,050,000/128,000 context/output limits;
+unknown models use 128,000/16,000. Context reservation includes the planned answer
+and request/feedback headroom; each actual request is checked again before send.
+This conservative offline estimate may produce extra output parts. No tokenizer
+assets or additional API requests are needed for planning.
+
+Every planned request contains all source-A chunks, all original fixed anchors
+(split into output and read-only context), and the entire MLX source when present.
+Output windows merge adjacent original windows as far as budgets permit. Names
+can cite distant anchors and remain subject to the original evidence validator.
+Part cache keys include the full context, planning policy and answer budget;
+final selection version 4 prevents reuse of old local-context finals for new
+ordinary processing. Old completed exports and summary-only selections keep their
+existing behavior, and the legacy JSON adapter retains the original prompts and
+neighbor-window layout. All-failed status uses the planned output-part count
+rather than the audio-window count.
+
+Implementation checks cover a single request across eight audio windows,
+full-context multi-part output including MLX, input-plus-answer budget pressure,
+pre-request overflow rejection, cache invalidation from distant edits and policy
+changes, distant name evidence, and truthful all-failed fallback. Large answer
+budgets also increase the HTTP timeout from the 600-second baseline, capped at
+one hour; short text requests retain their previous timeout. Assigned anchors
+retain their entire speech even when straddling output-window boundaries.
+
+Verification on 2026-11-12: **284 tests passed**, including nine new reconciliation
+budget/context/timeout regressions and the concurrent source-stability fixes.
+The original legacy-JSON fixtures exercise the historical request layout; old
+summary-only migration and cached-final resume remain covered. `git diff --check`
+passed. Live API quality comparisons and production recording reprocessing were
+not performed.
 
 ## YouTube ingestion (SCR-101)
 

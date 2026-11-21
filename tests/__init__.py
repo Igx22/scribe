@@ -50,8 +50,9 @@ def seed_final(source, args, text="Reviewed conversation."):
                "selection": {"transcription_model": args.transcription_model}}
     if not args.offline:
         model, effort = args.summarize_model or (scribe.DEFAULT_MODEL, scribe.DEFAULT_EFFORT)
-        request["selection"]["fusion"] = {"model": model, "effort": effort, "version": 3,
-            "prompt": hashlib.sha256((scribe.FUSION_PROMPT + scribe.SINGLE_SOURCE_PROMPT).encode()).hexdigest()}
+        request["selection"]["fusion"] = {"model": model, "effort": effort, "version": 4,
+            "prompt": hashlib.sha256((scribe.FUSION_PROMPT + scribe.SINGLE_SOURCE_PROMPT + scribe.FULL_CONTEXT_PROMPT).encode()).hexdigest(),
+            "planning": scribe.reconciliation_policy(model)}
     reference = scribe.persist_final(cache, request, final)
     log, _ = scribe.output_paths(source, args.output_dir)
     scribe.select_final(cache, reference, log, request)
