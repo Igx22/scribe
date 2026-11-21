@@ -15,7 +15,7 @@ class SummaryDetailTests(unittest.TestCase):
     def test_cli_bounds_and_rendered_preview(self):
         with patch.dict(os.environ, {}, clear=True):
             parser = app.build_parser()
-        self.assertEqual(parser.parse_args([]).report_tabs, [1, 3, 5, 10, "transcript"])
+        self.assertEqual(parser.parse_args([]).report_tabs, [1, 3, 5, 10])
         for value in ("0", "11", "2.5"):
             with self.subTest(value=value), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
@@ -79,8 +79,8 @@ class SummaryConfigurationTests(unittest.TestCase):
     def test_environment_lists_are_normalized_like_cli_values(self):
         for value, expected in (("1,5,10", [1, 5, 10]), ("1, 5, 10", [1, 5, 10]),
                                 ("1 5 10", [1, 5, 10]), ("10,1,10", [10, 1]), ("5,5", [5]),
-                                ("1,3,5,10,transcript", [1, 3, 5, 10, "transcript"]),
-                                ("transcript, 5, TRANSCRIPT", ["transcript", 5])):
+                                ("1,3,5,10,transcript", [1, 3, 5, 10]),
+                                ("transcript, 5, TRANSCRIPT", [5])):
             with self.subTest(value=value), patch.dict(os.environ, {"SCRIBE_REPORT_TABS": value}, clear=True):
                 self.assertEqual(app.build_parser().parse_args([]).report_tabs, expected)
                 self.assertEqual(app.build_parser().parse_args(["--report-tabs", "3", "7"]).report_tabs,
@@ -106,11 +106,11 @@ class SummaryConfigurationTests(unittest.TestCase):
     def test_main_uses_default_or_dotenv_tabs_and_cli_always_writes_html(self):
         load_env = app.load_env
         for configured, options, tabs in (
-                (None, [], [1, 3, 5, 10, "transcript"]),
+                (None, [], [1, 3, 5, 10]),
                 ('"1, 5, 10"', [], [1, 5, 10]),
                 ("5", [], [5]),
-                ("transcript", [], ["transcript"]),
-                ("1,5,transcript", ["--report-tabs", "transcript", "3"], ["transcript", 3]),
+                ("transcript", [], []),
+                ("1,5,transcript", ["--report-tabs", "transcript", "3"], [3]),
                 ("1,3,5,10", ["--report-tabs", "5"], [5]),
                 ("5", ["--report-tabs", "1", "10"], [1, 10])):
             with self.subTest(configured=configured, options=options), tempfile.TemporaryDirectory() as tmp, \
@@ -140,7 +140,7 @@ class SummaryConfigurationTests(unittest.TestCase):
                 self.assertTrue(summary.is_file())
                 self.assertEqual(summary.suffix, ".html")
                 self.assertFalse(summary.with_suffix(".md").exists())
-                self.assertEqual('id="tab-transcript"' in summary.read_text(), "transcript" in tabs)
+                self.assertIn('id="tab-transcript"', summary.read_text())
                 for level in app.summary_levels(tabs):
                     self.assertIn(f"Summary at level {level}.", summary.read_text())
 

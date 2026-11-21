@@ -42,6 +42,10 @@ alongside its transcript and HTML report in `./data` or `--output-dir DIR`.
 Repeating the command reuses a verified local download by video ID before
 contacting YouTube. The new report opens in the default browser.
 
+YouTube reports show a viewer discussion digest below each video summary.
+The **Transcript → Full comments** view embeds the original discussion and replies
+for offline reading. See the [YouTube usage guide](docs/USAGE.md#youtube-comments).
+
 Downloads start anonymously. If YouTube requires sign-in, sign in on the
 selected browser and rerun with `--cookies-from-browser`, for example
 `./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID" --cookies-from-browser brave`.
@@ -175,7 +179,7 @@ edits are preserved but never imported into processing or summaries.
 # Replace the report from internal final JSON; preserve an existing log export
 ./scribe.sh -f "meeting.mkv" --summary-only
 
-# Replace the report and bypass summary/header reuse; preserve an existing log
+# Regenerate report AI stages from saved sources and preserve an existing log
 ./scribe.sh -f "meeting.mkv" --summary-only --force
 
 # Reprocess the recording and replace both outputs
@@ -235,7 +239,7 @@ Set defaults in `.env`:
 ```dotenv
 OPENAI_API_KEY=your-api-key
 SCRIBE_SUMMARIZE_MODEL=gpt-6.1-sol:medium
-SCRIBE_REPORT_TABS=1,3,5,10,transcript
+SCRIBE_REPORT_TABS=1,3,5,10
 ```
 
 CLI options override environment variables, then `.env`, then built-in defaults.
@@ -268,7 +272,7 @@ short recordings stay short.
 Each level is generated separately, so more levels mean more text API work.
 
 ```bash
-./scribe.sh -f "meeting.mkv" --summary-only --report-tabs 1 5 10 transcript
+./scribe.sh -f "meeting.mkv" --summary-only --report-tabs 1 5 10
 ```
 
 Existing completed reports are skipped on an ordinary run.
@@ -288,7 +292,7 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers; every ordinary mode then runs GPT text reconciliation. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
 | `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Report and final GPT reconciliation model/effort; none disables reports, not reconciliation. |
-| `--report-tabs TAB [TAB ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10,transcript` | Summary levels 1–10 and/or `transcript`, separated by spaces or commas. CLI replaces the selection; levels keep their order within the Summary menu. Always writes standalone HTML. |
+| `--report-tabs LEVEL [LEVEL ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10` | Summary levels 1–10 in display order, separated by spaces or commas. Every HTML report includes Transcript. |
 | `--offline` | Off | Force local recognition without summaries, API calls or downloads. For a saved YouTube video, use `-f`. |
 | `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports, error files and YouTube downloads to DIR. |
 | `--force` | Off | Bypass completion skipping and recognition/API caches; may repeat paid calls. |

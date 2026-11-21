@@ -169,6 +169,29 @@ selected browser profile or use a cookie file. An HTTP 403 or network error
 alone does not trigger any cookie access. Run `./scribe.sh --setup` to check the
 JavaScript and media tools if extraction reports a tool error. [Cookie format and export details](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp).
 
+### YouTube comments
+
+Scribe uses yt-dlp to retrieve available comments and replies in newest-first
+order. Each **Summary** level pairs the video summary with a **Comments**
+digest at that depth. **Transcript → Full comments** contains the original
+discussion inside the standalone HTML, including replies in their threads.
+A partial snapshot is labeled with its capture time and retrieved counts.
+
+Comment snapshots are cached by source content and YouTube video ID. Ordinary
+runs skip existing completed pairs. To add comments to an existing report or
+change its detail levels, regenerate it from its saved internal transcript.
+
+```bash
+./scribe.sh --youtube "https://youtu.be/VIDEO_ID" --summary-only --report-tabs 1 3 5 10
+```
+
+Regeneration uses the cached discussion, requesting it from YouTube when the
+snapshot is missing or invalid. `--summary-only --force` recomputes digests from
+that snapshot. An ordinary `--force` run attempts to refresh the discussion
+alongside its normal reprocessing. A failed refresh can reuse the last usable
+snapshot. If a digest fails, the report shows the original discussion and any
+successful digests. A requested regeneration retries missing digests.
+
 ## Finder Quick Action (macOS)
 
 Prepare Scribe using the normal setup above, then register this user's action
@@ -707,6 +730,7 @@ owners and deadlines only when explicitly present.
 ## Report tabs and summary detail
 
 Summary detail ranges from 1 to 10; the default levels are 1, 3, 5 and 10.
+Every HTML report includes the full final transcript and available source views.
 The report's **Summary** menu names these levels **Key points**, **Overview**,
 **Expanded** and **In depth**, with the selected name and depth (for example,
 `Overview · 3/10`) below the fixed menu title. Other configured levels show
@@ -762,16 +786,17 @@ variables take priority over `.env`; the file is parsed as data and never execut
 ```text
 OPENAI_API_KEY=your-api-key
 SCRIBE_SUMMARIZE_MODEL=gpt-6.1-sol:medium
-SCRIBE_REPORT_TABS=1,3,5,10,transcript
+SCRIBE_REPORT_TABS=1,3,5,10
 ```
 
 `SCRIBE_SUMMARIZE_MODEL` supplies the default for `--summarize-model`.
-`SCRIBE_REPORT_TABS` supplies the default for `--report-tabs`; it accepts
-commas or spaces, for example `SCRIBE_REPORT_TABS="1, 5, 10, transcript"`.
-`.env.example` and the built-in fallback both use `1,3,5,10,transcript`.
-A single value such as `SCRIBE_REPORT_TABS=5` still creates HTML; `transcript`
-can be selected alone or with summaries. The old `SCRIBE_SUMMARY_DETAIL` key is
-unused; rename it and add `transcript` if the full conversation should be included.
+`SCRIBE_REPORT_TABS` supplies the default numeric levels for `--report-tabs`.
+It accepts commas or spaces, for example `SCRIBE_REPORT_TABS="1, 5, 10"`.
+`.env.example` and the built-in fallback both use `1,3,5,10`.
+A single value such as `SCRIBE_REPORT_TABS=5` selects one Summary level alongside
+Transcript. Existing mixed lists may still contain the legacy `transcript`
+token. An existing configuration with only that token still produces an HTML
+report with just the Transcript menu.
 The precedence is explicit CLI option, process environment, `.env`, then built-in
 fallback. Invalid configured tabs produce an error unless a valid CLI value
 overrides them. The old `OPENAI_MODEL` and `OPENAI_REASONING` settings are no longer

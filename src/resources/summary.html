@@ -66,7 +66,7 @@
           options: document.getElementById(name + '-options'),
           description: document.getElementById(name + '-choice-description'),
           tabs: tabs.filter(tab => name === 'detail' ? /^tab-\d+$/.test(tab.id) :
-            tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'))
+            tab.id === 'tab-transcript' || tab.id === 'tab-full-comments' || tab.id.startsWith('tab-source-'))
         })).filter(group => group.choice);
         function select(tab) {
           tabs.forEach(item => {
@@ -168,7 +168,7 @@
     [aria-checked="true"] .switch-track { background: var(--accent); }
     [aria-checked="true"] .switch-track::before { transform: translateX(12px); }
     .report { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 4px 20px var(--shadow); }
-    header { padding: 34px 40px 28px; }
+    .report > header { padding: 34px 40px 28px; }
     .eyebrow { margin: 0 0 26px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
     .meeting-facts { display: grid; gap: 22px; margin: 0; }
     .fact { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; align-items: baseline; }
@@ -229,12 +229,27 @@
     .prose p:last-child { margin-bottom: 0; }
     .reconciliation-warning { margin: 20px 40px 0; padding: 12px; border: 1px solid var(--selected-line); border-radius: 6px; color: var(--ink); background: var(--selected-fill); font-size: 13px; line-height: 1.5; }
     .transcript-content { margin-top: 24px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.85; }
+    .discussion-summary { margin-top: 36px; }
+    .discussion-summary li + li { margin-top: .65em; }
+    .comment-thread-list { padding: 0; margin: 0; list-style: none; }
+    .comment-thread-list .comment-thread-list { padding-inline-start: 28px; }
+    .comment-thread-list .comment-thread-list .comment-thread-list .comment-thread-list { padding-inline-start: 0; }
+    .comment-entry { display: flex; gap: 16px; align-items: flex-start; margin: 0 0 16px; font-family: Roboto, Arial, sans-serif; }
+    .comment-avatar { display: grid; place-items: center; flex: 0 0 34px; height: 34px; border-radius: 50%; background: var(--line-soft); color: var(--strong); font-weight: 600; }
+    .comment-main { min-width: 0; }
+    .comment-byline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+    .comment-byline strong { font-weight: 500; color: var(--strong); }
+    .comment-time, .comment-status { color: var(--muted); }
+    .comment-body { font-size: 14px; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    @media (max-width: 480px) {
+      .comment-thread-list .comment-thread-list { padding-inline-start: 12px; }
+    }
     footer { display: flex; justify-content: space-between; gap: 16px; padding: 18px 3px; color: var(--muted); font-size: 11px; line-height: 1.6; }
     .generation-stamp { white-space: nowrap; }
     @media (max-width: 640px) {
       .page { margin: 20px auto; padding: 0 12px; }
       .toolbar { margin: 0 8px 16px; gap: 12px; }
-      header { padding: 28px 24px 24px; }
+      .report > header { padding: 28px 24px 24px; }
       .fact { grid-template-columns: 1fr; gap: 7px; }
       dd { font-size: 27px; }
       .participants { font-size: 23px; }
@@ -251,7 +266,7 @@
       .page { max-width: none; margin: 0; padding: 0; }
       .toolbar, .tabs-wrap, footer { display: none; }
       .report { border: 0; box-shadow: none; }
-      header { padding: 0 0 20px; }
+      .report > header { padding: 0 0 20px; }
       [role="tabpanel"] { padding: 0; }
       .prose { max-width: none; font-size: 11pt; }
       .transcript-content { font-size: 9pt; }

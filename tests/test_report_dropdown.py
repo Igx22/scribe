@@ -41,11 +41,11 @@ class ReportDropdownTests(unittest.TestCase):
                          ['Final version', 'Transcript · GPT-Transcribe', 'Transcript · WhisperX Turbo',
                           'Transcript · MLX Turbo', 'Diarization · Nemotron 3'])
 
-    def test_no_transcript_selection_omits_picker_and_source_text(self):
+    def test_numeric_selection_includes_picker_and_source_text(self):
         content = self.render(tabs=[1])
         elements = Elements(content).elements
-        self.assertFalse(any(a.get('id') == 'transcript-toggle' for _, a in elements))
-        self.assertNotIn('Raw &amp;', content)
+        self.assertTrue(any(a.get('id') == 'transcript-toggle' for _, a in elements))
+        self.assertIn('Raw &amp;', content)
 
     def test_final_badge_uses_saved_log_instead_of_assuming_gpt(self):
         for provenance, badge in [
@@ -115,11 +115,11 @@ class ReportDropdownTests(unittest.TestCase):
             self.assertEqual(re.findall(r'class="processing-badge">([^<]+)', content), ['GPT-6-luna'])
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is optional for offline JavaScript checks')
-    def test_keyboard_and_theme_work_for_transcript_first_and_summary_only(self):
+    def test_keyboard_and_theme_work_for_all_report_menus(self):
         for selection in [['transcript'], ['transcript', 1], [1], [1, 'transcript'],
                           [10, 'transcript', 1, 3, 7, 5]]:
             with self.subTest(selection=selection):
-                content = self.render(tabs=selection)
+                content = self.render(tabs=selection, youtube={"id": "FLoC0dhY4u4"})
                 result = subprocess.run([shutil.which('node'), str(Path(__file__).with_name('report_theme_check.cjs'))],
                                         input=content, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

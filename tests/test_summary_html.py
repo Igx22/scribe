@@ -75,7 +75,7 @@ class SummaryHtmlTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     parser.parse_args(["--report-tabs", *values])
 
-    def test_selected_tabs_control_order_visibility_and_transcript_inclusion(self):
+    def test_selected_levels_control_order_with_mandatory_transcript(self):
         for selection in ([5], ["transcript"], ["transcript", 3], [1, 3, 5, 10, "transcript"]):
             with self.subTest(selection=selection):
                 summaries = {level: "Summary." for level in app.summary_levels(selection)}
@@ -84,14 +84,14 @@ class SummaryHtmlTests(unittest.TestCase):
                 elements = Elements(text).elements
                 tabs = [attrs for tag, attrs in elements if attrs.get("role") == "tab"]
                 panels = [attrs for tag, attrs in elements if attrs.get("role") == "tabpanel"]
-                self.assertEqual([tab["id"] for tab in tabs], [f"tab-{tab}" for tab in selection])
+                self.assertEqual([tab["id"] for tab in tabs], [f"tab-{tab}" for tab in app.summary_levels(selection)] + ["tab-transcript"])
                 self.assertEqual([tab["aria-controls"] for tab in tabs], [panel["id"] for panel in panels])
                 self.assertEqual([tab["aria-selected"] for tab in tabs], ["true"] + ["false"] * (len(tabs) - 1))
                 self.assertNotIn("hidden", panels[0])
                 self.assertTrue(all("hidden" in panel for panel in panels[1:]))
-                self.assertEqual("PRIVATE_TRANSCRIPT_SENTINEL" in text, "transcript" in selection)
+                self.assertIn("PRIVATE_TRANSCRIPT_SENTINEL", text)
                 self.assertEqual("Full transcript included." in text,
-                                 bool(summaries) and "transcript" in selection)
+                                 bool(summaries))
                 self.assertNotIn(">Log<", text)
                 self.assertNotIn("@@CONTENTS@@", text)
 
@@ -229,7 +229,7 @@ class SummaryHtmlTests(unittest.TestCase):
             self.assertEqual(summarize.call_count, 0)
 
     def test_summary_levels_reuse_only_matching_content_model_and_prompts(self):
-        for change in ("transcript", "model", "effort", "details", "transcript-tab", "order", "prompt", "force"):
+        for change in ("transcript", "model", "effort", "details", "order", "prompt", "force"):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
                 source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
                 with patch.object(app, "summarize", side_effect=["Old brief.", app.AppError("timeout")]):
@@ -243,8 +243,6 @@ class SummaryHtmlTests(unittest.TestCase):
                     args.summarize_model = ("gpt-6.1-sol", "high")
                 elif change == "details":
                     args.report_tabs = [1, 10]
-                elif change == "transcript-tab":
-                    args.report_tabs.remove("transcript")
                 elif change == "order":
                     args.report_tabs.reverse()
                 elif change == "force":
@@ -253,7 +251,7 @@ class SummaryHtmlTests(unittest.TestCase):
                 with patch.object(app, "SUMMARIZATION_PROMPT", prompt), \
                         patch.object(app, "summarize", return_value="Fresh.") as summarize:
                     app.process_file(source, args, "key")
-                reusable = change in ("transcript", "details", "transcript-tab", "order")
+                reusable = change in ("transcript", "details", "order")
                 expected = [level for level in app.summary_levels(args.report_tabs) if not reusable or level != 1]
                 self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], expected)
                 self.assertEqual("Old brief." in summary.read_text(), reusable)

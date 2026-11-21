@@ -341,8 +341,8 @@ Each summary level reads the same final log independently; detail controls retai
 information, separately from reasoning effort. Page guidance is not a padding quota.
 
 Reports are standalone HTML with inline CSS/JavaScript and escaped model text and
-filenames. Transcript selection includes the complete internal transcript and
-available raw sources; omitting it excludes both. Summary and Transcript dropdowns have fixed
+filenames. Every HTML report embeds the complete internal transcript and
+available raw sources. Numeric selections configure only Summary. Both dropdowns have fixed
 titles, independent last choices on their second lines, and stable item order.
 Summary levels use readable names and separate N/10 depth labels, never percentages;
 non-default levels retain a generic Summary label and their numeric depth. Inline
@@ -480,8 +480,8 @@ invalidation with Whisper-word reuse, and protected old local/API-only outputs.
 WhisperX checks cover selected assets, scoped gated authentication, tokenizer
 integrity, local CPU ASR/alignment, independent recognizer/voice cache identities,
 retention of untimed words, and separation of alignment scores from ASR confidence.
-Configuration checks cover the four default summary tabs, `.env` lists, environment
-and CLI precedence, single-tab HTML overrides and transcript-only selections, and invalid defaults. HTML
+Configuration checks cover the four default summary levels, `.env` lists, environment
+and CLI precedence, single-level HTML and legacy transcript-only selections, and invalid defaults. HTML
 checks cover multi-level parsing, escaping, tab associations, completed
 output protection in either format, interrupted-level reuse, invalidation, and
 preservation of existing results on failure. Transcript checks cover exact embedded text,
@@ -677,6 +677,31 @@ required. New downloads are decoded and checked against the available source
 duration before publication. The existing recognition cache still uses the
 recording bytes and model/settings compatibility. See the [design](superpowers/specs/2026-11-20-youtube-ingestion-design.md)
 and [usage](USAGE.md#download-one-youtube-video).
+
+### Viewer discussion (SCR-107)
+
+The selected comment snapshot is a validated JSON artifact under the recording
+content cache. Its reference is scoped to the YouTube video ID and published under
+the existing source lock. yt-dlp may return no rows for an indeterminate request.
+An empty or disabled snapshot requires an explicit upstream signal. A failed
+refresh can retain the last usable snapshot.
+
+The report pairs a transcript summary and a discussion digest at each selected
+numeric level. Comment digests use their own prompt, source identity and coverage
+budget. Long discussions use reusable notes with supporting IDs before level
+generation. Viewer text and replies appear once in the standalone Full comments
+view. Comment acquisition or model failures leave the video report available.
+See the [design](superpowers/specs/2026-11-21-youtube-comments-design.md) and
+[regeneration workflow](USAGE.md#youtube-comments).
+
+Verification on 2026-11-21 passed 317 mocked tests, including keyboard selection
+of Full comments, comment-cache recovery and bounded batch coverage. Firefox
+showed paired Summary sections and nested replies from an isolated HTML file in
+both themes. A live regeneration reused the verified video and internal final,
+embedded the single returned comment and applied the configured four levels.
+The generic praise in that comment produced an empty digest at each depth.
+
+### YouTube ingestion verification
 
 On macOS 14.5, Apple Silicon and Python 3.13, fresh setup reused system
 FFmpeg 7.1 without fetching the optional FFmpeg wheel. A limited `PATH` still

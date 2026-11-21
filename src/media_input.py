@@ -287,6 +287,16 @@ def read_cookie_file(path):
     return io.StringIO(contents)
 
 
+def youtube_credentials(cookie_file, browser):
+    if browser is not None:
+        name, _, profile = browser.partition(":")
+        return {"cookiesfrombrowser": (name.lower(), profile or None, None, None)}
+    if cookie_file is not None:
+        # yt-dlp updates the jar when closing. Keep that write in memory.
+        return {"cookiefile": read_cookie_file(cookie_file)}
+    return {}
+
+
 def download_attempt(url, scratch, say, *, cookie_file=None, browser=None):
     try:
         from yt_dlp import YoutubeDL
@@ -305,13 +315,8 @@ def download_attempt(url, scratch, say, *, cookie_file=None, browser=None):
                    "ffmpeg_location": ffmpeg, "js_runtimes": {"deno": {"path": str(deno)}},
                    "cachedir": False, "quiet": True, "logger": logger,
                    "progress_hooks": [progress.transfer], "postprocessor_hooks": [progress.postprocess]}
-        if browser is not None:
-            name, _, profile = browser.partition(":")
-            options["cookiesfrombrowser"] = (name.lower(), profile or None, None, None)
         try:
-            if cookie_file is not None:
-                # yt-dlp updates the jar when closing. Keep that write in memory.
-                options["cookiefile"] = read_cookie_file(cookie_file)
+            options.update(youtube_credentials(cookie_file, browser))
             with YoutubeDL(options) as downloader:
                 return downloader.extract_info(url, download=True)
         except CookieLoadError:
@@ -327,6 +332,104 @@ def download_attempt(url, scratch, say, *, cookie_file=None, browser=None):
             if cookie_file is not None or browser is not None:
                 raise MediaError("yt-dlp could not use the supplied browser session or Netscape cookie file.") from None
             raise MediaError("yt-dlp could not read or write the download files.") from None
+
+
+COMMENT_FIELDS = ("id", "parent", "author", "text")
+
+
+def normalize_youtube_comments(entries):
+    rows, seen, invalid = [], set(), False
+    for entry in entries:
+        if (not isinstance(entry, dict) or any(not isinstance(entry.get(key), str) for key in ("id", "parent", "text"))
+                or not entry["id"] or entry["id"] == "root" or not entry["parent"]):
+            invalid = True
+            continue
+        if entry["id"] in seen:
+            continue
+        seen.add(entry["id"])
+        row = {key: entry.get(key) for key in COMMENT_FIELDS}
+        if not isinstance(row["author"], str):
+            row["author"] = ""
+        label = entry.get("published", entry.get("_time_text"))
+        if isinstance(label, str) and label.strip():
+            row["published"] = label
+        rows.append(row)
+    return rows, invalid
+
+
+class CommentMessages(DownloadMessages):
+    def __init__(self):
+        super().__init__()
+        self.incomplete = False
+        self.confirmed_empty = False
+        self.confirmed_disabled = False
+
+    def debug(self, message):
+        # yt-dlp's returned comment_count is computed from extracted rows.
+        # Its comment-header progress marker reflects the upstream count.
+        if re.fullmatch(r"\[youtube\] Downloading ~0 comments", message.strip()):
+            self.confirmed_empty = True
+
+    def warning(self, message):
+        super().warning(message)
+        if re.search(r"YouTube said:.*\bcomments?\s+(?:(?:on|for) this video\s+)?"
+                     r"(?:(?:are|have been)\s+)?(?:turned off|disabled)\b", message, re.I):
+            self.confirmed_disabled = True
+        if re.search(r"\b(?:sign|log)[ -]in to (?:see|read) comments\b", message, re.I):
+            self.warnings.add("sign-in")
+        if re.search(r"comments looping|incomplete data.*(?:giving up|retrying did not help|reply thread)|"
+                     r"unable to download comment", message, re.I):
+            self.incomplete = True
+
+    def error(self, message):
+        super().warning(message)
+        self.incomplete = True
+
+
+def fetch_youtube_comments(video_id, args, say):
+    """Retrieve all available threads without transferring the video or its audio."""
+    try:
+        from yt_dlp import YoutubeDL
+        from yt_dlp.cookies import CookieLoadError
+        from yt_dlp.utils import DownloadError
+    except ImportError:
+        raise MediaError("YouTube comment extraction tools are unavailable.") from None
+    credentials = (args.cookies, args.cookies_from_browser)
+    for cookie_file, browser in ((None, None), credentials) if any(credentials) else ((None, None),):
+        logger = CommentMessages()
+        options = {"getcomments": True, "noplaylist": True, "allowed_extractors": ["youtube"],
+                   "ignore_no_formats_error": True, "ignoreerrors": True,
+                   "cachedir": False, "quiet": True, "logger": logger, "socket_timeout": 20,
+                   "extractor_args": {"youtube": {"comment_sort": ["new"],
+                                                  "raise_incomplete_data": ["true"]}},
+                   "js_runtimes": {"deno": {"path": str(deno_executable())}}}
+        try:
+            options.update(youtube_credentials(cookie_file, browser))
+            with DownloadProgress(say, initial_stage="Fetching YouTube comments"), YoutubeDL(options) as downloader:
+                info = downloader.extract_info(watch_url(video_id), download=False)
+        except DownloadError as exc:
+            logger.error(str(exc))
+            info = None
+        except (CookieLoadError, OSError, ValueError):
+            info = None
+        if not cookie_file and not browser and any(credentials) and logger.warnings & {"sign-in", "access"}:
+            say("  YouTube requires sign-in for comments; retrying with the supplied cookie source.")
+            continue
+        if not isinstance(info, dict) or info.get("id") != video_id:
+            return "unavailable", []
+        raw = info.get("comments")
+        count = info.get("comment_count")
+        if isinstance(raw, list):
+            rows, malformed = normalize_youtube_comments(raw)
+            if rows:
+                status = "partial" if malformed or count is None or logger.incomplete else "complete"
+                return status, rows
+            if not raw and count == 0 and logger.confirmed_empty and not logger.incomplete:
+                return "empty", []
+        if raw is None and count is None and logger.confirmed_disabled and not logger.incomplete:
+            return "disabled", []
+        return "unavailable", []
+    return "unavailable", []
 
 
 def _source_metadata(info, video_id):

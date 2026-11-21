@@ -233,7 +233,8 @@ class DownloadTests(unittest.TestCase):
         args.cache_dir = self.root / "cache"
         args.youtube_metadata = {"id": ID, "title": "Title from YouTube"}
         seed_final(source, args, "[00:00–00:02] A\nThe final words are still here.")
-        with patch.object(app, "extract_report_metadata", side_effect=app.AppError("Topic evidence rejected")):
+        with patch.object(app, "extract_report_metadata", side_effect=app.AppError("Topic evidence rejected")), \
+                patch.object(self.media, "fetch_youtube_comments", return_value=("empty", [])):
             app.process_file(source, args, "example-key")
         report = app.output_paths(source, self.output)[1].read_text()
         self.assertIn("The final words are still here.", report)

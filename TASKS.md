@@ -157,7 +157,7 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-104 | Include slides or still images from the source video in generated summaries | Planned | 2026-11-20 | — |
 | SCR-105 | Investigate how a small AI model can discover and use Scribe from the CLI or its GitHub repository | Planned | 2026-11-20 | — |
 | SCR-106 | Add a Scribe action to the Google Chrome page context menu | Planned | 2026-11-20 | — |
-| SCR-107 | [Retrieve and summarize viewer comments at each selected YouTube report detail level](docs/superpowers/specs/2026-11-21-youtube-comments-design.md) | In Progress | 2026-11-20 | — |
+| SCR-107 | [Retrieve and summarize viewer comments at each selected YouTube report detail level](docs/superpowers/specs/2026-11-21-youtube-comments-design.md) | Done | 2026-11-20 | 2026-11-21 |
 | SCR-108 | [Export public comments and replies from the supplied YouTube video to a text file](data/youtube/_EAPUOsb3oQ/comments.txt) | Done | 2026-11-21 | 2026-11-21 |
 
 ### SCR-105

@@ -35,7 +35,7 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
     picker: extra.get(name + '-picker'), choice: extra.get(name + '-toggle'),
     options: extra.get(name + '-options'),
     tabs: tabs.filter(tab => name === 'detail' ? /^tab-\d+$/.test(tab.id) :
-      tab.id === 'tab-transcript' || tab.id.startsWith('tab-source-'))
+      tab.id === 'tab-transcript' || tab.id === 'tab-full-comments' || tab.id.startsWith('tab-source-'))
   })).filter(group => group.choice);
   groupFixtures.forEach(group => {
     group.picker.contains = item => item === group.choice || group.tabs.includes(item);

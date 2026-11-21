@@ -1,6 +1,6 @@
 # YouTube comments in Scribe reports
 
-SCR-107 · 2026-11-21 · Design for review
+SCR-107 · 2026-11-21 · Approved for implementation
 
 A reader should be able to read what a video says, then what viewers added,
 questioned or disputed, at the same chosen depth. The original discussion
@@ -111,7 +111,7 @@ markup-shaped strings. All threads are expanded on first view. The emitted
 HTML contains the full list once. Reading it requires no JSON link, browser
 fetch, iframe, local sidecar file or connection to YouTube.
 
-Use the YouTube desktop comment layout for the list. A circular avatar sits
+Use the YouTube desktop comment layout as a reference for the list. A circular avatar sits
 to the left of each thread. To its right, a compact row contains the author
 in medium weight and the publication-time label in a muted color when
 available. The comment body sits just below, left-aligned in proportional

@@ -157,7 +157,7 @@ class SourceReportTests(unittest.TestCase):
         invalid['source_reports']['reports'].append(reports[0])
         self.assertEqual(app.saved_source_reports(invalid, transcript), [])
 
-    def test_sources_are_escaped_complete_portable_and_omitted_without_transcript_selection(self):
+    def test_sources_are_escaped_complete_and_portable_with_numeric_selection(self):
         text = '\nRAW_BEGIN\n' + '<script>example</script> & @@PANELS@@\n' * 10000 + 'RAW_END\n'
         reports = [{'id': 'gpt', 'label': '<GPT>', 'description': 'Original & raw', 'text': text}]
         rendered = app.summary_html(Path('meeting.mkv'), {1: 'Brief'}, transcript='Final', source_reports=reports)
@@ -166,8 +166,9 @@ class SourceReportTests(unittest.TestCase):
         self.assertEqual(sum(tag == 'script' for tag, _ in elements), 1)
         self.assertFalse(any(key in attrs for _, attrs in elements for key in ('src', 'href', 'srcset')))
         self.assertIn('&lt;GPT&gt;', rendered)
-        self.assertNotIn('RAW_BEGIN', app.summary_html(Path('meeting.mkv'), {1: 'Brief'},
-            transcript='Final', source_reports=reports, tabs=[1]))
+        numeric = app.summary_html(Path('meeting.mkv'), {1: 'Brief'},
+                                   transcript='Final', source_reports=reports, tabs=[1])
+        self.assertEqual(PanelText(numeric).text['panel-source-gpt'], text)
         with tempfile.TemporaryDirectory() as tmp:
             standalone = Path(tmp) / 'report.html'
             standalone.write_text(rendered)
