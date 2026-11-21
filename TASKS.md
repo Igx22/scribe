@@ -159,6 +159,8 @@ findings and limitations are preserved in `docs/PROJECT_CONTEXT.md`.
 | SCR-106 | Add a Scribe action to the Google Chrome page context menu | Planned | 2026-11-20 | — |
 | SCR-107 | [Retrieve and summarize viewer comments at each selected YouTube report detail level](docs/superpowers/specs/2026-11-21-youtube-comments-design.md) | Done | 2026-11-20 | 2026-11-21 |
 | SCR-108 | [Export public comments and replies from the supplied YouTube video to a text file](data/youtube/_EAPUOsb3oQ/comments.txt) | Done | 2026-11-21 | 2026-11-21 |
+| SCR-109 | Give YouTube reports a Comments menu and a publication date | In Progress | 2026-11-21 | — |
+| SCR-110 | Switch Scribe to GPT 6.2 Sol | Planned | 2026-11-21 | — |
 
 ### SCR-105
 
@@ -189,3 +191,18 @@ in Finder. Leave the supported pages and the exact action on selection for desig
 Explore how to install the extension and connect the menu action to the local
 `scribe.sh`. Consider whether a shell script similar to `macos-register-finder-hooks`
 could register the necessary handler and which steps would take place in Chrome.
+
+### SCR-109
+
+Review the interactive mockup before implementing these YouTube report changes.
+
+- Add a **Comments** picker alongside **Summary** and **Transcript**. It has
+  independently selected discussion levels (1, 3, 5 and 10 by default) and
+  **Full comments** after the numeric levels. Summary shows the video summary.
+  Transcript shows the final transcript and its available source views.
+- Fill **Date** in the report header from verified YouTube publication metadata.
+  Retain the date in the saved YouTube source metadata and use it on report
+  regeneration. For older downloads, fill it from an available metadata-only
+  lookup on explicit regeneration while reusing the verified media. Use
+  **Not recorded** if no valid date is available. Preserve the calendar date
+  supplied by YouTube.
