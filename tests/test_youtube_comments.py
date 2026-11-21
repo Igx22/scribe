@@ -122,7 +122,7 @@ class SnapshotTests(unittest.TestCase):
 
 
 class CommentRenderingTests(unittest.TestCase):
-    def test_one_raw_view_and_paired_summary_sections_escape_content(self):
+    def test_comments_menu_has_its_own_levels_and_one_escaped_raw_view(self):
         rows = [row("a", text="Top & <markup>\n🙂"), row("b", "a", "Same reply"),
                 row("c", "b", "Same reply"), row("orphan", "missing", "Last reply")]
         discussion = {"comments": rows, "status": "partial", "top_level": 1, "replies": 3,
@@ -131,11 +131,21 @@ class CommentRenderingTests(unittest.TestCase):
                                   transcript="Final words", youtube={"id": VIDEO}, discussion=discussion,
                                   comment_digests={1: [{"title": "", "text": "Brief discussion"}],
                                                    5: [{"title": "Theme", "text": "Expanded <discussion>"}]})
-        brief = report.split('id="panel-1"', 1)[1].split('id="panel-5"', 1)[0]
-        self.assertLess(brief.index("Video brief"), brief.index("<h2>Comments</h2>"))
+        summary = report.split('id="panel-1"', 1)[1].split('</section>', 1)[0]
+        brief = report.split('id="panel-comments-1"', 1)[1].split('</section>', 1)[0]
+        expanded = report.split('id="panel-comments-5"', 1)[1].split('</section>', 1)[0]
+        self.assertIn("Video brief", summary)
+        self.assertNotIn("Brief discussion", summary)
         self.assertIn("Brief discussion", brief)
-        self.assertNotIn("Expanded", brief)
-        self.assertIn("Expanded &lt;discussion&gt;", report)
+        self.assertNotIn("Video brief", brief)
+        self.assertIn("Expanded &lt;discussion&gt;", expanded)
+        self.assertLess(report.index('id="detail-picker"'), report.index('id="transcript-picker"'))
+        self.assertLess(report.index('id="transcript-picker"'), report.index('id="comments-picker"'))
+        comments_menu = report.split('id="comments-options">')[1].split('</div></div>', 1)[0]
+        self.assertLess(comments_menu.index('id="tab-comments-1"'), comments_menu.index('id="tab-comments-5"'))
+        self.assertLess(comments_menu.index('id="tab-comments-5"'), comments_menu.index('id="tab-full-comments"'))
+        transcript_menu = report.split('id="transcript-options">')[1].split('</div></div>', 1)[0]
+        self.assertNotIn('id="tab-full-comments"', transcript_menu)
         self.assertEqual(report.count('id="panel-full-comments"'), 1)
         self.assertIn('data-choice-label="Full comments"', report)
         self.assertEqual(report.count("Top &amp; &lt;markup&gt;\n🙂"), 1)
@@ -144,6 +154,13 @@ class CommentRenderingTests(unittest.TestCase):
         self.assertIn("Partial discussion", report)
         for html_tag, record in zip(self.comment_elements(report), rows, strict=True):
             self.assertEqual(html_tag, record["id"])
+
+    def test_youtube_transcript_only_has_full_comments_and_no_ai_levels(self):
+        report = app.summary_html(Path("video.webm"), {}, transcript="Final words", youtube={"id": VIDEO})
+        self.assertIn('id="comments-choice-description">Full comments</span>', report)
+        self.assertIn('id="panel-full-comments"', report)
+        self.assertNotIn('id="tab-comments-1"', report)
+        self.assertNotIn('id="detail-picker"', report)
 
     @staticmethod
     def comment_elements(report):

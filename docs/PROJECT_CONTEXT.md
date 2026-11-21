@@ -686,11 +686,9 @@ the existing source lock. yt-dlp may return no rows for an indeterminate request
 An empty or disabled snapshot requires an explicit upstream signal. A failed
 refresh can retain the last usable snapshot.
 
-The report pairs a transcript summary and a discussion digest at each selected
-numeric level. Comment digests use their own prompt, source identity and coverage
-budget. Long discussions use reusable notes with supporting IDs before level
-generation. Viewer text and replies appear once in the standalone Full comments
-view. Comment acquisition or model failures leave the video report available.
+Comment digests use their own prompt, source identity and coverage budget. Long
+discussions use reusable notes with supporting IDs before level generation.
+Comment acquisition or model failures leave the video report available.
 See the [design](superpowers/specs/2026-11-21-youtube-comments-design.md) and
 [regeneration workflow](USAGE.md#youtube-comments).
 
@@ -700,6 +698,18 @@ showed paired Summary sections and nested replies from an isolated HTML file in
 both themes. A live regeneration reused the verified video and internal final,
 embedded the single returned comment and applied the configured four levels.
 The generic praise in that comment produced an empty digest at each depth.
+
+### Report navigation and YouTube dates (SCR-109)
+
+YouTube reports select discussion detail independently in Comments, where
+Full comments embeds the original threads once. Summary selects the video digest.
+The header date uses the calendar day from saved YouTube metadata, with a
+metadata-only lookup on explicit regeneration when it is absent.
+
+On 2026-11-21 all 321 mocked tests passed. A live regeneration of the Bali report
+backfilled 20 November 2026 and reused the video, transcript and AI caches. The
+report retained all 107 comments and 28 replies. Firefox opened Full comments
+and switched to 5/10 with Summary still set to 1/10.
 
 ### YouTube ingestion verification
 

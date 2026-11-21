@@ -151,6 +151,9 @@ alongside the media for repeat downloads. A completed pair skips processing and 
 missing export resumes through Scribe's ordinary checkpoints. A failed report
 leaves the verified source in place. Interrupted downloads are ineligible for
 reuse. A new report opens in the default browser and links to the video.
+The **Date** field shows the YouTube publication date when available. Scribe
+stores it in the source metadata. Explicit `--summary-only` regeneration can
+look up a missing date for a verified video without downloading it again.
 
 Scribe tries anonymously even when credentials are supplied. When YouTube
 indicates that sign-in is required, sign in with the account that can view the
@@ -172,8 +175,8 @@ JavaScript and media tools if extraction reports a tool error. [Cookie format an
 ### YouTube comments
 
 Scribe uses yt-dlp to retrieve available comments and replies in newest-first
-order. Each **Summary** level pairs the video summary with a **Comments**
-digest at that depth. **Transcript → Full comments** contains the original
+order. The **Comments** menu independently selects a discussion digest from
+the configured levels. **Comments → Full comments** opens the original
 discussion inside the standalone HTML, including replies in their threads.
 A partial snapshot is labeled with its capture time and retrieved counts.
 

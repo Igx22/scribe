@@ -42,9 +42,10 @@ alongside its transcript and HTML report in `./data` or `--output-dir DIR`.
 Repeating the command reuses a verified local download by video ID before
 contacting YouTube. The new report opens in the default browser.
 
-YouTube reports show a viewer discussion digest below each video summary.
-The **Transcript → Full comments** view embeds the original discussion and replies
-for offline reading. See the [YouTube usage guide](docs/USAGE.md#youtube-comments).
+YouTube reports show the video's publication date when available. The **Comments**
+menu offers discussion digests at the configured detail levels and a
+**Full comments** view with the original discussion and replies for offline reading.
+See the [YouTube usage guide](docs/USAGE.md#youtube-comments).
 
 Downloads start anonymously. If YouTube requires sign-in, sign in on the
 selected browser and rerun with `--cookies-from-browser`, for example

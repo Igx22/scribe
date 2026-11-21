@@ -25,21 +25,25 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
   const root = {dataset: {}};
   const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(m => element(m[0]));
   const panels = [...html.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map(m => element(m[0]));
-  const extra = new Map(['detail', 'transcript'].flatMap(name =>
+  const names = [...html.matchAll(/class="report-picker" id="([^"]+)-picker"/g)].map(match => match[1]);
+  const extra = new Map(names.flatMap(name =>
     ['picker', 'toggle', 'options', 'choice-title', 'choice-description'].map(suffix => {
       const id = name + '-' + suffix;
       const tag = html.match(new RegExp('<[^>]+id="' + id + '"[^>]*>'));
       return [id, tag ? element(tag[0]) : null];
     })));
-  const groupFixtures = ['detail', 'transcript'].map(name => ({name,
+  const groupFixtures = names.map(name => ({name,
     picker: extra.get(name + '-picker'), choice: extra.get(name + '-toggle'),
     options: extra.get(name + '-options'),
-    tabs: tabs.filter(tab => name === 'detail' ? /^tab-\d+$/.test(tab.id) :
-      tab.id === 'tab-transcript' || tab.id === 'tab-full-comments' || tab.id.startsWith('tab-source-'))
-  })).filter(group => group.choice);
+    tabs: tabs.filter(tab => {
+      const menu = html.split('id="' + name + '-options">')[1].split('</div></div>')[0];
+      return menu.includes('id="' + tab.id + '"');
+    })
+  }));
   groupFixtures.forEach(group => {
     group.picker.contains = item => item === group.choice || group.tabs.includes(item);
     group.options.contains = item => group.tabs.includes(item);
+    group.options.querySelectorAll = () => group.tabs;
   });
   const documentListeners = {};
   const document = {
@@ -47,7 +51,11 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
     getElementById(id) { return id === 'theme-toggle' ? toggle : id === 'theme-state' ? state : id === 'generated-at' ? stamp : extra.get(id) ?? null; },
     addEventListener(type, handler) { if (type === 'DOMContentLoaded') ready = handler; else documentListeners[type] = handler; },
     get activeElement() { return focused; },
-    querySelectorAll(selector) { return selector === '[role="tab"]' ? tabs : panels; },
+    querySelectorAll(selector) {
+      if (selector === '[role="tab"]') return tabs;
+      if (selector === '.report-picker') return groupFixtures.map(group => group.picker);
+      return panels;
+    },
     get cookie() { if (blockCookie) throw Error('Cookie access denied'); return cookie; },
     set cookie(value) {
       if (blockCookie) throw Error('Cookie access denied');
@@ -95,7 +103,7 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       if (group.tabs.includes(tabs[index])) remembered.set(group.name, tabs[index]);
       const selected = remembered.get(group.name);
       assert.equal(extra.get(group.name + '-choice-title').textContent,
-        group.name === 'detail' ? 'Summary' : 'Transcript');
+        {detail: 'Summary', transcript: 'Transcript', comments: 'Comments'}[group.name]);
       assert.equal(extra.get(group.name + '-choice-description').textContent, selected.attrs['data-choice-label']);
       assert.equal(group.choice.attrs['data-active'], String(group.tabs.includes(tabs[index])));
       group.tabs.forEach(tab => assert.equal(tab.attrs['data-current'], String(tab === selected)));
@@ -139,15 +147,15 @@ function open({storage = new Map(), systemDark = false, protocol = 'file:', cook
       picker.listeners.focusout({relatedTarget: toggle});
       assert.equal(options.hidden, true);
     }
-    if (groupFixtures.length === 2) {
-      const [detail, transcript] = groupFixtures;
-      const description = extra.get('detail-choice-description').textContent;
-      detail.choice.listeners.click();
-      assert.equal(detail.options.hidden, false);
-      transcript.choice.listeners.click();
-      assert.equal(detail.options.hidden, true);
-      assert.equal(transcript.options.hidden, false);
-      assert.equal(extra.get('detail-choice-description').textContent, description);
+    if (groupFixtures.length >= 2) {
+      const [first, second] = groupFixtures;
+      const description = extra.get(first.name + '-choice-description').textContent;
+      first.choice.listeners.click();
+      assert.equal(first.options.hidden, false);
+      second.choice.listeners.click();
+      assert.equal(first.options.hidden, true);
+      assert.equal(second.options.hidden, false);
+      assert.equal(extra.get(first.name + '-choice-description').textContent, description);
       documentListeners.pointerdown({target: toggle});
       assert.ok(groupFixtures.every(group => group.options.hidden));
     }

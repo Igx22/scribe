@@ -68,6 +68,7 @@ class DownloadTests(unittest.TestCase):
         source = stage / "video.webm"
         source.write_bytes(b"valid audio and video")
         return {"id": self.media.youtube_id(url), "title": "Clip / test", "channel": "Test channel",
+                "upload_date": "20261120",
                 "duration": 132, "requested_formats": [{"vcodec": "av1", "url": "https://secret"},
                                                        {"acodec": "opus", "http_headers": {"Cookie": "secret"}}],
                 "requested_downloads": [{"filepath": str(source)}]}
@@ -94,6 +95,9 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), b"valid audio and video")
             self.assertEqual(metadata["streams"], [{"vcodec": "av1"}, {"acodec": "opus"}])
             self.assertEqual(metadata["url"], URL)
+            self.assertEqual(metadata["publication_date"], "2026-11-20")
+            self.assertEqual(app.read_json(self.state / f"{ID.encode().hex()}.json")["publication_date"],
+                             "2026-11-20")
             self.assertEqual(download.call_args.kwargs, {"cookie_file": None, "browser": None})
             renamed = source.with_name(f"New title [{ID}].webm")
             source.rename(renamed)
@@ -231,7 +235,7 @@ class DownloadTests(unittest.TestCase):
         args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "transcript"])
         args.output_dir = self.output
         args.cache_dir = self.root / "cache"
-        args.youtube_metadata = {"id": ID, "title": "Title from YouTube"}
+        args.youtube_metadata = {"id": ID, "title": "Title from YouTube", "publication_date": "2026-11-20"}
         seed_final(source, args, "[00:00–00:02] A\nThe final words are still here.")
         with patch.object(app, "extract_report_metadata", side_effect=app.AppError("Topic evidence rejected")), \
                 patch.object(self.media, "fetch_youtube_comments", return_value=("empty", [])):
@@ -240,6 +244,49 @@ class DownloadTests(unittest.TestCase):
         self.assertIn("The final words are still here.", report)
         self.assertIn("Title from YouTube", report)
         self.assertIn(f'href="{URL}"', report)
+        self.assertIn("20 November 2026", report)
+        self.assertIn("Published on YouTube", report)
+
+    def test_explicit_regeneration_backfills_publication_date_without_redownloading(self):
+        source = self.output / f"Old clip [{ID}].webm"
+        source.write_bytes(b"verified media")
+        manifest = self.state / f"{ID.encode().hex()}.json"
+        metadata = {"id": ID, "sha256": app.digest_file(source), "filename": source.name, "media_path": str(source)}
+        app.save_json(manifest, metadata)
+        self.args.cookies = self.root / "missing.cookies"
+        with patch.object(self.media, "download_attempt") as download, patch("yt_dlp.YoutubeDL") as extractor:
+            self.assertEqual(self.obtain(), (source, metadata))
+            extractor.assert_not_called()
+            self.args.summary_only = True
+            extract = extractor.return_value.__enter__.return_value.extract_info
+            extract.return_value = {"id": ID, "upload_date": "20261120"}
+            self.assertEqual(self.obtain()[1]["publication_date"], "2026-11-20")
+            self.assertEqual(self.obtain()[1]["publication_date"], "2026-11-20")
+        extract.assert_called_once_with(URL, download=False)
+        self.assertNotIn("cookiefile", extractor.call_args.args[0])
+        self.assertFalse(extractor.call_args.args[0].get("getcomments", False))
+        download.assert_not_called()
+        self.assertEqual(app.read_json(manifest)["publication_date"], "2026-11-20")
+
+    def test_failed_date_lookup_leaves_verified_media_available(self):
+        source = self.output / f"{ID}.webm"
+        source.write_bytes(b"verified media")
+        manifest = self.state / f"{ID.encode().hex()}.json"
+        metadata = {"id": ID, "sha256": app.digest_file(source), "filename": source.name, "media_path": str(source)}
+        app.save_json(manifest, metadata)
+        self.args.summary_only = True
+        with patch.object(self.media, "download_attempt") as download, patch("yt_dlp.YoutubeDL") as extractor:
+            extract = extractor.return_value.__enter__.return_value.extract_info
+            for result in (OSError("network unavailable"), {"id": ID, "upload_date": "20260229"},
+                           {"id": ID.swapcase(), "upload_date": "20261120"}):
+                if isinstance(result, Exception):
+                    extract.side_effect = result
+                else:
+                    extract.side_effect = None
+                    extract.return_value = result
+                self.assertEqual(self.obtain(), (source, metadata))
+        self.assertEqual(app.read_json(manifest), metadata)
+        download.assert_not_called()
 
     def test_terminal_cache_miss_does_not_download_for_summary_only(self):
         self.args.summary_only = True

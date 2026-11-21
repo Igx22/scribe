@@ -1969,7 +1969,7 @@ def extract_report_metadata(transcript, key, model, effort, cache, force=False, 
     return {"topic": topics[0] if topics else "", "roles": roles}
 
 
-def report_header(source, transcript, metadata, *, youtube=False):
+def report_header(source, transcript, metadata, *, youtube=None):
     turns = report_turns(transcript)
     roster = report_roster(turns)
     participants = [{"name": label, "role": metadata.get("roles", {}).get(label, "")} for label in roster]
@@ -1986,12 +1986,15 @@ def report_header(source, transcript, metadata, *, youtube=False):
             duration = " ".join(part for count, part in ((hours, f"{hours} hr"), (minutes, f"{minutes} min"),
                                                          (seconds, f"{seconds} sec")) if count) or "0 min"
     date, date_note = "Not recorded", ""
-    explicit = re.search(r"^(?:Date|Recorded at): ([^\r\n]+)$", block, re.M)
-    filename = re.search(r"^Source file: ([^\r\n]+)$", block, re.M)
-    stem = Path(filename[1]).stem if filename else source.stem
-    choices = [(explicit[1], "Date from transcript metadata")] if explicit else []
-    if not youtube:
+    if youtube is None:
+        explicit = re.search(r"^(?:Date|Recorded at): ([^\r\n]+)$", block, re.M)
+        filename = re.search(r"^Source file: ([^\r\n]+)$", block, re.M)
+        stem = Path(filename[1]).stem if filename else source.stem
+        choices = [(explicit[1], "Date from transcript metadata")] if explicit else []
         choices.append((stem, "Date from recording filename"))
+    else:
+        day = media_input.youtube_publication_day(youtube.get("publication_date"))
+        choices = [(day.isoformat(), "Published on YouTube")] if day is not None else []
     months = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
     for value, note in choices:
         pattern = r"(\d{4}-\d{2}-\d{2})(?:[ T_](\d{2})[-:](\d{2})(?:[-:](\d{2}))?)?"
@@ -2120,66 +2123,74 @@ def comment_digest_html(themes, fallback):
 def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None,
                  summary_model=None, youtube=None, discussion=None, comment_digests=None):
     """Render model text as escaped data in a self-contained, offline report."""
-    levels = list(summaries) if tabs is None else summary_levels(tabs)
-    selection = [*dict.fromkeys(levels), "transcript"]
-    buttons, transcript_items, detail_items = [], [], []
-    panel_groups = {"detail": [], "transcript": []}
-    group_order = []
-    transcript_index = detail_index = None
+    levels = list(summaries) if tabs is None else list(dict.fromkeys(summary_levels(tabs)))
+    labels = {
+        1: ("Key points", "Essentials and decisions"),
+        3: ("Overview", "Main discussion and context"),
+        5: ("Expanded", "Reasoning and alternatives"),
+        10: ("In depth", "All substantive threads"),
+    }
+    buttons, panels = [], []
     model_label = re.sub(r"^gpt-", "GPT-", summary_model) if summary_model else ""
     summary_badge = f'<span class="processing-badge">{html.escape(model_label)}</span>' if model_label else ""
-    comment_info, comment_fallback = discussion_header(discussion)
-    comment_meta = f"<span>{html.escape(comment_info)}</span>" if comment_info else ""
-    for index, detail in enumerate(selection):
-        active = index == 0
-        group = "transcript" if detail == "transcript" else "detail"
-        if group not in group_order:
-            group_order.append(group)
-        if detail == "transcript":
-            transcript_index = len(buttons)
-            buttons.append("")
-            badge = final_transcript_badge(transcript)
-            badge = f'<span class="processing-badge">{html.escape(badge)}</span>' if badge else ""
-            transcript_items.append('<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
-                        'data-choice-label="Final version" '
-                        f'aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}">'
-                        '<span class="tab-title">Final transcript</span>'
-                        f'<span class="option-meta"><span class="tab-description">Selected pipeline result</span>{badge}</span></button>')
-            panel_groups["transcript"].append('<section role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript" '
-                          f'tabindex="0"{"" if active else " hidden"}>'
-                          '<div class="panel-heading"><h2>Final transcript</h2>'
-                          f'<span>{len(transcript.split()):,} words · Full transcript</span></div>'
-                          f'<div class="transcript-content" dir="auto">{html.escape(transcript)}</div></section>')
-            continue
-        answer = summaries[detail]
-        label, description = {
-            1: ("Key points", "Essentials and decisions"),
-            3: ("Overview", "Main discussion and context"),
-            5: ("Expanded", "Reasoning and alternatives"),
-            10: ("In depth", "All substantive threads"),
-        }.get(detail, ("Summary", f"Detail level {detail} of 10"))
-        if detail_index is None:
-            detail_index = len(buttons)
-            buttons.append("")
-        detail_items.append(f'<button type="button" role="tab" id="tab-{detail}" '
-                    f'data-choice-label="{label} · {detail}/10" '
-                    f'aria-controls="panel-{detail}" aria-selected="{str(active).lower()}" '
-                    f'tabindex="{0 if active else -1}"><span class="tab-title">{label}</span>'
-                    f'<span class="tab-description">{description}</span>'
-                    f'<span class="detail-level">{detail}/10</span></button>')
-        paragraphs = "\n".join(f'<p>{html.escape(part.strip())}</p>'
-                               for part in re.split(r"\n\s*\n", answer.strip()) if part.strip())
-        heading = {1: "Brief summary", 3: "Conversation overview", 5: "Expanded summary", 10: "Detailed summary"}.get(detail, "Conversation summary")
-        comments = ""
-        if youtube is not None:
-            digest = comment_digest_html((comment_digests or {}).get(detail), comment_fallback)
-            comments = (f'<section class="discussion-summary"><div class="panel-heading"><h2>Comments</h2>'
-                        f'{comment_meta}</div><div class="prose" dir="auto">{digest}</div></section>')
-        panel_groups["detail"].append(f'<section role="tabpanel" id="panel-{detail}" aria-labelledby="tab-{detail}" '
-                      f'tabindex="0"{ "" if active else " hidden"}>'
-                      f'<div class="panel-heading"><h2>{heading}</h2>'
-                      f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span></div>'
-                      f'<div class="prose" dir="auto">{paragraphs}</div>{comments}</section>')
+
+    def picker(identifier, title, description, items, icon):
+        return (f'<div class="report-picker" id="{identifier}-picker">'
+            f'<button class="picker-toggle" type="button" id="{identifier}-toggle" aria-expanded="false" '
+            f'aria-controls="{identifier}-options" hidden>{icon}<span class="picker-copy">'
+            f'<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span>'
+            f'<span class="picker-choice-description" id="{identifier}-choice-description">{description}</span></span>'
+            '<span class="picker-arrow" aria-hidden="true">⌄</span></button>'
+            f'<div class="picker-options" id="{identifier}-options">' + "\n".join(items) + '</div></div>')
+
+    def level_label(level):
+        return labels.get(level, ("Summary", f"Detail level {level} of 10"))[0]
+
+    def level_item(detail, identifier, *, active=False, description=""):
+        label = level_label(detail)
+        subtitle = f'<span class="tab-description">{description}</span>' if description else ""
+        return (f'<button type="button" role="tab" class="detail-option" id="tab-{identifier}" '
+                f'data-choice-label="{label} · {detail}/10" aria-controls="panel-{identifier}" '
+                f'aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}">'
+                f'<span class="tab-title">{label}</span>{subtitle}'
+                f'<span class="detail-level">{detail}/10</span></button>')
+
+    def panel(identifier, heading, body, *, meta="", active=False):
+        panels.append(f'<section role="tabpanel" id="panel-{identifier}" aria-labelledby="tab-{identifier}" '
+                      f'tabindex="0"{"" if active else " hidden"}>'
+                      f'<div class="panel-heading"><h2>{heading}</h2>{meta}</div>{body}</section>')
+
+    if levels:
+        detail_items = []
+        for index, detail in enumerate(levels):
+            answer = summaries[detail]
+            description = labels.get(detail, ("Summary", f"Detail level {detail} of 10"))[1]
+            detail_items.append(level_item(detail, detail, active=index == 0, description=description))
+            paragraphs = "\n".join(f'<p>{html.escape(part.strip())}</p>'
+                                   for part in re.split(r"\n\s*\n", answer.strip()) if part.strip())
+            heading = {1: "Brief summary", 3: "Conversation overview", 5: "Expanded summary",
+                       10: "Detailed summary"}.get(detail, "Conversation summary")
+            panel(detail, heading, f'<div class="prose" dir="auto">{paragraphs}</div>',
+                  meta=f'<span>Detail {detail} / 10 · {len(answer.split()):,} words</span>', active=index == 0)
+        icon = ('<svg class="picker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">'
+                '<path d="M4 6h16M4 12h12M4 18h8"/></svg>')
+        if summary_badge:
+            detail_items.append(f'<div class="menu-footer">{summary_badge}</div>')
+        first = levels[0]
+        buttons.append(picker("detail", "Summary", f"{level_label(first)} · {first}/10", detail_items, icon))
+
+    badge = final_transcript_badge(transcript)
+    badge = f'<span class="processing-badge">{html.escape(badge)}</span>' if badge else ""
+    transcript_items = [
+        '<button type="button" role="tab" id="tab-transcript" aria-controls="panel-transcript" '
+        'data-choice-label="Final version" '
+        f'aria-selected="{str(not levels).lower()}" tabindex="{0 if not levels else -1}">'
+        '<span class="tab-title">Final transcript</span>'
+        f'<span class="option-meta"><span class="tab-description">Selected pipeline result</span>{badge}</span></button>'
+    ]
+    panel("transcript", "Final transcript", f'<div class="transcript-content" dir="auto">{html.escape(transcript)}</div>',
+          meta=f'<span>{len(transcript.split()):,} words · Full transcript</span>', active=not levels)
     for report in source_reports:
         identifier = report["id"]
         if identifier not in ("gpt", "whisperx", "mlx", "diarization"):
@@ -2198,49 +2209,43 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
                        f'{title} · <small class="model-name">{label}</small></span>'
                        f'<span class="option-meta"><span class="tab-description">{description}</span>'
                        f'<span class="processing-badge">{badge}</span></span></button>')
-        panel_groups["transcript"].append(f'<section role="tabpanel" id="panel-source-{identifier}" '
-                      f'aria-labelledby="tab-source-{identifier}" tabindex="0" hidden>'
-                      f'<div class="panel-heading"><h2>{title} · {label}</h2>'
-                      f'<span>{description}</span></div>'
-                      f'<div class="transcript-content" dir="auto">{text}</div></section>')
+        panel(f"source-{identifier}", f"{title} · {label}", f'<div class="transcript-content" dir="auto">{text}</div>',
+              meta=f'<span>{description}</span>')
+    icon = ('<svg class="picker-icon microphone-icon" viewBox="0 0 24 24" fill="none" '
+            'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" '
+            'aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/>'
+            '<path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>')
+    buttons.append(picker("transcript", "Transcript", "Final version", transcript_items, icon))
+
     if youtube is not None:
-        transcript_items.append('<button type="button" role="tab" id="tab-full-comments" '
-                                'data-choice-label="Full comments" aria-controls="panel-full-comments" '
-                                'aria-selected="false" tabindex="-1"><span class="tab-title">Full comments</span></button>')
-        panel_groups["transcript"].append('<section role="tabpanel" id="panel-full-comments" '
-                          'aria-labelledby="tab-full-comments" tabindex="0" hidden>'
-                          f'<div class="panel-heading"><h2>Full comments</h2>{comment_meta}</div>'
-                          f'{full_comments_html(discussion, comment_fallback)}</section>')
-    def picker(identifier, title, description, items, icon):
-        return (f'<div class="report-picker" id="{identifier}-picker">'
-            f'<button class="picker-toggle" type="button" id="{identifier}-toggle" aria-expanded="false" '
-            f'aria-controls="{identifier}-options" hidden>{icon}<span class="picker-copy">'
-            f'<span class="picker-choice-title" id="{identifier}-choice-title">{title}</span>'
-            f'<span class="picker-choice-description" id="{identifier}-choice-description">{description}</span></span>'
-            '<span class="picker-arrow" aria-hidden="true">⌄</span></button>'
-            f'<div class="picker-options" id="{identifier}-options">' + "\n".join(items) + '</div></div>')
-    if transcript_index is not None:
-        icon = ('<svg class="picker-icon microphone-icon" viewBox="0 0 24 24" fill="none" '
-                'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" '
-                'aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/>'
-                '<path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>')
-        buttons[transcript_index] = picker("transcript", "Transcript", "Final version", transcript_items, icon)
-    if detail_index is not None:
-        first = next(level for level in selection if level != "transcript")
-        label = {1: "Key points", 3: "Overview", 5: "Expanded", 10: "In depth"}.get(first, "Summary")
+        comment_info, comment_fallback = discussion_header(discussion)
+        comment_items = []
+        for detail in levels:
+            identifier = f"comments-{detail}"
+            comment_items.append(level_item(detail, identifier))
+            digest = comment_digest_html((comment_digests or {}).get(detail), comment_fallback)
+            meta = html.escape(f"{detail}/10" + (f" · {comment_info}" if comment_info else ""))
+            panel(identifier, f"Comments · {level_label(detail)}", f'<div class="prose comment-digest" dir="auto">{digest}</div>',
+                  meta=f'<span>{meta}</span>')
+        if comment_items:
+            comment_items.append('<hr class="picker-divider">')
+        comment_items.append('<button type="button" role="tab" id="tab-full-comments" '
+                             'data-choice-label="Full comments" aria-controls="panel-full-comments" '
+                             'aria-selected="false" tabindex="-1"><span class="tab-title">Full comments</span></button>')
+        comment_meta = f"<span>{html.escape(comment_info)}</span>" if comment_info else ""
+        panel("full-comments", "Full comments", full_comments_html(discussion, comment_fallback), meta=comment_meta)
         icon = ('<svg class="picker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                'stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">'
-                '<path d="M4 6h16M4 12h12M4 18h8"/></svg>')
-        if summary_badge:
-            detail_items.append(f'<div class="menu-footer">{summary_badge}</div>')
-        buttons[detail_index] = picker("detail", "Summary", f"{label} · {first}/10", detail_items, icon)
+                'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" '
+                'aria-hidden="true" focusable="false">'
+                '<path d="M20 15a2 2 0 0 1-2 2H9l-5 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2zM8 8h8m-8 4h5"/></svg>')
+        choice = f"{level_label(levels[0])} · {levels[0]}/10" if levels else "Full comments"
+        buttons.append(picker("comments", "Comments", choice, comment_items, icon))
     warning = ""
     if "RECONCILIATION INCOMPLETE —" in transcript:
         warning = '<p class="reconciliation-warning" role="status">Some parts could not be reconciled. Their source text is retained; see the transcript for time ranges.</p>'
-    panels = [panel for group in group_order for panel in panel_groups[group]]
     template = (RESOURCE_DIR / "summary.html").read_text(encoding="utf-8")
     # Substitute once: replacement data must not be interpreted as template syntax.
-    metadata = metadata or report_header(source, "", {})
+    metadata = metadata or report_header(source, "", {}, youtube=youtube)
     participants = ", ".join(html.escape(person["name"]) +
         (f' <span class="participant-role">({html.escape(person["role"])})</span>' if person.get("role") else "")
         for person in metadata["participants"]) or "Not established in transcript"
@@ -3950,7 +3955,7 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
         say("  YouTube report header inference failed; publishing the transcript and summaries with source details.")
         diagnostic("report header", exc, fallback="YouTube source details")
         extracted = {}
-    content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube is not None),
+    content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
                            summary_model=model, youtube=youtube, discussion=discussion, comment_digests=comment_digests)
     if not source_unchanged(source, snapshot, signature):

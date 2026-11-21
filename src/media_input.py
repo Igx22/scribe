@@ -1,5 +1,6 @@
 """YouTube acquisition and validation for Scribe's ordinary media pipeline."""
 from contextlib import contextmanager
+from datetime import date
 import errno
 import importlib.metadata
 import io
@@ -432,12 +433,61 @@ def fetch_youtube_comments(video_id, args, say):
     return "unavailable", []
 
 
+def youtube_publication_day(value):
+    """Parse a YouTube calendar day without deriving it from a timestamp."""
+    if not isinstance(value, str) or not re.fullmatch(r"(?:[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})", value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def lookup_youtube_publication_day(video_id, args, say):
+    """Try a metadata-only date lookup for a previously verified download."""
+    try:
+        from yt_dlp import YoutubeDL
+        from yt_dlp.cookies import CookieLoadError
+        from yt_dlp.utils import DownloadError
+    except ImportError:
+        return None
+    credentials = (args.cookies, args.cookies_from_browser)
+    attempts = ((None, None), credentials) if any(credentials) else ((None, None),)
+    with DownloadProgress(say, initial_stage="Looking up YouTube publication date"):
+        for cookie_file, browser in attempts:
+            logger = DownloadMessages()
+            options = {"skip_download": True, "noplaylist": True, "allowed_extractors": ["youtube"],
+                       "ignore_no_formats_error": True, "cachedir": False, "quiet": True, "logger": logger,
+                       "socket_timeout": 10, "retries": 0, "extractor_retries": 0,
+                       "js_runtimes": {"deno": {"path": str(deno_executable())}}}
+            try:
+                options.update(youtube_credentials(cookie_file, browser))
+                with YoutubeDL(options) as downloader:
+                    info = downloader.extract_info(watch_url(video_id), download=False)
+            except DownloadError as exc:
+                logger.error(str(exc))
+                info = None
+            except (CookieLoadError, MediaError, OSError, ValueError):
+                return None
+            if isinstance(info, dict) and info.get("id") == video_id:
+                day = youtube_publication_day(info.get("upload_date"))
+                if day is not None:
+                    return day
+            if not logger.warnings & {"sign-in", "access"}:
+                break
+    return None
+
+
 def _source_metadata(info, video_id):
     fields = ("format_id", "ext", "vcodec", "acodec", "width", "height", "fps", "language", "abr")
     streams = info.get("requested_formats") or [info]
-    return {"id": video_id, "url": watch_url(video_id),
-            **{key: info[key] for key in ("title", "channel", "duration", "language") if info.get(key) is not None},
-            "streams": [{key: stream[key] for key in fields if stream.get(key) is not None} for stream in streams]}
+    metadata = {"id": video_id, "url": watch_url(video_id),
+                **{key: info[key] for key in ("title", "channel", "duration", "language") if info.get(key) is not None},
+                "streams": [{key: stream[key] for key in fields if stream.get(key) is not None} for stream in streams]}
+    day = youtube_publication_day(info.get("upload_date"))
+    if day is not None:
+        metadata["publication_date"] = day.isoformat()
+    return metadata
 
 
 def _publish_media(source, target):
@@ -516,6 +566,14 @@ def obtain_youtube(video_id, output, state, args, *, say, read_json, save_json, 
                 saved.update(filename=path.name, media_path=str(path))
                 save_json(metadata_path, saved)
             say(f"Reusing verified YouTube video: {path.name}")
+            if getattr(args, "summary_only", False) and youtube_publication_day(saved.get("publication_date")) is None:
+                day = lookup_youtube_publication_day(video_id, args, say)
+                if day is not None:
+                    saved["publication_date"] = day.isoformat()
+                    try:
+                        save_json(metadata_path, saved)
+                    except OSError:
+                        say("  Could not save the publication date for future reports.")
             return path, saved
 
     if getattr(args, "summary_only", False):

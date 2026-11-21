@@ -93,6 +93,18 @@ class ReportHeaderTests(unittest.TestCase):
         self.assertEqual(header["participants"], [])
         self.assertEqual(app.report_turns(transcript)[0]["speaker"], "UNKNOWN SPEAKER")
 
+    def test_youtube_date_uses_only_the_publication_day(self):
+        source = Path("Video from 2020-12-31.webm")
+        log = "DETAILED TRANSCRIPT\nDate: 2026-01-01 10:30\n\n[00:00–00:01] A\nDate: 2026-01-02"
+        header = app.report_header(source, log, {}, youtube={"publication_date": "2026-11-20"})
+        self.assertEqual(header["date"], "20 November 2026")
+        self.assertEqual(header["date_note"], "Published on YouTube")
+        for invalid in (None, "2026-02-29", "2026-11-20T23:59:59-08:00", 20261120):
+            with self.subTest(invalid=invalid):
+                header = app.report_header(source, log, {}, youtube={"publication_date": invalid})
+                self.assertEqual(header["date"], "Not recorded")
+                self.assertEqual(header["date_note"], "")
+
     def test_filename_dates_allow_descriptive_prefixes_and_suffixes(self):
         for filename, expected in [
             ('2026-11-07 14-37-07 (1speaker).mkv', '7 November 2026 · 14:37'),

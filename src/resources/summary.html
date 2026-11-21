@@ -60,14 +60,13 @@
         });
         const tabs = [...document.querySelectorAll('[role="tab"]')];
         const panels = [...document.querySelectorAll('[role="tabpanel"]')];
-        const groups = ['detail', 'transcript'].map(name => ({
-          picker: document.getElementById(name + '-picker'),
-          choice: document.getElementById(name + '-toggle'),
-          options: document.getElementById(name + '-options'),
-          description: document.getElementById(name + '-choice-description'),
-          tabs: tabs.filter(tab => name === 'detail' ? /^tab-\d+$/.test(tab.id) :
-            tab.id === 'tab-transcript' || tab.id === 'tab-full-comments' || tab.id.startsWith('tab-source-'))
-        })).filter(group => group.choice);
+        const groups = [...document.querySelectorAll('.report-picker')].map(picker => {
+          const name = picker.id.slice(0, -'-picker'.length);
+          const options = document.getElementById(name + '-options');
+          return {picker, options, choice: document.getElementById(name + '-toggle'),
+            description: document.getElementById(name + '-choice-description'),
+            tabs: [...options.querySelectorAll('[role="tab"]')]};
+        });
         function select(tab) {
           tabs.forEach(item => {
             item.setAttribute('aria-selected', String(item === tab));
@@ -191,6 +190,8 @@
     :root { --selected-line: #b5763d; --selected-fill: #fbf4ec; }
     :root[data-theme="dark"] { --selected-line: #c99765; --selected-fill: #302820; }
     .report-picker { position: relative; display: flex; align-items: center; width: 270px; max-width: 100%; }
+    [role="tablist"]:has(#comments-picker) { flex-wrap: nowrap; }
+    [role="tablist"]:has(#comments-picker) .report-picker { flex: 1 1 0; min-width: 0; }
     .picker-toggle { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; margin: 7px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
     .picker-toggle[data-active="true"] { border-color: var(--selected-line); background: var(--selected-fill); }
     .picker-toggle:hover { background: var(--line-soft); }
@@ -202,13 +203,15 @@
     [aria-expanded="true"] .picker-arrow { transform: rotate(180deg); }
     .picker-options { width: 100%; padding: 6px; background: var(--surface); }
     [data-enhanced="true"] .picker-options { position: absolute; top: 100%; right: 0; z-index: 2; width: 300px; max-width: calc(100vw - 48px); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px var(--shadow); }
+    [role="tablist"]:has(#comments-picker) .report-picker:first-child[data-enhanced="true"] .picker-options { left: 0; right: auto; }
     .picker-options [role="tab"] { position: relative; display: block; width: 100%; min-height: 60px; margin: 0; padding: 10px 27px 10px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); font-size: 13px; white-space: normal; }
     .picker-options .tab-title { display: block; white-space: normal; overflow-wrap: anywhere; }
     .picker-options .model-name { font: inherit; }
     .picker-options .tab-description { margin: 5px 0 0; padding: 0; color: var(--muted); line-height: 1.4; }
-    #detail-options [role="tab"] { padding-right: 70px; }
+    .picker-options .detail-option { padding-right: 70px; }
     .detail-level { position: absolute; right: 11px; top: 22px; color: var(--muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
-    #detail-options [data-current="true"]::after { right: 48px; top: 21px; }
+    .picker-options .detail-option[data-current="true"]::after { right: 48px; top: 21px; }
+    .picker-divider { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
     .menu-footer { margin-top: 5px; padding: 10px; border-top: 1px solid var(--line); }
     .menu-footer .processing-badge { display: inline-block; max-width: 100%; }
     .picker-options [role="tab"]:hover { background: var(--line-soft); }
@@ -229,8 +232,7 @@
     .prose p:last-child { margin-bottom: 0; }
     .reconciliation-warning { margin: 20px 40px 0; padding: 12px; border: 1px solid var(--selected-line); border-radius: 6px; color: var(--ink); background: var(--selected-fill); font-size: 13px; line-height: 1.5; }
     .transcript-content { margin-top: 24px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.85; }
-    .discussion-summary { margin-top: 36px; }
-    .discussion-summary li + li { margin-top: .65em; }
+    .comment-digest li + li { margin-top: .65em; }
     .comment-thread-list { padding: 0; margin: 0; list-style: none; }
     .comment-thread-list .comment-thread-list { padding-inline-start: 28px; }
     .comment-thread-list .comment-thread-list .comment-thread-list .comment-thread-list { padding-inline-start: 0; }
@@ -259,6 +261,14 @@
       .panel-heading { flex-direction: column; gap: 8px; }
       .prose { font-size: 15px; line-height: 1.75; }
       footer { padding: 16px 8px; flex-direction: column; gap: 4px; }
+    }
+    @media (max-width: 760px) {
+      .tabs-wrap:has(#comments-picker) { padding-inline: 12px; }
+      [role="tablist"]:has(#comments-picker) { position: relative; gap: 6px; }
+      [role="tablist"]:has(#comments-picker) .report-picker { position: static; }
+      [role="tablist"]:has(#comments-picker) .picker-icon { display: none; }
+      [role="tablist"]:has(#comments-picker) .picker-toggle { padding-inline: 6px; gap: 3px; }
+      [role="tablist"]:has(#comments-picker) [data-enhanced="true"] .picker-options { width: 100%; max-width: none; }
     }
     @media print {
       :root, :root[data-theme="dark"] { color-scheme: light; --page: #f4f5f7; --surface: #fff; --ink: #243044; --strong: #182230; --secondary: #475467; --muted: #667085; --line: #e4e7ec; --line-soft: #f0f1f3; --control-border: #d0d5dd; --accent: #334d73; --focus: #5276a5; --shadow: #18223004; }
