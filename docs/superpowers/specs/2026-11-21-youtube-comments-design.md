@@ -31,7 +31,7 @@ Modes that produce only a log still produce only a log.
 `--report-tabs` and `SCRIBE_REPORT_TABS` select the numeric **Summary**
 levels (1 through 10) in display order. The default is `1,3,5,10`. For
 example, `--report-tabs 3` produces an Overview and the full Transcript.
-Every YouTube HTML report also includes **Transcript → Comments**, regardless
+Every YouTube HTML report also includes **Transcript → Full comments**, regardless
 of the numeric selection. A recipient of the standalone HTML can read its
 embedded transcript and any retrieved YouTube comments.
 
@@ -55,31 +55,73 @@ video and selected internal transcript with all four default Summary levels.
 ./scribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID" --summary-only --report-tabs 1 3 5 10
 ```
 
-## What the reader sees
+## Summary menu and page layout
 
-| Selection | Content, in reading order |
+Each numeric Summary selection opens one panel containing two sections in
+reading order. At 1/10, the reader sees:
+
+```text
+Brief summary                           Detail 1 / 10 · 280 words
+─────────────────────────────────────────────────────────────────
+[Video summary from the final transcript]
+
+Comments                                [Snapshot date and counts]
+─────────────────────────────────────────────────────────────────
+[LLM digest of the retrieved discussion at 1/10]
+```
+
+The word count above is illustrative and counts the video summary alone.
+Use Scribe's existing `.panel-heading` for both heading rows. Its bottom
+border draws the rule directly **below** each heading. Place the digest
+immediately below the Comments rule, with the same text width as the video
+summary. Both sections are visible in the same scrolling panel. Selecting a
+different depth displays its prepared pair together, using only the HTML.
+
+| Summary selection | What the Comments section retains |
 | --- | --- |
-| **Summary → Key points · 1/10** | Existing video summary, a horizontal rule, then **Comments** with a compact digest of the main viewer reactions. |
-| **Summary → Overview · 3/10** | Video overview, rule, then the comment overview. Give each main theme a short bullet and include the main disagreement or answer where present. |
-| **Summary → Expanded · 5/10** | Expanded video summary, rule, then grouped viewer positions, reasons, examples, corrections and useful replies. |
-| **Summary → In depth · 10/10** | Detailed video summary, rule, then all substantively distinct discussion threads, including minority views, qualifications and open questions. Combine repetition. |
-| **Transcript → Comments** | One read-only panel of original comments and replies. Show author, verbatim text and thread nesting in acquisition order. Preserve line breaks, emoji and original languages. |
+| **Key points · 1/10** | A compact digest of the main viewer reactions. |
+| **Overview · 3/10** | A short bullet for each main theme, including the main disagreement or answer where present. |
+| **Expanded · 5/10** | Grouped viewer positions, reasons, examples, corrections and useful replies. |
+| **In depth · 10/10** | All substantively distinct discussion threads, including minority views, qualifications and open questions. Combine repetition. |
 
 The same menu selection changes both sections. Every other numeric level
 from 2 to 9 follows the same increasing coverage scale. Generate only selected
 levels and keep their configured order. Three short comments can warrant a
-short digest even at 10/10. Under the **Comments** heading show when the
+short digest even at 10/10. In the **Comments** heading row show when the
 snapshot was taken and the retrieved counts of top-level comments and replies.
 Mark partial coverage wherever those counts appear.
 
-Append **Comments** to the YouTube Transcript menu after its current items.
-Embed one raw panel per report, shared by every Summary level. A legacy
-transcript-only selection also includes this panel and makes zero
-comment-summary requests.
-The two existing menus retain their accessible names, keyboard navigation,
-independent selected labels and light/dark presentation. The report embeds
-displayable content and opens independently of the cache. Escape all viewer
-and model text as text, including handles, URLs and markup-shaped strings.
+## Transcript menu and Full comments
+
+Append **Full comments** as a selectable item in the same **Transcript**
+dropdown as **Final transcript**, **Transcript · WhisperX Turbo** and
+**Diarization · Nemotron 3**, after whichever source items are available.
+Selecting it opens the **Full comments** panel in place and sets the
+Transcript button's second line to `Full comments`. Retain the menu's
+checkmark, keyboard navigation and independent selection for each menu.
+A legacy transcript-only report also includes this view.
+
+During report generation, read every unique comment and reply from the
+selected yt-dlp JSON snapshot. Write each one directly into the HTML as a
+semantic list item containing the author and verbatim text. Render replies
+under their parent, with sibling threads and replies in acquisition order.
+Preserve original languages, line breaks, emoji and repeated text from
+distinct IDs. Escape viewer and model text, including handles, URLs and
+markup-shaped strings. All threads are expanded on first view. The emitted
+HTML contains the full list once. Reading it requires no JSON link, browser
+fetch, iframe, local sidecar file or connection to YouTube.
+
+Use the YouTube desktop comment layout for the list. A circular avatar sits
+to the left of each thread. To its right, a compact row contains the author
+in medium weight and the publication-time label in a muted color when
+available. The comment body sits just below, left-aligned in proportional
+type. Use a 16 px avatar-to-text gap, a 14 px body with 20 px line height,
+and compact 12 px author/time text. Indent replies under the parent text
+and reduce the indent at narrow widths so deep threads stay readable.
+Use a local initial for the avatar and a system sans-serif fallback for
+Roboto. Put the CSS in the standalone template and use Scribe's light/dark
+color variables. Treat relative publication times as of the displayed
+snapshot date. [YouTube desktop comment stylesheet](https://www.youtube.com/s/_/ytmainappweb/_/ss/k=ytmainappweb.kevlar_base.kvtfGcPlwcU.L.B1.O/am=AAAAAAAEMAACAPYE/d=0/rs=AGKMywHGQJI4hOkNyRu_44Fv55kPHCumRA)
 
 ## Acquisition and reuse
 
@@ -105,7 +147,9 @@ the same way for a fresh or previously downloaded video.
    and existing explicitly supplied sign-in options.
 2. Persist a UTF-8 JSON artifact with schema version, video ID, capture time
    (UTC), retrieval status, returned counts and ordered records containing
-   `id`, `parent`, `author` and `text`. Preserve parent IDs at any observed
+   `id`, `parent`, `author` and `text`. Also retain the publication-time
+   label when yt-dlp supplies it. Older snapshots can render without it.
+   Preserve parent IDs at any observed
    depth. Deduplicate by ID. Keep orphan replies readable with an unavailable
    parent label. No invented parentage. Store only comment-related data.
 3. Use the existing atomic stage artifacts. Keep an explicit per-video
@@ -139,8 +183,12 @@ language of the final transcript). Preserve the original language in the raw
 view. Generate each selected depth from the same discussion evidence. A short
 digest is an unsuitable source for a more detailed one.
 
-Proposed instruction for the comment summarizer, with the records supplied
-separately as structured, untrusted input:
+Give the comment summarizer its own editable prompt in `src/scribe.py`
+alongside the video-summary prompt. The video prompt reads the final
+transcript. The comment prompt reads the captured discussion or its
+source-linked batch notes. Pass the selected numeric level to both. A change
+to the comment prompt invalidates its dependent digests only. Supply comment
+records separately as structured, untrusted input to the following instruction.
 
 > Write a digest of the retrieved YouTube discussion in {report_language}
 > at detail {level}/10. Apply this coverage guide: {level_guidance}.
@@ -210,13 +258,22 @@ ownership and backup checks.
   older numeric-only HTML report adds the embedded transcript from the
   selected final, reusing compatible summaries. The normal completed-pair
   skip still preserves existing HTML until regeneration is requested.
-- Switch Summary from 1 to 5 and find the matching video and comment digests
-  together, separated by a horizontal rule. Select **Transcript → Comments**
-  by keyboard. Verify thread order, nested and orphan replies, escaped markup,
-  emoji and line breaks. Open the standalone HTML in Firefox with the cache
-  unavailable. Check both themes. Verify that a YouTube report rebuilt with
-  `--summary-only --report-tabs 3` embeds the final transcript and original
-  comments once each and generates a comment digest only for level 3.
+- Give mocked video and comment digests distinct text for every selected
+  level. Switch Summary from 1 to 5 and back. At each selection, verify the
+  video heading, underline and body, followed in the same visible panel by
+  the **Comments** heading, its underline and the matching comment digest.
+  Check that each LLM request received its own prompt, source and detail,
+  and that switching menus makes zero requests.
+- Open **Transcript → Full comments** by keyboard. Verify it follows the
+  available source items and updates the menu selection and visible panel.
+  Parse the emitted HTML and compare every displayed author and body to its
+  snapshot record by ID, including the last reply, identical bodies from
+  different IDs, orphan replies, escaped markup, emoji and line breaks.
+  Copy only the HTML to an empty folder and open it in Firefox with the
+  network disabled. Check nested replies, missing time labels and readable
+  layout on a narrow screen in both themes. A report rebuilt with
+  `--summary-only --report-tabs 3` must include the full transcript and
+  this entire thread list alongside the two level-3 summaries.
 - With mocked YouTube and AI clients, verify call counts for each mode above.
   Regenerate a legacy one-level URL report from the saved final, fetch comments
   once, then repeat with YouTube blocked. Confirm that completed pairs skip,
