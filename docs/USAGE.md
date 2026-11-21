@@ -186,8 +186,11 @@ enabled. Scribe takes the longest quarter of individual comments and replies
 and applies a 60-word minimum. The configured summary model checks topic
 relevance and favors firsthand experience and practical familiarity. Specific
 comparisons and well-developed perspectives the video overlooks can also qualify.
-Each selected entry has its own detailed summary and author attribution. Short discussions
-can yield an empty selection. Best comments results are cached with the
+Each selected entry has its own detailed retelling and author attribution.
+Long entries can retain their sequence, concrete details, caveats and tone.
+Use the expand icon beside an entry to read the full original in the report.
+Close it with **Close** or **Esc**. Short discussions can yield an empty
+selection. Best comments results are cached with the
 candidate text, video context, model, effort and prompt.
 
 Comment snapshots are cached by source content and YouTube video ID. Ordinary

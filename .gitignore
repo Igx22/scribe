@@ -1,4 +1,7 @@
 .env
+# Local task register
+/docs/TASKS.md
+/TASKS.md
 /data/*
 !/data/.gitkeep
 # Console logs can also be created from a working directory inside the checkout.

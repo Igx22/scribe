@@ -317,7 +317,6 @@ See [monitor behaviour](docs/USAGE.md#monitor-growing-obs-recordings).
 
 - [Usage guide](docs/USAGE.md): installation alternatives, paths, monitoring, retries and configuration.
 - [Project context](docs/PROJECT_CONTEXT.md): design decisions, experiments, limitations and mocked tests.
-- [Tasks](TASKS.md): requested and completed work.
 
 ## License
 

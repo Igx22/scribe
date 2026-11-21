@@ -58,6 +58,34 @@
             } catch (_) {}
           }
         });
+        const originalDialog = document.getElementById('original-comment-dialog');
+        if (originalDialog && typeof originalDialog.showModal === 'function') {
+          const author = document.getElementById('original-comment-author');
+          const text = document.getElementById('original-comment-text');
+          const close = document.getElementById('original-comment-close');
+          const originals = new Map([...document.querySelectorAll('#panel-full-comments [data-comment-id]')]
+            .map(item => [item.dataset.commentId, item]));
+          let opener;
+          for (const button of document.querySelectorAll('[data-original-comment]')) {
+            const item = originals.get(button.dataset.originalComment);
+            if (!item) continue;
+            button.hidden = false;
+            button.addEventListener('click', () => {
+              opener = button;
+              author.textContent = item.querySelector('.comment-byline strong').textContent;
+              text.textContent = item.querySelector('.comment-body').textContent;
+              text.scrollTop = 0;
+              originalDialog.showModal();
+            });
+          }
+          close.addEventListener('click', () => originalDialog.close());
+          originalDialog.addEventListener('click', event => {
+            if (event.target === originalDialog) originalDialog.close();
+          });
+          originalDialog.addEventListener('close', () => {
+            if (opener) opener.focus({preventScroll: true});
+          });
+        }
         const tabs = [...document.querySelectorAll('[role="tab"]')];
         const panels = [...document.querySelectorAll('[role="tabpanel"]')];
         const groups = [...document.querySelectorAll('.report-picker')].map(picker => {
@@ -239,6 +267,16 @@
     .best-comments li + li { border-top: 1px solid var(--line-soft); margin-top: 20px; padding-top: 20px; }
     .best-comments h3 { font-size: 16px; margin: 0; }
     .best-comments p.comment-time { font-size: 12px; margin: 0 0 7px; }
+    .best-comment-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .original-comment-control { flex: none; display: inline-grid; place-items: center; min-width: 38px; min-height: 38px; padding: 6px 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 12px; cursor: pointer; }
+    .original-comment-control:hover { background: var(--line-soft); }
+    .original-comment-control svg { display: block; width: 18px; height: 18px; }
+    #original-comment-dialog { box-sizing: border-box; width: min(680px, calc(100% - 28px)); max-width: none; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); }
+    #original-comment-dialog::backdrop { background: color-mix(in srgb, #11151c 62%, transparent); }
+    .original-comment-content { padding: 20px; }
+    .original-comment-content .panel-heading { align-items: flex-start; margin-bottom: 15px; padding-bottom: 12px; }
+    #original-comment-author { margin: 3px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+    #original-comment-text { max-height: 60dvh; overflow: auto; overflow-wrap: anywhere; }
     .comment-thread-list { padding: 0; margin: 0; list-style: none; }
     .comment-thread-list .comment-thread-list { padding-inline-start: 28px; }
     .comment-thread-list .comment-thread-list .comment-thread-list .comment-thread-list { padding-inline-start: 0; }

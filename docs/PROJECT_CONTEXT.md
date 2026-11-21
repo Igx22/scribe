@@ -24,7 +24,7 @@ results and optional private experiments under `data/comparison/` stay outside G
 ```text
 scribe/
   scribe.sh, requirements.txt, .env, .env.example
-  README.md, AGENTS.md, TASKS.md, LICENSE, .gitignore
+  README.md, AGENTS.md, LICENSE, .gitignore
   src/
     scribe.py
     console_log.py
@@ -32,6 +32,7 @@ scribe/
     resources/summary.html
   tests/
   docs/PROJECT_CONTEXT.md
+  docs/TASKS.md (local, ignored by Git)
   data/
     .gitkeep
     models/

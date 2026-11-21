@@ -131,7 +131,7 @@ class CommentRenderingTests(unittest.TestCase):
                                   transcript="Final words", youtube={"id": VIDEO}, discussion=discussion,
                                   comment_digests={1: [{"title": "", "text": "Brief discussion"}],
                                                    5: [{"title": "Theme", "text": "Expanded <discussion>"}]},
-                                  best_comments=[{"author": "@Alice <viewer>", "title": "Experience & detail",
+                                  best_comments=[{"comment_id": "a", "author": "@Alice <viewer>", "title": "Experience & detail",
                                                   "text": "An account of working with <equipment>."}])
         summary = report.split('id="panel-1"', 1)[1].split('</section>', 1)[0]
         brief = report.split('id="panel-comments-1"', 1)[1].split('</section>', 1)[0]
@@ -151,6 +151,11 @@ class CommentRenderingTests(unittest.TestCase):
         self.assertIn("@Alice &lt;viewer&gt;", best)
         self.assertIn("Experience &amp; detail", best)
         self.assertIn("&lt;equipment&gt;", best)
+        self.assertIn('data-original-comment="a" aria-haspopup="dialog" aria-controls="original-comment-dialog"', best)
+        self.assertIn('aria-label="Show original comment by @Alice &lt;viewer&gt;"', best)
+        self.assertIn('<dialog id="original-comment-dialog" aria-labelledby="original-comment-title">', best)
+        self.assertIn('id="original-comment-text" dir="auto" tabindex="0"></div>', best)
+        self.assertNotIn("Top &amp;", best)
         self.assertNotIn("Same reply", best)
         transcript_menu = report.split('id="transcript-options">')[1].split('</div></div>', 1)[0]
         self.assertNotIn('id="tab-full-comments"', transcript_menu)
@@ -287,6 +292,7 @@ class BestCommentsTests(unittest.TestCase):
             args = (Path(tmp), snapshot, "The video compares two observations.", "English", "key", "model", "medium")
             result = app.youtube_best_comments(*args)
             self.assertEqual([item["author"] for item in result], ["@resident", "@operator"])
+            self.assertEqual([item["comment_id"] for item in result], ["a", "b"])
             self.assertEqual(result, app.youtube_best_comments(*args))
             api.assert_called_once()
             request = json.loads(api.call_args.args[4])
@@ -301,6 +307,26 @@ class BestCommentsTests(unittest.TestCase):
             self.assertIn("overlooked perspective", instructions)
             fields = api.call_args.kwargs["schema"]["properties"]["themes"]["items"]["required"]
             self.assertIn("experience_evidence", fields)
+
+    def test_long_comments_request_detailed_retellings_without_a_length_cap(self):
+        source = (
+            "I worked at the dock for eight winters. At first, I thought the new ramp had fixed "
+            "the problem because loading sped up before dawn. Then a storm changed the current "
+            "and we waited two hours for the tug. We kept the ramp, but put back the old signal "
+            "bell so the drivers could hear the crew. My impression is that it made the west "
+            "dock safer, though I never worked the east dock and cannot compare."
+        )
+        answer = {"themes": [{"title": "Dock safety", "text": source, "comment_ids": ["dock"],
+                             "experience_evidence": "I worked at the dock"}]}
+        snapshot = {"video_id": VIDEO, "comments": [row("dock", text=source)]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", return_value=json.dumps(answer)) as api:
+            result = app.youtube_best_comments(Path(tmp), snapshot, "Dock design", "English", "key", "model", "medium")
+        self.assertEqual(result[0]["text"], source)
+        instructions = " ".join(api.call_args.args[3].lower().split())
+        self.assertIn("sequence of events", instructions)
+        self.assertIn("reservations, changes of mind, and shifts in tone", instructions)
+        self.assertIn("close to the original length", instructions)
+        self.assertEqual(json.loads(api.call_args.args[4])["comments"], [{"id": "dock", "text": source}])
 
     def test_parent_evidence_and_fabricated_quotes_are_rejected(self):
         comments = [row("reply", "parent", "This reply describes specific outcomes. " + "example " * 66),

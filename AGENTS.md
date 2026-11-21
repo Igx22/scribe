@@ -6,8 +6,9 @@
 - Read [docs/USAGE.md](docs/USAGE.md) for detailed setup, CLI behavior and recovery.
 - Read [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) for design rationale,
   experiment findings, the test command, and unresolved limitations before changing the pipeline.
-- Read [TASKS.md](TASKS.md) for numbered requests, their status, and the task-register
-  rules. A listed task is not authorization to start unrelated work.
+- When available, read the local `docs/TASKS.md` for numbered requests, their
+  status, and the task-register rules. A listed task is not authorization to
+  start unrelated work.
 - Inspect the current code and working tree. A previous chat is historical
   evidence, not a substitute for the current implementation or the user's request.
 
@@ -62,7 +63,7 @@
 ## Keep future chats informed
 
 - Register each new requested feature, fix, investigation, or documentation task in
-  `TASKS.md`; reuse its existing ID for clarifications of the same task. Use exactly
+  the local `docs/TASKS.md`. Reuse its existing ID for clarifications of the same task. Use exactly
   `Planned`, `In Progress`, `Done`, or `Cancelled`, following the rules in that file.
   Set `In Progress` when work begins and update status/dates with the corresponding
   code or documentation changes and verification. Leave unfinished work open.
