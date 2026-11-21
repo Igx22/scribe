@@ -241,6 +241,46 @@ class CommentDigestTests(unittest.TestCase):
                 app.youtube_comment_digest(Path(tmp), snapshot, "English", 1, "key", "model", "medium")
             self.assertFalse(list(Path(tmp).glob("*.json")))
 
+    def test_request_local_support_ids_round_trip_to_youtube_ids(self):
+        parent = "A-comment-id-that-is-too-long-to-repeat"
+        reply = "B-comment-id-that-is-too-long-to-repeat"
+        snapshot = {"video_id": VIDEO, "comments": [row(parent), row(reply, parent, "A specific reply.")]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request",
+                return_value=self.answer("c2")) as api:
+            cache = Path(tmp)
+            args = (cache, snapshot, "English", 1, "key", app.COMMENT_SUMMARY_MODEL, "medium")
+            digest = app.youtube_comment_digest(*args)
+            self.assertEqual(digest[0]["comment_ids"], [reply])
+            request = json.loads(api.call_args.args[4])["comments"]
+            self.assertEqual([r["id"] for r in request], ["c1", "c2"])
+            self.assertEqual(request[1]["parent"], "c1")
+            fields = api.call_args.kwargs["schema"]["properties"]["themes"]["items"]["properties"]
+            self.assertEqual(fields["comment_ids"]["items"]["enum"], ["c1", "c2"])
+            self.assertEqual(digest, app.youtube_comment_digest(*args))
+            api.assert_called_once()
+
+    def test_oversize_notes_split_preserves_batch_support_and_resumes_across_levels(self):
+        snapshot = {"video_id": VIDEO, "comments": [row(str(i), text="x" * 300) for i in range(5)]}
+        seen = []
+
+        def request(_key, _model, _effort, instructions, raw, **_kwargs):
+            payload = json.loads(raw)
+            if "comments" in payload:
+                ids = [item["id"] for item in payload["comments"]]
+                seen.append(ids)
+                return self.answer(*ids, text="Oversized " + "x" * 300 if len(ids) > 1 else "A point")
+            return self.answer(*(note["comment_ids"][0] for note in payload["notes"]))
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "COMMENT_INPUT_BYTES", 1200), \
+                patch.object(app, "api_request", side_effect=request):
+            cache = Path(tmp)
+            first = app.youtube_comment_digest(cache, snapshot, "English", 1, "key", "model", "medium")
+            self.assertEqual(first[0]["comment_ids"], ["0", "1", "2", "3", "4"])
+            self.assertEqual(seen, [["0", "1"], ["0"], ["1"], ["2", "3"], ["2"], ["3"], ["4"]])
+            calls = len(seen)
+            app.youtube_comment_digest(cache, snapshot, "English", 5, "key", "model", "medium")
+            self.assertEqual(len(seen), calls)
+
     def test_empty_reduction_cannot_silently_erase_successful_reviewed_batches(self):
         snapshot = {"video_id": VIDEO,
                     "comments": [row(str(i), text="Large comment " + "x" * 550) for i in range(10)]}
@@ -350,6 +390,57 @@ class BestCommentsTests(unittest.TestCase):
         api.assert_not_called()
 
 
+class CommentFilterTests(unittest.TestCase):
+    def test_serialized_utf8_budget_splits_batches_and_keeps_an_oversized_comment(self):
+        original = [row("a", text="é" * 18), row("b", text="ё" * 80), row("c", text="я" * 18)]
+        snapshot = {"video_id": VIDEO, "comments": original}
+        sent = []
+
+        def request(_key, _model, _effort, _prompt, raw, **_kwargs):
+            self.assertLessEqual(len(raw.encode("utf-8")), 120)
+            sent.extend(json.loads(raw)["comments"].values())
+            return '{"1":true}'
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "COMMENT_FILTER_BATCH_BYTES", 120), \
+                patch.object(app, "api_request", side_effect=request) as api:
+            selected, stats = app.filter_youtube_comments(Path(tmp), snapshot, "Title", "key")
+        self.assertEqual(api.call_count, 2)
+        self.assertCountEqual([entry["text"] for entry in sent], [original[0]["text"], original[2]["text"]])
+        self.assertEqual(selected, snapshot)
+        self.assertEqual(stats, {"kept": 3, "unfiltered": 1})
+
+    def test_filter_uses_luna_fast_and_keeps_omitted_parent_context_for_a_reply(self):
+        original = [row("a", text="Parent question?"), row("b", "a", "Concrete reply."),
+                    row("c", text="Generic praise")]
+        snapshot = {"video_id": VIDEO, "comments": original}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request",
+                return_value='{"1":false,"2":true,"3":false}') as api:
+            cache = Path(tmp)
+            selected, stats = app.filter_youtube_comments(cache, snapshot, "Title", "key")
+            self.assertEqual(stats, {"kept": 1, "unfiltered": 0})
+            self.assertEqual(selected["comments"], [{**original[1], "parent_context": "Parent question?"}])
+            self.assertEqual(snapshot["comments"], original)
+            args, kwargs = api.call_args
+            self.assertEqual(args[1:3], ("gpt-6-luna", "none"))
+            self.assertEqual(kwargs["service_tier"], "priority")
+            self.assertEqual(json.loads(args[4])["comments"]["2"]["parent_context"], "Parent question?")
+            self.assertEqual(app.filter_youtube_comments(cache, snapshot, "Title", "key"), (selected, stats))
+            api.assert_called_once()
+
+    def test_incomplete_verdict_retains_batch_and_is_retried_instead_of_cached(self):
+        snapshot = {"video_id": VIDEO, "comments": [row("a"), row("b")]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request",
+                side_effect=['{"1":false}', '{"1":false,"2":true}']):
+            cache = Path(tmp)
+            kept, stats = app.filter_youtube_comments(cache, snapshot, "Title", "key")
+            self.assertEqual(kept, snapshot)
+            self.assertEqual(stats, {"kept": 2, "unfiltered": 2})
+            self.assertFalse(list(cache.glob("*.json")))
+            kept, stats = app.filter_youtube_comments(cache, snapshot, "Title", "key")
+            self.assertEqual([row["id"] for row in kept["comments"]], ["b"])
+            self.assertEqual(stats, {"kept": 1, "unfiltered": 0})
+
+
 class CommentPipelineTests(unittest.TestCase):
     def test_log_only_url_run_caches_comments_without_any_report_requests(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -383,9 +474,15 @@ class CommentPipelineTests(unittest.TestCase):
             request = ["--youtube", app.media_input.watch_url(VIDEO), "--output-dir", str(root)]
             calls = []
 
-            def answer(_key, _model, _effort, prompt, raw, **_kwargs):
+            def answer(_key, model, effort, prompt, raw, **kwargs):
+                if kwargs.get("service_tier") == "priority":
+                    self.assertEqual((model, effort), ("gpt-6-luna", "none"))
+                    self.assertIn("Excluded reaction", raw)
+                    return '{"1":true,"2":false}'
+                self.assertEqual((model, effort), ("gpt-6-luna", "medium"))
                 calls.append(prompt)
                 self.assertIn("Viewer evidence", raw)
+                self.assertNotIn("Excluded reaction", raw)
                 if len(calls) == 2:
                     raise app.AppError("Temporary failure.")
                 return CommentDigestTests.answer("one", text=f"Discussion answer {len(calls)}")
@@ -393,7 +490,8 @@ class CommentPipelineTests(unittest.TestCase):
             with runtime_paths(cache_dir=args.cache_dir), patch.object(app, "load_env"), \
                     patch.object(app.media_input, "obtain_youtube", return_value=(source, {"id": VIDEO})), \
                     patch.object(app.media_input, "fetch_youtube_comments",
-                                 return_value=("complete", [row("one", text="Viewer evidence")])) as fetch, \
+                                 return_value=("complete", [row("one", text="Viewer evidence"),
+                                                              row("two", text="Excluded reaction")])) as fetch, \
                     patch.object(app, "summarize", side_effect=lambda *a, detail: f"Video detail {detail}") as video, \
                     patch.object(app, "extract_report_metadata", return_value={}), \
                     patch.object(app, "youtube_best_comments", side_effect=[app.AppError("Best digest failure."),
@@ -409,6 +507,8 @@ class CommentPipelineTests(unittest.TestCase):
                 self.assertIn("Comment summary unavailable.", first)
                 self.assertIn("Best comments unavailable.", first)
                 self.assertIn("Viewer evidence", first)
+                self.assertIn("Excluded reaction", first)
+                self.assertIn("1 of 2 comments retained for review", first)
                 self.assertEqual(app.main(regen), 0)
                 second = report.read_text()
                 self.assertIn("Discussion answer 1", second)

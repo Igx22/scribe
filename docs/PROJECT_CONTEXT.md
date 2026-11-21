@@ -693,6 +693,20 @@ Comment acquisition or model failures leave the video report available.
 See the [design](superpowers/specs/2026-11-21-youtube-comments-design.md) and
 [regeneration workflow](USAGE.md#youtube-comments).
 
+Scribe filters the saved discussion using GPT-6 Luna Fast with reasoning set
+to `none`. Luna with medium reasoning generates the digests and Best comments.
+Failed filter batches remain in review and are retried on regeneration.
+Full comments uses the raw snapshot. Digests use short request-local
+supporting IDs mapped back to the originals. Over-budget notes trigger
+smaller requests; validated notes are reusable across levels. The initial
+4,304-entry run retained 838 comments, rendered four digest levels, and
+produced 18 Best comments. See the local SCR-121 verification for usage.
+The default filter batch now caps the serialized input at 28,000 UTF-8
+bytes and 100 comments. On the same snapshot, 100 used 44 batches compared
+with 108 at 40. It retained five of six useful entries and omitted all 25
+clear reactions in the original spot check. The 400-comment comparison
+showed poorer decisions in a separate review of disagreements (SCR-123).
+
 Verification on 2026-11-21 passed 317 mocked tests, including keyboard selection
 of Full comments, comment-cache recovery and bounded batch coverage. Firefox
 showed paired Summary sections and nested replies from an isolated HTML file in
@@ -715,7 +729,7 @@ and switched to 5/10 with Summary still set to 1/10.
 ### Best comments and picker order (SCR-111 and SCR-112)
 
 Report controls and keyboard navigation follow Summary, Comments, Transcript.
-Best comments considers the longest quarter of individual entries with at
+Best comments considers the longest quarter of the retained entries with at
 least 60 words. The summary model gives priority to firsthand experience and
 practical knowledge. A specific comparison or an overlooked perspective can
 also qualify. Each selected entry has one detailed digest in candidate order.

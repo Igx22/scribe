@@ -181,9 +181,20 @@ configured levels. **Comments → Full comments** opens the original discussion
 inside the standalone HTML, including replies in their threads.
 A partial snapshot is labeled with its capture time and retrieved counts.
 
+After saving the original discussion, Scribe sends comments to GPT-6 Luna Fast
+with reasoning set to `none`. Each batch contains at most 100 comments and
+28,000 UTF-8 bytes of serialized input, including the title and reply context.
+The filter selects specific claims,
+examples, objections, and other substantive material for the digest. The
+comment sections use GPT-6 Luna with `medium` reasoning, independently of
+`--summarize-model`. The report shows how many comments were retained for
+review. Failed batches and comments that exceed the input budget on their own
+are kept for review and marked as unfiltered. The original snapshot supplies
+the complete **Full comments** view.
+
 **Best comments** appears above **Full comments** when summary levels are
-enabled. Scribe takes the longest quarter of individual comments and replies
-and applies a 60-word minimum. The configured summary model checks topic
+enabled. Scribe takes the longest quarter of retained comments and replies
+and applies a 60-word minimum. GPT-6 Luna checks topic
 relevance and favors firsthand experience and practical familiarity. Specific
 comparisons and well-developed perspectives the video overlooks can also qualify.
 Each selected entry has its own detailed retelling and author attribution.
@@ -203,7 +214,10 @@ change its detail levels, regenerate it from its saved internal transcript.
 
 Regeneration uses the cached discussion, requesting it from YouTube when the
 snapshot is missing or invalid. `--summary-only --force` recomputes the
-discussion digests and Best comments from that snapshot. An ordinary `--force`
+comment filter, discussion digests and Best comments from that snapshot.
+Successful filter batches are reusable on ordinary regeneration. For long
+discussions, the digest reuses notes and splits batches if their notes exceed
+the size budget. An ordinary `--force`
 run attempts to refresh the discussion alongside its normal reprocessing.
 A failed refresh can reuse the last usable
 snapshot. If a digest fails, the report shows the original discussion and any
@@ -729,8 +743,9 @@ Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported eff
 values are `low`, `medium`, `high`, `xhigh`, and `max`; the chosen API model must
 support the requested effort. The default is `gpt-6.1-sol:medium`.
 
-This selection controls final summaries and final text reconciliation in every
-ordinary mode. `none` disables reports only: reconciliation still uses
+This selection controls recording summaries, report metadata and final text
+reconciliation in every ordinary mode. YouTube comment sections use Luna with
+medium reasoning. `none` disables reports only: reconciliation still uses
 `gpt-6.1-sol:medium`. Use `--offline` to avoid all text-model and cloud-audio calls.
 
 The summary follows the predominant language of the conversation: mostly English

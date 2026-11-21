@@ -46,6 +46,8 @@ YouTube reports show the video's publication date when available. The **Comments
 menu offers discussion digests, **Best comments** with detailed summaries of
 long entries that add specific observations or perspectives, and **Full comments** for
 reading the original discussion and replies offline.
+GPT-6 Luna Fast screens the saved discussion, then GPT-6 Luna with medium
+reasoning writes the comment sections.
 See the [YouTube usage guide](docs/USAGE.md#youtube-comments).
 
 Downloads start anonymously. If YouTube requires sign-in, sign in on the
@@ -246,7 +248,8 @@ SCRIBE_REPORT_TABS=1,3,5,10
 
 CLI options override environment variables, then `.env`, then built-in defaults.
 
-`--summarize-model MODEL[:EFFORT]` selects the model for reconciliation and reports.
+`--summarize-model MODEL[:EFFORT]` selects the model for reconciliation, recording
+summaries and report metadata. YouTube comment sections use Luna with medium reasoning.
 A bare model uses `medium`; supported effort values are `low`, `medium`, `high`,
 `xhigh`, and `max`, subject to model support. `none` disables reports while
 reconciliation still uses `gpt-6.1-sol:medium`.
@@ -293,7 +296,7 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | `--monitor-dir [DIR]` | Off | Watch growing OBS MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
 | `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers; every ordinary mode then runs GPT text reconciliation. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
-| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Report and final GPT reconciliation model/effort; none disables reports, not reconciliation. |
+| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Recording summary and final GPT reconciliation model/effort. `none` disables reports; ordinary modes still reconcile. |
 | `--report-tabs LEVEL [LEVEL ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10` | Summary levels 1–10 in display order, separated by spaces or commas. Every HTML report includes Transcript. |
 | `--offline` | Off | Force local recognition without summaries, API calls or downloads. For a saved YouTube video, use `-f`. |
 | `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports, error files and YouTube downloads to DIR. |
