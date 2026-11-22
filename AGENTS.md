@@ -47,6 +47,7 @@
 - Apply activation only within the scope the user specifies (for example, the
   current feature or task); do not carry activation into unrelated tasks or new
   chats without another explicit request.
+- Когда я явно выбираю скилл Matt Pocock, следуй ему и его зависимостям. До завершения этой задачи подключай Superpowers только по моей просьбе
 
 ## Verification
 
