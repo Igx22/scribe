@@ -235,16 +235,21 @@ class ReportHeaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "meeting.mkv"; source.write_bytes(b"fixture")
             args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "1",
+                "--summarize-model", "gpt-6.2-astra:xhigh",
                 "--output-dir", str(root / "output")])
             args.cache_dir = root / "cache"
             log, summary = app.output_paths(source, args.output_dir)
             seed_final(source, args, self.log())
-            with patch.object(app, "summarize", return_value="Plain summary."), \
-                    patch.object(app, "extract_report_metadata", return_value={"topic": "Deployment planning.", "roles": {}}) as metadata:
+            with patch.object(app, "summarize", return_value="Plain summary.") as summarize, \
+                    patch.object(app, "extract_report_metadata", return_value={
+                        "topic": "Deployment planning.", "roles": {"Bob": "platform engineer"}}) as metadata:
                 app.process_file(source, args, "key")
             metadata.assert_called_once()
+            self.assertEqual(metadata.call_args.args[2:4], ("gpt-6.2-sol", "medium"))
+            self.assertEqual(summarize.call_args.args[2:4], ("gpt-6.2-astra", "xhigh"))
             self.assertEqual(summary.suffix, ".html")
             self.assertIn("Deployment planning.", summary.read_text())
+            self.assertIn('(platform engineer)', summary.read_text())
             self.assertIn("Plain summary.", summary.read_text())
 
     def test_single_summary_survives_header_failure_and_is_reused_on_retry(self):

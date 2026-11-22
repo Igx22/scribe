@@ -263,14 +263,15 @@ SCRIBE_REPORT_TABS=1,3,5,10
 
 CLI options override environment variables, then `.env`, then built-in defaults.
 
-`--summarize-model MODEL[:EFFORT]` overrides the model for recording summaries,
-reconciliation and local-file report metadata. GPT-6 Luna Fast screens the saved YouTube discussion,
+`--summarize-model MODEL[:EFFORT]` overrides the model for recording summaries
+and final reconciliation. GPT-6 Luna Fast screens the saved YouTube discussion,
 then GPT-6 Luna with medium reasoning writes the discussion digests and retellings.
 A bare model uses `medium`; supported effort values are `low`, `medium`, `high`,
 `xhigh`, and `max`, subject to model support. `none` disables reports while
 reconciliation still uses `gpt-6.2-astra:xhigh`. With built-in settings,
-recording summaries use `gpt-6.2-sol:xhigh`. Reconciliation and local-file
-metadata use `gpt-6.2-astra:xhigh`.
+recording summaries use `gpt-6.2-sol:xhigh` and reconciliation uses
+`gpt-6.2-astra:xhigh`. Local-file topics and participant roles use
+`gpt-6.2-sol:medium`.
 
 Summaries follow the conversation's predominant language.
 See [configuration details](docs/USAGE.md#api-key-and-configuration) and

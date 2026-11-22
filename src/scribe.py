@@ -53,6 +53,8 @@ CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.2-astra"
 DEFAULT_SUMMARY_MODEL = "gpt-6.2-sol"
 DEFAULT_EFFORT = "xhigh"
+REPORT_HEADER_MODEL = "gpt-6.2-sol"
+REPORT_HEADER_EFFORT = "medium"
 BARE_MODEL_EFFORT = "medium"
 DEFAULT_SUMMARY_DETAIL = 1
 DEFAULT_REPORT_TABS = "1,3,5,10"
@@ -4381,9 +4383,9 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
             diagnostic("YouTube Smartest comments", exc)
     extracted = {}
     if youtube is None:
-        header_model, header_effort = reconciliation_model(args)
-        processing_stage("report header", model=header_model, effort=header_effort)
-        extracted = extract_report_metadata(transcript, key, header_model, header_effort, cache, args.force)
+        processing_stage("report header", model=REPORT_HEADER_MODEL, effort=REPORT_HEADER_EFFORT)
+        extracted = extract_report_metadata(transcript, key, REPORT_HEADER_MODEL, REPORT_HEADER_EFFORT,
+                                            cache, args.force)
     run = CURRENT_RUN.get()
     content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
@@ -4573,8 +4575,8 @@ def build_parser():
     p.set_defaults(text_model_overridden=configured_model is not None)
     p.add_argument("--summarize-model", type=parse_model_spec, action=TextModelOverride, metavar="MODEL[:EFFORT]|none",
                    default=configured_model if configured_model is not None else f"{DEFAULT_SUMMARY_MODEL}:{DEFAULT_EFFORT}",
-                   help="Recording summary model/effort. An explicit model also overrides final reconciliation and "
-                        "local-file header inference. Those stages default to Astra xhigh. "
+                   help="Recording summary model/effort. An explicit model also overrides final reconciliation, "
+                        "which defaults to Astra xhigh. Local-file header inference uses Sol medium. "
                         "none disables reports; final reconciliation still runs unless --offline")
     p.add_argument("--report-tabs", type=parse_report_tabs, action=ReportTabsAction,
                    nargs="+", metavar="LEVEL[,LEVEL]",

@@ -560,7 +560,7 @@ class LegacySummaryCacheTests(unittest.TestCase):
             result = {'topic': 'Conversation review', 'topic_evidence': [{'turn_id': 0, 'quote': 'Corrected words.'}],
                       'participant_roles': []}
             scratch = old / 'fixture-header'
-            app.extract_report_metadata(expected, 'key', app.DEFAULT_MODEL, app.DEFAULT_EFFORT, scratch,
+            app.extract_report_metadata(expected, 'key', app.REPORT_HEADER_MODEL, app.REPORT_HEADER_EFFORT, scratch,
                                         call=lambda *a, **k: json.dumps(result))
             for path in scratch.glob('*.json'):
                 saved = app.read_json(path)

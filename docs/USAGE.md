@@ -756,9 +756,10 @@ Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported eff
 values are `low`, `medium`, `high`, `xhigh`, and `max`; the chosen API model must
 support the requested effort. The built-in summary default is `gpt-6.2-sol:xhigh`.
 
-An explicit selection controls recording summaries, local-file report metadata
-and final text reconciliation. Reconciliation and local-file metadata default
-to `gpt-6.2-astra:xhigh`. YouTube comment sections use Luna with
+An explicit selection controls recording summaries and final reconciliation.
+Reconciliation defaults to `gpt-6.2-astra:xhigh`. Local-file topics and
+evidence-backed participant roles use `gpt-6.2-sol:medium` with their own
+checkpoint identity. YouTube comment sections use Luna with
 medium reasoning. `none` disables reports only: reconciliation still uses
 `gpt-6.2-astra:xhigh`. Use `--offline` to avoid all text-model and cloud-audio calls.
 

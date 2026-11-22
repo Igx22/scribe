@@ -342,10 +342,9 @@ Each summary level reads the same final log independently; detail controls retai
 information, separately from reasoning effort. Page guidance is not a padding quota.
 
 SCR-135 sets `gpt-6.2-sol:xhigh` as the default for recording summaries.
-Final reconciliation and local-file report metadata use
-`gpt-6.2-astra:xhigh` by default. Explicit selections override these settings.
-Both models use the documented 1,050,000-token context and 128,000-token
-output limit for reconciliation planning.
+Final reconciliation defaults to `gpt-6.2-astra:xhigh`. Explicit selections
+override both defaults. Both models use the documented 1,050,000-token context
+and 128,000-token output limit for reconciliation planning.
 
 Reports are standalone HTML with inline CSS/JavaScript and escaped model text and
 filenames. Every HTML report embeds the complete internal transcript and
@@ -364,7 +363,8 @@ response counters as diagnostics. API cache reads and writes have their own rate
 Cached Scribe artifacts carry no current-run usage. Estimates use the dated local
 pricing table and preserve missing usage or pricing as incomplete information.
 
-Local-file header roles require supported evidence; conflicts or missing facts stay unknown.
+Local-file header topics and roles use GPT-6.2 Sol with medium reasoning
+(SCR-136). Roles require supported evidence; conflicts or missing facts stay unknown.
 Names come from final-log turn labels. Duration and recording date come from log
 metadata or a valid, unambiguous ISO date/time embedded in the filename, never
 filesystem timestamps or model guesses. The separate Generated stamp stores an
