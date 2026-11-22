@@ -154,6 +154,9 @@ reuse. A new report opens in the default browser and links to the video.
 The **Date** field shows the YouTube publication date when available. Scribe
 stores it in the source metadata. Explicit `--summary-only` regeneration can
 look up a missing date for a verified video without downloading it again.
+The header uses the saved YouTube title, falling back to the local media
+filename stem when the title is unavailable. It takes the participant roster
+and duration from the saved transcript and makes no header inference requests.
 
 Scribe tries anonymously even when credentials are supplied. When YouTube
 indicates that sign-in is required, sign in with the account that can view the
@@ -752,7 +755,7 @@ Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported eff
 values are `low`, `medium`, `high`, `xhigh`, and `max`; the chosen API model must
 support the requested effort. The default is `gpt-6.2-astra:xhigh`.
 
-This selection controls recording summaries, report metadata and final text
+This selection controls recording summaries, local-file report metadata and final text
 reconciliation in every ordinary mode. YouTube comment sections use Luna with
 medium reasoning. `none` disables reports only: reconciliation still uses
 `gpt-6.2-astra:xhigh`. Use `--offline` to avoid all text-model and cloud-audio calls.

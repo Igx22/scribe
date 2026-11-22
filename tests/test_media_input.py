@@ -228,24 +228,33 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(first.result(timeout=5), second.result(timeout=5))
         request.assert_called_once()
 
-    def test_youtube_header_inference_failure_still_publishes_transcript(self):
+    def test_youtube_header_uses_source_metadata_without_model_inference(self):
         from tests import seed_final
         source = self.output / f"A talk [{ID}].webm"
         source.write_bytes(b"verified media fixture")
-        args = app.build_parser().parse_args(["--summary-only", "--report-tabs", "transcript"])
+        args = app.build_parser().parse_args(["--summary-only", "--force", "--report-tabs", "transcript"])
         args.output_dir = self.output
         args.cache_dir = self.root / "cache"
         args.youtube_metadata = {"id": ID, "title": "Title from YouTube", "publication_date": "2026-11-20"}
         seed_final(source, args, "[00:00–00:02] A\nThe final words are still here.")
-        with patch.object(app, "extract_report_metadata", side_effect=app.AppError("Topic evidence rejected")), \
+        with patch.object(app, "extract_report_metadata") as header, \
+                patch.object(app, "api_request") as api, \
                 patch.object(self.media, "fetch_youtube_comments", return_value=("empty", [])):
             app.process_file(source, args, "example-key")
-        report = app.output_paths(source, self.output)[1].read_text()
+            del args.youtube_metadata["title"]
+            app.process_file(source, args, "example-key")
+        header.assert_not_called()
+        api.assert_not_called()
+        path = app.output_paths(source, self.output)[1]
+        backup, = args.cache_dir.glob("*/outputs/*/previous-*.summary.html")
+        report = backup.read_text()
         self.assertIn("The final words are still here.", report)
-        self.assertIn("Title from YouTube", report)
+        self.assertIn("<h1>Title from YouTube</h1>", report)
+        self.assertIn('<dd class="participants">A</dd>', report)
         self.assertIn(f'href="{URL}"', report)
         self.assertIn("20 November 2026", report)
         self.assertIn("Published on YouTube", report)
+        self.assertIn(f"<h1>{source.stem}</h1>", path.read_text())
 
     def test_explicit_regeneration_backfills_publication_date_without_redownloading(self):
         source = self.output / f"Old clip [{ID}].webm"

@@ -555,7 +555,6 @@ class CommentPipelineTests(unittest.TestCase):
                     patch.object(app.media_input, "fetch_youtube_comments",
                                  side_effect=fetch_comments) as fetch, \
                     patch.object(app, "summarize", side_effect=lambda *a, detail: f"Video detail {detail}") as video, \
-                    patch.object(app, "extract_report_metadata", return_value={}), \
                     patch.object(app, "youtube_best_comments", side_effect=[app.AppError("Best digest failure."),
                                  [{"author": "@Author", "title": "Experience", "text": "Relevant firsthand details."}]]), \
                     patch.object(app, "extract_audio") as audio, patch.object(app, "api_request", side_effect=answer), \

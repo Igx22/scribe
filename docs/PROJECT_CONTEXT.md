@@ -363,7 +363,7 @@ response counters as diagnostics. API cache reads and writes have their own rate
 Cached Scribe artifacts carry no current-run usage. Estimates use the dated local
 pricing table and preserve missing usage or pricing as incomplete information.
 
-Header roles require supported evidence; conflicts or missing facts stay unknown.
+Local-file header roles require supported evidence; conflicts or missing facts stay unknown.
 Names come from final-log turn labels. Duration and recording date come from log
 metadata or a valid, unambiguous ISO date/time embedded in the filename, never
 filesystem timestamps or model guesses. The separate Generated stamp stores an
@@ -763,8 +763,9 @@ The generic praise in that comment produced an empty digest at each depth.
 
 YouTube reports select discussion detail independently in Comments, where
 Full comments embeds the original threads once. Summary selects the video digest.
-The header date uses the calendar day from saved YouTube metadata, with a
-metadata-only lookup on explicit regeneration when it is absent.
+The header uses the saved YouTube title and publication day, with a metadata-only
+date lookup on explicit regeneration when needed. SCR-134 renders participant
+labels and duration from the selected transcript and skips header inference.
 
 On 2026-11-21 all 321 mocked tests passed. A live regeneration of the Bali report
 backfilled 20 November 2026 and reused the video, transcript and AI caches. The

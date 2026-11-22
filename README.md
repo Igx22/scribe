@@ -53,7 +53,8 @@ alongside its transcript and HTML report in `./data` or `--output-dir DIR`.
 Repeating the command reuses a verified local download by video ID before
 contacting YouTube. The new report opens in the default browser.
 
-YouTube reports show the video's publication date when available. The **Comments**
+YouTube report headers use the saved video title and publication date, with
+participants from the transcript. The **Comments**
 menu offers discussion digests and detailed retellings in **Smartest comments**.
 Use the expand icon beside a retelling to read its original. **Top 100 YouTube
 comments** contains up to 100 original top-level comments in YouTube's order.
@@ -263,7 +264,7 @@ SCRIBE_REPORT_TABS=1,3,5,10
 CLI options override environment variables, then `.env`, then built-in defaults.
 
 `--summarize-model MODEL[:EFFORT]` selects the model for reconciliation, recording
-summaries and report metadata. GPT-6 Luna Fast screens the saved YouTube discussion,
+summaries and local-file report metadata. GPT-6 Luna Fast screens the saved YouTube discussion,
 then GPT-6 Luna with medium reasoning writes the discussion digests and retellings.
 A bare model uses `medium`; supported effort values are `low`, `medium`, `high`,
 `xhigh`, and `max`, subject to model support. `none` disables reports while

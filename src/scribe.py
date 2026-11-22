@@ -2423,9 +2423,8 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
     heading = "Topic"
     if youtube and media_input.VIDEO_ID.fullmatch(youtube.get("id", "")):
         source_label += f' · <a href="{media_input.watch_url(youtube["id"])}">Watch on YouTube</a>'
-        if youtube.get("title"):
-            title = youtube["title"]
-            heading = "Video"
+        title = youtube.get("title") or source.stem
+        heading = "Video"
     values = {"TITLE": html.escape(title), "SOURCE": source_label,
               "HEADING": heading, "TOPIC": html.escape(title), "PARTICIPANTS": participants,
               "DURATION": html.escape(metadata["duration"]), "DATE": html.escape(metadata["date"]),
@@ -4379,15 +4378,10 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
         except (AppError, OSError) as exc:
             say("  Smartest comments unavailable.")
             diagnostic("YouTube Smartest comments", exc)
-    processing_stage("report header", model=model, effort=effort)
-    try:
+    extracted = {}
+    if youtube is None:
+        processing_stage("report header", model=model, effort=effort)
         extracted = extract_report_metadata(transcript, key, model, effort, cache, args.force)
-    except AppError as exc:
-        if youtube is None:
-            raise
-        say("  YouTube report header inference failed; publishing the transcript and summaries with source details.")
-        diagnostic("report header", exc, fallback="YouTube source details")
-        extracted = {}
     run = CURRENT_RUN.get()
     content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
