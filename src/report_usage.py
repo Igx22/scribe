@@ -70,6 +70,8 @@ def stage_name(stage):
         return "Video summaries"
     if stage.startswith("youtube comment-summary"):
         return "Comment summaries"
+    if stage == "youtube comment-notes":
+        return "Comment digest notes"
     return {"reconciliation": "Transcript reconciliation", "report header": "Report header",
             "YouTube comment filter": "Comment filtering",
             "youtube best-comments": "Smartest comments"}.get(stage, "Other API requests")

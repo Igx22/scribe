@@ -269,8 +269,9 @@ do not guess corrections to facts."""
 SUMMARIZATION_PROMPT = (SUMMARY_SOURCE_RULES + "\n" + LEGACY_SUMMARY_LENGTH_GUIDE
                         + "\n" + SUMMARY_CONTENT_RULES + " Return only the finished summary without a preamble.\n")
 
-COMMENT_SUMMARY_PROMPT = """Write a digest of the retrieved YouTube discussion in {language}
-at detail {level}/10. {guidance}
+COMMENT_SUMMARY_PROMPT = """Write the requested digests of the retrieved YouTube discussion in {language}.
+Return a separate theme array for each requested level in one JSON object.
+{guidance}
 Group repeated points by theme. Preserve distinct claims, arguments, examples, corrections,
 useful replies, dissent and unanswered questions in proportion to the requested depth.
 Attribute claims to commenters and preserve uncertainty. Lead with the most informative point.
@@ -405,6 +406,10 @@ Return only the requested JSON with topic. Return an empty topic if none is supp
 
 
 class AppError(Exception):
+    pass
+
+
+class ContextBudgetError(AppError):
     pass
 
 
@@ -1804,6 +1809,8 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
                 raise AppError("OpenAI: invalid API key. Check OPENAI_API_KEY in .env.") from None
             if code in ("insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"):
                 raise AppError("OpenAI: API credits or the spending limit are exhausted. Check API Billing.") from None
+            if code == "context_length_exceeded":
+                raise ContextBudgetError(f"OpenAI: the request exceeds the context limit for {model}.") from None
             if exc.code == 404:
                 raise AppError(f"OpenAI: model {model} was not found or is unavailable to this API key. "
                                "Select an available model with --summarize-model MODEL:EFFORT.") from None
@@ -2565,8 +2572,8 @@ def recording_summaries(transcript, transcript_hash, reference, cache, args, key
 
 
 COMMENT_INPUT_BYTES = 60000
-COMMENT_DIGEST_INPUT_BYTES = 240000
 COMMENT_POLICY_VERSION = 1
+COMMENT_REQUEST_HEADROOM = 8192
 COMMENT_FILTER_MODEL = "gpt-6-luna"
 COMMENT_FILTER_EFFORT = "none"
 COMMENT_FILTER_TIER = "priority"
@@ -2748,6 +2755,35 @@ def comment_request_ids(payload, ids):
     return result, {alias: identifier for identifier, alias in aliases.items()}
 
 
+def comment_request_limit(model, output_tokens):
+    context, maximum_output = reconciliation_model_limits(model)
+    if output_tokens > maximum_output:
+        raise ContextBudgetError("Comment response exceeds the model's output limit.")
+    return min(context - maximum_output, context - output_tokens) - COMMENT_REQUEST_HEADROOM
+
+
+def request_comment_json(stage, settings, payload, ids, key, *, output_tokens, schema_for):
+    request_payload, source_ids = comment_request_ids(payload, ids)
+    text = reconciliation_json(request_payload)
+    schema = schema_for(source_ids)
+    input_bound = sum(len(part.encode("utf-8")) for part in
+                      (settings["prompt"], text, reconciliation_json(schema)))
+    if input_bound > comment_request_limit(settings["model"], output_tokens):
+        raise ContextBudgetError("Comment request exceeds the model's context budget.")
+    processing_stage(stage.replace(".", " "), model=settings["model"], effort=settings["effort"])
+    responses = []
+    token = CURRENT_RESPONSES.set(responses)
+    try:
+        answer = api_request(key, settings["model"], settings["effort"], settings["prompt"], text,
+                             schema=schema, max_output_tokens=output_tokens)
+    finally:
+        CURRENT_RESPONSES.reset(token)
+    try:
+        return json.loads(answer), source_ids, responses
+    except (TypeError, ValueError):
+        raise AppError("Invalid JSON in the comment summary.") from None
+
+
 def comment_model_stage(cache, stage, settings, payload, ids, key, *, output_tokens, force=False, note_limit=None,
                         experience_sources=None, models=None):
     coverage = [{"id": row["id"], "part": row.get("part", 1)} for row in payload.get("comments", ())]
@@ -2771,23 +2807,11 @@ def comment_model_stage(cache, stage, settings, payload, ids, key, *, output_tok
         else:
             record_report_models(models, settings, saved.get("responses") or [])
             return themes
-    stage_label = stage.replace(".", " ")
-    processing_stage(stage_label, model=settings["model"], effort=settings["effort"])
-    request_payload, source_ids = comment_request_ids(payload, ids)
-    responses = []
-    token = CURRENT_RESPONSES.set(responses)
-    try:
-        answer = api_request(key, settings["model"], settings["effort"], settings["prompt"],
-                             reconciliation_json(request_payload),
-                             schema=comment_themes_schema(experience=experience_sources is not None,
-                                                          support_ids=source_ids),
-                             max_output_tokens=output_tokens)
-    finally:
-        CURRENT_RESPONSES.reset(token)
-    try:
-        themes = validate_comment_themes(json.loads(answer), source_ids)
-    except (TypeError, ValueError):
-        raise AppError("Invalid JSON in the comment summary.") from None
+    result, source_ids, responses = request_comment_json(
+        stage, settings, payload, ids, key, output_tokens=output_tokens,
+        schema_for=lambda aliases: comment_themes_schema(
+            experience=experience_sources is not None, support_ids=aliases))
+    themes = validate_comment_themes(result, source_ids)
     themes = checked_themes({"themes": [
         {**theme, "comment_ids": [source_ids[i] for i in theme["comment_ids"]]} for theme in themes
     ]})
@@ -2874,88 +2898,126 @@ def comment_batches(ordered, limit):
         yield {"comments": pending}
 
 
-def youtube_comment_digest(cache, snapshot, language, level, key, model, effort, force=False, *, models=None):
+def digest_from_comment_notes(cache, ordered, common, key, *, output_tokens, digest):
+    prompt_overhead = len(COMMENT_NOTES_PROMPT.encode()) + 1024
+    limit = min(COMMENT_INPUT_BYTES, comment_request_limit(common["model"], output_tokens) - prompt_overhead)
+    if limit <= 32:
+        raise ContextBudgetError("The model context leaves no room for comment notes.")
+    note_limit = limit // 4
+    prompt = COMMENT_NOTES_PROMPT.format(language=common["language"], limit=note_limit)
+    source_rows = {row["id"]: row["text"] for row, _ in ordered}
+
+    def note_batch(batch):
+        field = "comments" if "comments" in batch else "notes"
+        records = batch[field]
+        support = ({row["id"] for row in records} if field == "comments" else
+                   {i for theme in records for i in theme["comment_ids"]})
+        settings = {**common, "prompt": prompt, "part": json_identity(batch), "input_bytes": limit}
+        middle = len(records) // 2
+        split_stage = "youtube.comment-notes-split"
+        if not middle or artifact_payload(cache, split_stage, settings) != {"split": True}:
+            try:
+                return comment_model_stage(cache, "youtube.comment-notes", settings, batch, support, key,
+                                           output_tokens=output_tokens, note_limit=note_limit)
+            except (CommentNotesBudgetError, ContextBudgetError):
+                if not middle:
+                    raise
+                save_artifact(cache, split_stage, settings, {"split": True})
+        result = []
+        for part in (records[:middle], records[middle:]):
+            smaller = {**batch, field: part}
+            if field == "comments":
+                present = {row["id"] for row in part}
+                smaller["comments"] = [
+                    {**row, "parent_context": source_rows[row["parent"]][:160]}
+                    if row["parent"] not in present and row["parent"] in source_rows else row
+                    for row in part
+                ]
+            result.extend(note_batch(smaller))
+        return result
+
+    notes = []
+    for batch in comment_batches(ordered, limit):
+        notes.extend(note_batch(batch))
+
+    while notes:
+        try:
+            return digest({"notes": notes}, {i for theme in notes for i in theme["comment_ids"]})
+        except ContextBudgetError:
+            reduced = []
+            for batch in pack_comment_records(notes, limit - 32):
+                reduced.extend(note_batch({"notes": batch}))
+            if not reduced or len(reconciliation_json(reduced).encode()) >= len(reconciliation_json(notes).encode()):
+                raise AppError("Comment notes could not be reduced within the request budget.") from None
+            notes = reduced
+    return None
+
+
+def youtube_comment_digests(cache, snapshot, language, levels, key, model, effort, force=False, *, models=None):
+    levels = sorted(set(levels))
+    if not levels or not snapshot["comments"]:
+        return {level: [] for level in levels}
     ordered = [({field: row[field] for field in ("id", "parent", "text", "parent_context") if field in row}, depth)
                for row, depth in ordered_comments(snapshot["comments"])]
     payload = {"comments": [row for row, _ in ordered]}
-    context, output = reconciliation_model_limits(model)
-    input_budget = COMMENT_DIGEST_INPUT_BYTES if model == COMMENT_SUMMARY_MODEL else COMMENT_INPUT_BYTES
-    limit = min(input_budget, context - output - 8192)
-    common = {"video_id": snapshot["video_id"], "model": model, "effort": effort, "language": language,
-              "policy": COMMENT_POLICY_VERSION, "input_bytes": limit}
+    ids = {row["id"] for row, _ in ordered}
     guidance = {
         1: "Retain the essentials in at most about 100 words for a large discussion.",
         3: "Cover main themes and key disagreements in at most about 250 words.",
         5: "Include reasons and examples in at most about 450 words.",
         10: "Cover all substantively distinct threads, details, and minority positions.",
-    }.get(level, f"Retain increasingly fine-grained evidence at depth {level} of ten.")
-    prompt = COMMENT_SUMMARY_PROMPT.format(language=language, level=level, guidance=guidance)
-    settings = {**common, "detail": level, "prompt": prompt, "source": json_identity(payload),
-                "notes_prompt": COMMENT_NOTES_PROMPT}
-    stage = f"youtube.comment-summary.level-{level}"
-    ids = {row["id"] for row, _ in ordered}
-    cached = artifact_payload(cache, stage, settings, force)
-    if cached is not None:
+    }
+    guides = "\n".join(f"level_{level} ({level}/10): " + guidance.get(
+        level, f"Retain evidence in proportion to depth {level} of ten.") for level in levels)
+    prompt = COMMENT_SUMMARY_PROMPT.format(language=language, guidance=guides)
+    _, max_output = reconciliation_model_limits(model)
+    output_tokens = min(max_output, max(12000, sum(levels) * 1000 + 6000))
+    common = {"video_id": snapshot["video_id"], "model": model, "effort": effort, "language": language,
+              "policy": COMMENT_POLICY_VERSION}
+    settings = {**common, "prompt": prompt, "levels": levels, "source": json_identity(payload),
+                "notes_prompt": COMMENT_NOTES_PROMPT, "output_tokens": output_tokens,
+                "input_limit": comment_request_limit(model, output_tokens), "notes_input_bytes": COMMENT_INPUT_BYTES}
+    stage = "youtube.comment-summary.combined"
+    fields = [f"level_{level}" for level in levels]
+
+    def schema_for(aliases):
+        themes = comment_themes_schema(support_ids=aliases)["properties"]["themes"]
+        return {"type": "object", "additionalProperties": False, "required": fields,
+                "properties": dict.fromkeys(fields, themes)}
+
+    def validate_digests(result, support):
+        if not isinstance(result, dict) or set(result) != set(fields):
+            raise AppError("Comment summary did not return every requested level.")
+        return {field: validate_comment_themes({"themes": result[field]}, support) for field in fields}
+
+    saved = artifact_payload(cache, stage, settings, force)
+    if isinstance(saved, dict):
         try:
-            themes = validate_comment_themes(cached, ids)
+            answers = validate_digests(saved.get("digests"), ids)
         except AppError:
             pass
         else:
-            record_report_models(models, settings, cached.get("responses") or [])
-            return themes
-    if len(reconciliation_json(payload).encode()) > limit:
-        note_limit = limit // 4
-        note_prompt = COMMENT_NOTES_PROMPT.format(language=language, limit=note_limit)
+            record_report_models(models, settings, saved.get("responses") or [])
+            return {level: answers[field] for level, field in zip(levels, fields, strict=True)}
 
-        source_rows = {row["id"]: row["text"] for row, _ in ordered}
+    def digest(request_payload, support):
+        result, aliases, responses = request_comment_json(
+            stage, settings, request_payload, support, key, output_tokens=output_tokens, schema_for=schema_for)
+        answers = validate_digests(result, aliases)
+        if request_payload.get("notes") and any(not themes for themes in answers.values()):
+            raise AppError("Comment summary discarded all substantive notes at a requested level.")
+        mapped = {field: [{**theme, "comment_ids": [aliases[i] for i in theme["comment_ids"]]} for theme in themes]
+                  for field, themes in answers.items()}
+        save_artifact(cache, stage, settings, {"digests": mapped, "responses": responses})
+        record_report_models(models, settings, responses)
+        return {level: mapped[field] for level, field in zip(levels, fields, strict=True)}
 
-        def note_batch(batch):
-            if "comments" in batch:
-                support = {row["id"] for row in batch["comments"]}
-            else:
-                support = {i for theme in batch["notes"] for i in theme["comment_ids"]}
-            note_settings = {**common, "prompt": note_prompt, "part": json_identity(batch)}
-            field = "comments" if "comments" in batch else "notes"
-            records = batch[field]
-            middle = len(records) // 2
-            split_stage = "youtube.comment-notes-split"
-            if not middle or artifact_payload(cache, split_stage, note_settings) != {"split": True}:
-                try:
-                    return comment_model_stage(cache, "youtube.comment-notes", note_settings, batch, support, key,
-                                               output_tokens=min(output, 16000), note_limit=note_limit)
-                except CommentNotesBudgetError:
-                    if not middle:
-                        raise
-                    save_artifact(cache, split_stage, note_settings, {"split": True})
-            result = []
-            for part in (records[:middle], records[middle:]):
-                smaller = {**batch, field: part}
-                if field == "comments":
-                    present = {row["id"] for row in part}
-                    smaller["comments"] = [
-                        {**row, "parent_context": source_rows[row["parent"]][:160]}
-                        if row["parent"] not in present and row["parent"] in source_rows else row
-                        for row in part
-                    ]
-                result.extend(note_batch(smaller))
-            return result
-
-        notes = []
-        for batch in comment_batches(ordered, limit):
-            notes.extend(note_batch(batch))
-        payload = {"notes": notes}
-        while (previous_size := len(reconciliation_json(payload).encode())) > limit:
-            reduced = []
-            for batch in pack_comment_records(payload["notes"], limit - 32):
-                reduced.extend(note_batch({"notes": batch}))
-            payload = {"notes": reduced}
-            if len(reconciliation_json(payload).encode()) >= previous_size:
-                raise AppError("Comment notes could not be reduced within the request budget.")
-        ids = {i for theme in payload["notes"] for i in theme["comment_ids"]}
-        if not payload["notes"]:
-            return []
-    return comment_model_stage(cache, stage, settings, payload, ids, key,
-                               output_tokens=min(output, max(12000, level * 1000 + 6000)), force=force, models=models)
+    try:
+        return digest(payload, ids)
+    except ContextBudgetError:
+        say("  Comment discussion exceeds the direct request budget; preparing notes in batches.")
+    return (digest_from_comment_notes(cache, ordered, common, key, output_tokens=min(max_output, 16000), digest=digest)
+            or {level: [] for level in levels})
 
 
 def comment_word_count(text):
@@ -4409,14 +4471,13 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
             selected = discussion
             filter_models.clear()
             comment_filter = {"kept": len(discussion["comments"]), "unfiltered": len(discussion["comments"])}
-        for level in summaries:
-            try:
-                comment_digests[level] = (youtube_comment_digest(
-                    cache, selected, language, level, key, COMMENT_SUMMARY_MODEL, COMMENT_SUMMARY_EFFORT,
-                    args.force, models=comment_models) if selected["comments"] else [])
-            except (AppError, OSError) as exc:
-                say(f"  Comment summary unavailable at {level}/10.")
-                diagnostic(f"YouTube comment summary {level}/10", exc)
+        try:
+            comment_digests = youtube_comment_digests(
+                cache, selected, language, summaries, key, COMMENT_SUMMARY_MODEL, COMMENT_SUMMARY_EFFORT,
+                args.force, models=comment_models)
+        except (AppError, OSError) as exc:
+            say("  Comment summaries unavailable.")
+            diagnostic("YouTube comment summaries", exc)
         try:
             video_context = (youtube.get("title") or "") + "\n\n" + summaries[min(summaries)]
             best_models = set()

@@ -243,24 +243,29 @@ class CommentRenderingTests(unittest.TestCase):
 
 class CommentDigestTests(unittest.TestCase):
     @staticmethod
-    def answer(*ids, text="Supported viewpoint."):
-        return json.dumps({"themes": [{"title": "", "text": text, "comment_ids": list(ids)}]})
+    def answer(*ids, text="Supported viewpoint.", schema=None):
+        fields = schema["required"] if schema else ["themes"]
+        themes = [{"title": "", "text": text, "comment_ids": list(ids)}]
+        return json.dumps(dict.fromkeys(fields, themes))
 
     def test_detail_language_and_source_identity_drive_comment_cache(self):
         snapshot = {"video_id": VIDEO, "comments": [row("a"), row("b", "a")], "status": "complete"}
-        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", return_value=self.answer("a")) as api:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+                app, "api_request", side_effect=lambda *_, schema, **kw: self.answer("a", schema=schema)) as api:
             cache = Path(tmp)
-            first = app.youtube_comment_digest(cache, snapshot, "Russian", 3, "key", "model", "medium")
+            first = app.youtube_comment_digests(cache, snapshot, "Russian", [1, 3, 5, 10], "key", "model", "medium")
             args = api.call_args.args
             self.assertIn("Russian", args[3])
+            self.assertEqual(set(first), {1, 3, 5, 10})
             self.assertIn("3/10", args[3])
+            self.assertEqual(api.call_args.kwargs["schema"]["required"], ["level_1", "level_3", "level_5", "level_10"])
             self.assertEqual([r["id"] for r in json.loads(args[4])["comments"]], ["a", "b"])
             snapshot["captured_at"] = "new time"
-            self.assertEqual(first, app.youtube_comment_digest(cache, snapshot, "Russian", 3, "key", "model", "medium"))
+            self.assertEqual(first, app.youtube_comment_digests(cache, snapshot, "Russian", [10, 5, 3, 1], "key", "model", "medium"))
             self.assertEqual(api.call_count, 1)
-            app.youtube_comment_digest(cache, snapshot, "Russian", 5, "key", "model", "medium")
+            app.youtube_comment_digests(cache, snapshot, "Russian", [5], "key", "model", "medium")
             snapshot["comments"][1]["text"] += " changed"
-            app.youtube_comment_digest(cache, snapshot, "Russian", 3, "key", "model", "medium")
+            app.youtube_comment_digests(cache, snapshot, "Russian", [10, 5, 3, 1], "key", "model", "medium")
             self.assertEqual(api.call_count, 3)
 
     def test_oversized_reply_is_covered_and_successful_notes_resume(self):
@@ -273,25 +278,26 @@ class CommentDigestTests(unittest.TestCase):
             self.assertLessEqual(len(prompt_input.encode()), 1200)
             if "comments" in payload:
                 inputs.append(payload)
-                return self.answer(payload["comments"][-1]["id"])
-            return self.answer(payload["notes"][-1]["comment_ids"][0])
+                return self.answer(payload["comments"][-1]["id"], schema=_kwargs["schema"])
+            return self.answer(payload["notes"][-1]["comment_ids"][0], schema=_kwargs["schema"])
 
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "COMMENT_INPUT_BYTES", 1200), \
+                patch.object(app, "comment_request_limit", return_value=3400), \
                 patch.object(app, "api_request", side_effect=request):
             cache = Path(tmp)
-            app.youtube_comment_digest(cache, snapshot, "English", 1, "key", "model", "medium")
+            app.youtube_comment_digests(cache, snapshot, "English", [1], "key", "model", "medium")
             self.assertGreater(len(inputs), 2)
             self.assertEqual("".join(r["text"] for p in inputs for r in p["comments"] if r["id"] == "b"), text)
             self.assertTrue(any(p.get("parent_context") for p in inputs))
             count = len(inputs)
-            app.youtube_comment_digest(cache, snapshot, "English", 5, "key", "model", "medium")
+            app.youtube_comment_digests(cache, snapshot, "English", [5], "key", "model", "medium")
             self.assertEqual(len(inputs), count)
 
     def test_fabricated_ids_do_not_enter_cache(self):
         snapshot = {"video_id": VIDEO, "comments": [row("a")]}
-        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", return_value=self.answer("invented")):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", side_effect=lambda *_, schema, **kw: self.answer("invented", schema=schema)):
             with self.assertRaisesRegex(app.AppError, "support"):
-                app.youtube_comment_digest(Path(tmp), snapshot, "English", 1, "key", "model", "medium")
+                app.youtube_comment_digests(Path(tmp), snapshot, "English", [1], "key", "model", "medium")
             self.assertFalse(list(Path(tmp).glob("*.json")))
 
     def test_request_local_support_ids_round_trip_to_youtube_ids(self):
@@ -299,17 +305,17 @@ class CommentDigestTests(unittest.TestCase):
         reply = "B-comment-id-that-is-too-long-to-repeat"
         snapshot = {"video_id": VIDEO, "comments": [row(parent), row(reply, parent, "A specific reply.")]}
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request",
-                return_value=self.answer("c2")) as api:
+                side_effect=lambda *_, schema, **kw: self.answer("c2", schema=schema)) as api:
             cache = Path(tmp)
-            args = (cache, snapshot, "English", 1, "key", app.COMMENT_SUMMARY_MODEL, "medium")
-            digest = app.youtube_comment_digest(*args)
-            self.assertEqual(digest[0]["comment_ids"], [reply])
+            args = (cache, snapshot, "English", [1], "key", app.COMMENT_SUMMARY_MODEL, "medium")
+            digest = app.youtube_comment_digests(*args)
+            self.assertEqual(digest[1][0]["comment_ids"], [reply])
             request = json.loads(api.call_args.args[4])["comments"]
             self.assertEqual([r["id"] for r in request], ["c1", "c2"])
             self.assertEqual(request[1]["parent"], "c1")
-            fields = api.call_args.kwargs["schema"]["properties"]["themes"]["items"]["properties"]
+            fields = api.call_args.kwargs["schema"]["properties"]["level_1"]["items"]["properties"]
             self.assertEqual(fields["comment_ids"]["items"]["enum"], ["c1", "c2"])
-            self.assertEqual(digest, app.youtube_comment_digest(*args))
+            self.assertEqual(digest, app.youtube_comment_digests(*args))
             api.assert_called_once()
 
     def test_oversize_notes_split_preserves_batch_support_and_resumes_across_levels(self):
@@ -319,24 +325,27 @@ class CommentDigestTests(unittest.TestCase):
         def request(_key, _model, _effort, instructions, raw, **_kwargs):
             payload = json.loads(raw)
             if "comments" in payload:
+                if "level_1" in _kwargs["schema"]["required"] or "level_5" in _kwargs["schema"]["required"]:
+                    raise app.ContextBudgetError("Context limit reached.")
                 ids = [item["id"] for item in payload["comments"]]
                 seen.append(ids)
                 return self.answer(*ids, text="Oversized " + "x" * 300 if len(ids) > 1 else "A point")
-            return self.answer(*(note["comment_ids"][0] for note in payload["notes"]))
+            return self.answer(*(note["comment_ids"][0] for note in payload["notes"]), schema=_kwargs["schema"])
 
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "COMMENT_INPUT_BYTES", 1200), \
+                patch.object(app, "comment_request_limit", return_value=3400), \
                 patch.object(app, "api_request", side_effect=request):
             cache = Path(tmp)
-            first = app.youtube_comment_digest(cache, snapshot, "English", 1, "key", "model", "medium")
-            self.assertEqual(first[0]["comment_ids"], ["0", "1", "2", "3", "4"])
+            first = app.youtube_comment_digests(cache, snapshot, "English", [1], "key", "model", "medium")
+            self.assertEqual(first[1][0]["comment_ids"], ["0", "1", "2", "3", "4"])
             self.assertEqual(seen, [["0", "1"], ["0"], ["1"], ["2", "3"], ["2"], ["3"], ["4"]])
             calls = len(seen)
-            app.youtube_comment_digest(cache, snapshot, "English", 5, "key", "model", "medium")
+            app.youtube_comment_digests(cache, snapshot, "English", [5], "key", "model", "medium")
             self.assertEqual(len(seen), calls)
 
     def test_empty_reduction_cannot_silently_erase_successful_reviewed_batches(self):
         snapshot = {"video_id": VIDEO,
-                    "comments": [row(str(i), text="Large comment " + "x" * 550) for i in range(10)]}
+                    "comments": [row(str(i), text="Large comment " + "x" * 550) for i in range(14)]}
         seen = []
 
         def answer(_key, _model, _effort, _prompt, raw, **_kwargs):
@@ -344,19 +353,55 @@ class CommentDigestTests(unittest.TestCase):
             if "notes" in payload:
                 return '{"themes":[]}'
             seen.extend(row["id"] for row in payload["comments"])
-            return self.answer(payload["comments"][0]["id"], text="Specific discussion " + "x" * 150)
+            return self.answer(payload["comments"][0]["id"], text="Specific discussion " + "x" * 174)
 
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "COMMENT_INPUT_BYTES", 1200), \
+                patch.object(app, "comment_request_limit", return_value=3400), \
                 patch.object(app, "api_request", side_effect=answer):
             cache = Path(tmp)
             with self.assertRaisesRegex(app.AppError, "discarded all"):
-                app.youtube_comment_digest(cache, snapshot, "English", 1, "key", "model", "medium")
-            self.assertEqual(seen, [str(i) for i in range(10)])
-            self.assertEqual(len(list(cache.glob("youtube.comment-notes.*.json"))), 10)
+                app.youtube_comment_digests(cache, snapshot, "English", [1], "key", "model", "medium")
+            self.assertEqual(seen, [str(i) for i in range(14)])
+            self.assertEqual(len(list(cache.glob("youtube.comment-notes.*.json"))), 14)
             self.assertFalse(list(cache.glob("youtube.comment-summary.*.json")))
             with self.assertRaisesRegex(app.AppError, "discarded all"):
-                app.youtube_comment_digest(cache, snapshot, "English", 1, "key", "model", "medium")
-            self.assertEqual(len(seen), 10)
+                app.youtube_comment_digests(cache, snapshot, "English", [1], "key", "model", "medium")
+            self.assertEqual(len(seen), 14)
+
+    def test_five_thousand_comments_cover_all_input_before_one_combined_digest(self):
+        comments = []
+        for index in range(5000):
+            parent = "root" if index % 4 == 0 else str(index - index % 4)
+            comments.append(row(str(index), parent, "é😀" * (30 + index % 9)))
+        comments[-1]["text"] = "Начало " + "ё" * 80_000 + " End."
+        snapshot = {"video_id": VIDEO, "comments": comments}
+        seen = {}
+        syntheses = []
+        model = app.COMMENT_SUMMARY_MODEL
+
+        def reply(_key, _model, _effort, prompt, raw, *, schema, max_output_tokens):
+            size = sum(len(part.encode("utf-8")) for part in (prompt, raw, app.reconciliation_json(schema)))
+            self.assertLessEqual(size, app.comment_request_limit(model, max_output_tokens))
+            payload = json.loads(raw)
+            if "comments" in payload:
+                self.assertEqual(schema["required"], ["themes"])
+                for item in payload["comments"]:
+                    seen.setdefault(item["id"], []).append(item["text"])
+                return self.answer(payload["comments"][0]["id"], schema=schema)
+            syntheses.append(schema["required"])
+            return self.answer(payload["notes"][0]["comment_ids"][0], schema=schema)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", side_effect=reply) as api:
+            args = (Path(tmp), snapshot, "Russian", [1, 3, 5, 10], "key", model, "medium")
+            result = app.youtube_comment_digests(*args)
+            self.assertEqual({key: "".join(parts) for key, parts in seen.items()},
+                             {item["id"]: item["text"] for item in comments})
+            self.assertGreater(len(seen["4999"]), 1)
+            self.assertEqual(syntheses, [["level_1", "level_3", "level_5", "level_10"]])
+            self.assertEqual(set(result), {1, 3, 5, 10})
+            calls = api.call_count
+            self.assertEqual(app.youtube_comment_digests(*args), result)
+            self.assertEqual(api.call_count, calls)
 
 
 class BestCommentsTests(unittest.TestCase):
@@ -513,7 +558,7 @@ class CommentPipelineTests(unittest.TestCase):
             self.assertFalse(app.output_paths(source, root)[1].exists())
             self.assertEqual(len(list(args.cache_dir.glob("*/youtube.comments.*.selected.json"))), 1)
 
-    def test_url_regeneration_reuses_snapshot_recovers_one_depth_and_preserves_edit(self):
+    def test_url_regeneration_reuses_snapshot_recovers_combined_digests_and_preserves_edit(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"OPENAI_API_KEY": "test"}, clear=True):
             root = Path(tmp)
             source = root / "video.webm"
@@ -539,11 +584,12 @@ class CommentPipelineTests(unittest.TestCase):
                 calls.append(prompt)
                 self.assertIn("Viewer evidence", raw)
                 self.assertNotIn("Excluded reaction", raw)
-                if len(calls) == 2:
+                if len(calls) == 1:
                     raise app.AppError("Temporary failure.")
                 responses.append({"status": "completed", "model": "gpt-6-luna-snapshot",
                                   "service_tier": "default", "reasoning": {"effort": effort}})
-                return CommentDigestTests.answer("one", text=f"Discussion answer {len(calls)}")
+                return json.dumps({f"level_{level}": [{"title": "", "text": f"Discussion answer {level}",
+                                                       "comment_ids": ["one"]}] for level in (1, 5)})
 
             def fetch_comments(_video_id, _args, _say, *, top):
                 if top:
@@ -574,7 +620,7 @@ class CommentPipelineTests(unittest.TestCase):
                 self.assertEqual(app.main(regen), 0)
                 second = report.read_text()
                 self.assertIn("Discussion answer 1", second)
-                self.assertIn("Discussion answer 3", second)
+                self.assertIn("Discussion answer 5", second)
                 self.assertNotIn("Comment summary unavailable.", second)
                 self.assertIn("Relevant firsthand details.", second)
                 self.assertIn("GPT-6 Luna Fast · no reasoning", second)
@@ -582,5 +628,5 @@ class CommentPipelineTests(unittest.TestCase):
                 self.assertEqual([call.kwargs["top"] for call in fetch.call_args_list], [False, True])
                 audio.assert_not_called()
                 video.assert_called_once()
-            self.assertEqual(["1/10" in p for p in calls], [True, False, False])
+            self.assertEqual([("1/10" in p, "5/10" in p) for p in calls], [(True, True), (True, True)])
             self.assertEqual(log.read_text(), "Hand-edited export.")

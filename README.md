@@ -56,6 +56,8 @@ contacting YouTube. The new report opens in the default browser.
 YouTube report headers use the saved video title and publication date, with
 participants from the transcript. The **Comments**
 menu offers discussion digests and detailed retellings in **Smartest comments**.
+The selected comment digest levels share one final request. Large discussions
+can use bounded note batches first.
 Use the expand icon beside a retelling to read its original. **Top 100 YouTube
 comments** contains up to 100 original top-level comments in YouTube's order.
 **Full comments** contains the full retrieved discussion and replies for offline

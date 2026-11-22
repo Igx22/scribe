@@ -356,7 +356,7 @@ class ContentCacheTests(unittest.TestCase):
             with (lock_dir / ('source-' + app.digest_file(source) + '.lock')).open('w') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with patch.object(app, 'extract_audio') as extract, self.assertRaisesRegex(app.AppError, 'recording content'):
-                    app.process_file(source, args, 'key')
+                    app.process_file(source, args, 'fixture-key')
                 extract.assert_not_called()
             self.run_pipeline(source, args)
             self.assertIsNotNone(app.read_json(cache / 'manifest.json')['selected_final'])

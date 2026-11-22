@@ -699,9 +699,12 @@ the existing source lock. yt-dlp may return no rows for an indeterminate request
 An empty or disabled snapshot requires an explicit upstream signal. A failed
 refresh can retain the last usable snapshot.
 
-Comment digests use their own prompt, source identity and coverage budget. Long
-discussions use reusable notes with supporting IDs before level generation.
-Comment acquisition or model failures leave the video report available.
+Comment digests use their own prompt, source identity and coverage budget.
+SCR-140 combines all selected levels in one structured final response. It checks
+an input bound for the serialized payload, instructions and schema alongside the
+reserved output. Oversized discussions use bounded batches and reusable notes
+with supporting IDs before the combined evaluation. Comment acquisition or
+model failures leave the video report and saved original comments available.
 See the [design](superpowers/specs/2026-11-21-youtube-comments-design.md) and
 [regeneration workflow](USAGE.md#youtube-comments).
 

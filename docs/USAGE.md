@@ -193,7 +193,12 @@ with reasoning set to `none`. Each batch contains at most 100 comments and
 The filter selects specific claims,
 examples, objections, and other substantive material for the digest. The
 comment sections use GPT-6 Luna with `medium` reasoning, independently of
-`--summarize-model`. The report shows how many comments were retained for
+`--summarize-model`. Scribe requests all selected digest levels in one
+structured response. It estimates the input using the serialized comments,
+instructions and response schema, and reserves room for output and reasoning.
+If the input exceeds the model budget, Scribe processes bounded comment batches
+into evidence-linked notes before one final digest request. Compatible notes
+and complete digest responses are reused. The report shows how many comments were retained for
 review. Failed batches and comments that exceed the input budget on their own
 are kept for review and marked as unfiltered. The original snapshot supplies
 the complete **Full comments** view.
