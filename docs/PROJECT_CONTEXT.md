@@ -783,7 +783,10 @@ Report controls and keyboard navigation follow Summary, Comments, Transcript.
 Best comments considers the longest quarter of the retained entries with at
 least 60 words. The summary model gives priority to firsthand experience and
 practical knowledge. A specific comparison or an overlooked perspective can
-also qualify. Each selected entry has one retelling in candidate order. The
+also qualify. Each selected entry has one retelling. SCR-141 validates a model
+value score from 0 to 100 and sorts retellings across batches by that score.
+The combined digests share one score per cited comment across all levels.
+Themes use their highest supporting score. Ties use saved discussion order. The
 prompt retains narrative sequence, examples, caveats and tone in dense entries.
 The expand control opens the original in a dialog from the same embedded
 comment snapshot used by Full comments.

@@ -246,7 +246,10 @@ class CommentDigestTests(unittest.TestCase):
     def answer(*ids, text="Supported viewpoint.", schema=None):
         fields = schema["required"] if schema else ["themes"]
         themes = [{"title": "", "text": text, "comment_ids": list(ids)}]
-        return json.dumps(dict.fromkeys(fields, themes))
+        result = dict.fromkeys((field for field in fields if field != "comment_values"), themes)
+        if "comment_values" in fields:
+            result["comment_values"] = [{"comment_id": i, "value": 75} for i in dict.fromkeys(ids)]
+        return json.dumps(result)
 
     def test_detail_language_and_source_identity_drive_comment_cache(self):
         snapshot = {"video_id": VIDEO, "comments": [row("a"), row("b", "a")], "status": "complete"}
@@ -258,7 +261,8 @@ class CommentDigestTests(unittest.TestCase):
             self.assertIn("Russian", args[3])
             self.assertEqual(set(first), {1, 3, 5, 10})
             self.assertIn("3/10", args[3])
-            self.assertEqual(api.call_args.kwargs["schema"]["required"], ["level_1", "level_3", "level_5", "level_10"])
+            self.assertEqual(api.call_args.kwargs["schema"]["required"],
+                             ["level_1", "level_3", "level_5", "level_10", "comment_values"])
             self.assertEqual([r["id"] for r in json.loads(args[4])["comments"]], ["a", "b"])
             snapshot["captured_at"] = "new time"
             self.assertEqual(first, app.youtube_comment_digests(cache, snapshot, "Russian", [10, 5, 3, 1], "key", "model", "medium"))
@@ -313,8 +317,7 @@ class CommentDigestTests(unittest.TestCase):
             request = json.loads(api.call_args.args[4])["comments"]
             self.assertEqual([r["id"] for r in request], ["c1", "c2"])
             self.assertEqual(request[1]["parent"], "c1")
-            fields = api.call_args.kwargs["schema"]["properties"]["level_1"]["items"]["properties"]
-            self.assertEqual(fields["comment_ids"]["items"]["enum"], ["c1", "c2"])
+            self.assertEqual(api.call_args.kwargs["schema"]["$defs"]["comment_id"]["enum"], ["c1", "c2"])
             self.assertEqual(digest, app.youtube_comment_digests(*args))
             api.assert_called_once()
 
@@ -397,11 +400,48 @@ class CommentDigestTests(unittest.TestCase):
             self.assertEqual({key: "".join(parts) for key, parts in seen.items()},
                              {item["id"]: item["text"] for item in comments})
             self.assertGreater(len(seen["4999"]), 1)
-            self.assertEqual(syntheses, [["level_1", "level_3", "level_5", "level_10"]])
+            self.assertEqual(syntheses, [["level_1", "level_3", "level_5", "level_10", "comment_values"]])
             self.assertEqual(set(result), {1, 3, 5, 10})
             calls = api.call_count
             self.assertEqual(app.youtube_comment_digests(*args), result)
             self.assertEqual(api.call_count, calls)
+
+    def test_all_digest_levels_share_values_and_sort_themes_and_sources(self):
+        identifiers = ["a-long-original-id-for-comment-a", "b-long-original-id-for-comment-b", "c-long-original-id-for-comment-c"]
+        snapshot = {"video_id": VIDEO, "comments": [row(i) for i in identifiers]}
+        lower = {"title": "Lower", "text": "A useful observation.", "comment_ids": ["c1"]}
+        higher = {"title": "Higher", "text": "Concrete experience.", "comment_ids": ["c3", "c2", "c1"]}
+        answer = {"level_1": [lower, higher], "level_10": [higher, lower], "comment_values": [
+            {"comment_id": "c3", "value": 90}, {"comment_id": "c1", "value": 55},
+            {"comment_id": "c2", "value": 90},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+                app, "api_request", return_value=json.dumps(answer)) as api:
+            args = (Path(tmp), snapshot, "English", [1, 10], "key", app.COMMENT_SUMMARY_MODEL, "medium")
+            result = app.youtube_comment_digests(*args)
+            for themes in result.values():
+                self.assertEqual([theme["title"] for theme in themes], ["Higher", "Lower"])
+                self.assertEqual(themes[0]["comment_ids"], [identifiers[1], identifiers[2], identifiers[0]])
+            self.assertEqual(result, app.youtube_comment_digests(*args))
+            api.assert_called_once()
+
+    def test_comment_values_reject_nonintegers_unknown_ids_duplicates_and_missing_scores(self):
+        for values in ([], [{"comment_id": "other", "value": 85}], [{"comment_id": "a", "value": 101}],
+                       [{"comment_id": "a", "value": True}], [{"comment_id": "a", "value": 85.0}],
+                       [{"comment_id": "a", "value": 45}, {"comment_id": "a", "value": 90}]):
+            with self.subTest(values=values), self.assertRaisesRegex(app.AppError, "value"):
+                app.validate_comment_values(values, {"a"})
+
+    def test_combined_schema_declares_the_id_enum_only_once(self):
+        snapshot = {"video_id": VIDEO, "comments": [row(str(i)) for i in range(838)]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+                app, "api_request", side_effect=lambda *_, schema, **kw: self.answer("0", schema=schema)) as api:
+            app.youtube_comment_digests(Path(tmp), snapshot, "English", [1, 3, 5, 10], "key",
+                                        app.COMMENT_SUMMARY_MODEL, "medium")
+        api.assert_called_once()
+        schema = api.call_args.kwargs["schema"]
+        self.assertEqual(len(schema["$defs"]["comment_id"]["enum"]), 838)
+        self.assertEqual(json.dumps(schema).count('"enum"'), 1)
 
 
 class BestCommentsTests(unittest.TestCase):
@@ -412,7 +452,7 @@ class BestCommentsTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in app.best_comment_candidates(comments)], ["longest", "first", "second"])
         self.assertEqual(app.best_comment_candidates(comments[4:]), [])
 
-    def test_experience_selection_uses_best_candidates_context_order_and_cache(self):
+    def test_experience_selection_uses_best_candidates_context_value_order_and_cache(self):
         phrase_a = "I have lived here for seven years."
         phrase_b = "I worked with the equipment for a decade."
         comments = [{**row("a", "parent", phrase_a + " observation" * 70), "author": "@resident"},
@@ -422,15 +462,15 @@ class BestCommentsTests(unittest.TestCase):
         snapshot = {"video_id": VIDEO, "comments": comments}
         answer = {"themes": [
             {"title": "Field use", "text": "The operator reports working with the equipment for ten years.",
-             "comment_ids": ["b"], "experience_evidence": phrase_b},
+             "comment_ids": ["b"], "experience_evidence": phrase_b, "value": 91},
             {"title": "Local account", "text": "The resident reports seven years of living here.",
-             "comment_ids": ["a"], "experience_evidence": phrase_a},
+             "comment_ids": ["a"], "experience_evidence": phrase_a, "value": 80},
         ]}
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", return_value=json.dumps(answer)) as api:
             args = (Path(tmp), snapshot, "The video compares two observations.", "English", "key", "model", "medium")
             result = app.youtube_best_comments(*args)
-            self.assertEqual([item["author"] for item in result], ["@resident", "@operator"])
-            self.assertEqual([item["comment_id"] for item in result], ["a", "b"])
+            self.assertEqual([item["author"] for item in result], ["@operator", "@resident"])
+            self.assertEqual([item["comment_id"] for item in result], ["b", "a"])
             self.assertEqual(result, app.youtube_best_comments(*args))
             api.assert_called_once()
             request = json.loads(api.call_args.args[4])
@@ -445,6 +485,29 @@ class BestCommentsTests(unittest.TestCase):
             self.assertIn("overlooked perspective", instructions)
             fields = api.call_args.kwargs["schema"]["properties"]["themes"]["items"]["required"]
             self.assertIn("experience_evidence", fields)
+            self.assertIn("value", fields)
+
+    def test_smartest_values_sort_across_batches_and_keep_source_order_on_ties(self):
+        quote = "I worked on the dock"
+        comments = [row("first", text=quote + " concrete example" * 60),
+                    row("middle", text=quote + " concrete example" * 65),
+                    row("last", text=quote + " concrete example" * 70)]
+        comments.extend(row(f"short{i}", text="Short entry.") for i in range(6))
+        scores = {"first": 93, "middle": 93, "last": 68}
+
+        def reply(_key, _model, _effort, _prompt, raw, **_kwargs):
+            record, = json.loads(raw)["comments"]
+            identifier = record["id"]
+            return json.dumps({"themes": [{"title": identifier, "text": "Evidence-supported detail.",
+                                           "comment_ids": [identifier], "experience_evidence": quote,
+                                           "value": scores[identifier]}]})
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, "COMMENT_INPUT_BYTES", 1400), \
+                patch.object(app, "api_request", side_effect=reply) as api:
+            snapshot = {"video_id": VIDEO, "comments": comments}
+            result = app.youtube_best_comments(Path(tmp), snapshot, "Dock design", "English", "key", "model", "medium")
+        self.assertEqual(api.call_count, 3)
+        self.assertEqual([entry["comment_id"] for entry in result], ["first", "middle", "last"])
 
     def test_long_comments_request_detailed_retellings_without_a_length_cap(self):
         source = (
@@ -455,7 +518,7 @@ class BestCommentsTests(unittest.TestCase):
             "dock safer, though I never worked the east dock and cannot compare."
         )
         answer = {"themes": [{"title": "Dock safety", "text": source, "comment_ids": ["dock"],
-                             "experience_evidence": "I worked at the dock"}]}
+                             "experience_evidence": "I worked at the dock", "value": 85}]}
         snapshot = {"video_id": VIDEO, "comments": [row("dock", text=source)]}
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "api_request", return_value=json.dumps(answer)) as api:
             result = app.youtube_best_comments(Path(tmp), snapshot, "Dock design", "English", "key", "model", "medium")
@@ -472,7 +535,7 @@ class BestCommentsTests(unittest.TestCase):
         for quote in ("I have worked on this for fifteen years.", "I have worked on this for ten years.",
                       ".", "his reply describes", "specific outcomes"):
             model_answer = {"themes": [{"title": "Reply", "text": "Experience claim.",
-                                        "comment_ids": ["reply"], "experience_evidence": quote}]}
+                                        "comment_ids": ["reply"], "experience_evidence": quote, "value": 80}]}
             with self.subTest(quote=quote), tempfile.TemporaryDirectory() as tmp, \
                     patch.object(app, "api_request", return_value=json.dumps(model_answer)):
                 with self.assertRaisesRegex(app.AppError, "invalid experience evidence"):
@@ -588,8 +651,11 @@ class CommentPipelineTests(unittest.TestCase):
                     raise app.AppError("Temporary failure.")
                 responses.append({"status": "completed", "model": "gpt-6-luna-snapshot",
                                   "service_tier": "default", "reasoning": {"effort": effort}})
-                return json.dumps({f"level_{level}": [{"title": "", "text": f"Discussion answer {level}",
-                                                       "comment_ids": ["one"]}] for level in (1, 5)})
+                return json.dumps({
+                    **{f"level_{level}": [{"title": "", "text": f"Discussion answer {level}",
+                                           "comment_ids": ["one"]}] for level in (1, 5)},
+                    "comment_values": [{"comment_id": "one", "value": 75}],
+                })
 
             def fetch_comments(_video_id, _args, _say, *, top):
                 if top:

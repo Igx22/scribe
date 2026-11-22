@@ -198,10 +198,16 @@ structured response. It estimates the input using the serialized comments,
 instructions and response schema, and reserves room for output and reasoning.
 If the input exceeds the model budget, Scribe processes bounded comment batches
 into evidence-linked notes before one final digest request. Compatible notes
-and complete digest responses are reused. The report shows how many comments were retained for
-review. Failed batches and comments that exceed the input budget on their own
+and complete digest responses are reused. The report shows how many comments
+were retained for review. Failed batches and comments that exceed the input budget on their own
 are kept for review and marked as unfiltered. The original snapshot supplies
 the complete **Full comments** view.
+
+The digests share a 0–100 value score per cited comment across all levels.
+The score reflects practical usefulness, reasoning, concrete detail and
+demonstrated knowledge. Themes are ordered by their highest-valued supporting
+comment. Supporting IDs use the same order. Tied scores use the saved discussion
+order.
 
 **Smartest comments** appears above **Top 100 YouTube comments** when summary
 levels are enabled. Scribe takes the longest quarter of retained comments and replies
@@ -210,6 +216,8 @@ relevance and favors firsthand experience and practical familiarity. Specific
 comparisons and well-developed perspectives the video overlooks can also qualify.
 Each selected entry has its own detailed retelling and author attribution.
 Long entries can retain their sequence, concrete details, caveats and tone.
+Retellings use the same 0–100 rubric and are ordered by value across batches.
+Tied entries follow the saved discussion order.
 Use the expand icon beside an entry to read the full original in the report.
 Close it with **Close** or **Esc**. Short discussions can yield an empty
 selection. Smartest comments results are cached with the
