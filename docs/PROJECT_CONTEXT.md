@@ -341,6 +341,11 @@ applicable data policies.
 Each summary level reads the same final log independently; detail controls retained
 information, separately from reasoning effort. Page guidance is not a padding quota.
 
+SCR-110 sets `gpt-6.2-astra:xhigh` as the default for recording summaries,
+report metadata, and final reconciliation. Explicit settings still take
+precedence. Astra uses the documented 1,050,000-token context and 128,000-token
+output limit for reconciliation planning. See the [model reference](https://developers.openai.com/api/docs/models/gpt-6.2-astra).
+
 Reports are standalone HTML with inline CSS/JavaScript and escaped model text and
 filenames. Every HTML report embeds the complete internal transcript and
 available raw sources. Numeric selections configure only Summary. Both dropdowns have fixed
@@ -408,9 +413,9 @@ differed, so this was not a controlled speed or speaker-accuracy benchmark.
 
 Sol reconciliation passed validation on identical cached sources; Luna failed
 twice by removing required uncertainty markers. On the accepted Sol log, Luna's
-summary also missed a substantive correction. Keep Sol as the default and preserve
-strict validation; cheaper tokens did not establish equivalent quality. This is
-sample-specific evidence, not a universal model ranking.
+summary also missed a substantive correction. These historical results supported
+using Sol at the time and retaining strict validation. They describe the tested
+sample.
 
 Detailed private evidence, when available, remains under ignored
 `data/comparison/whisperx-comparison/`, `diarization-comparison/` and `luna-vs-sol/`.
@@ -436,7 +441,7 @@ experiments and preserve ordinary outputs; the mocked test command is below.
 ## Examples
 
 ```bash
-# Default: WhisperX Turbo + Nemotron voices, Sol reconciliation and summaries
+# Default: WhisperX Turbo + Nemotron voices, Astra reconciliation and summaries
 ./scribe.sh
 
 # API transcription and summary, without local voice models

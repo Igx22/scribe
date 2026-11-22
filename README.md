@@ -254,7 +254,7 @@ Set defaults in `.env`:
 
 ```dotenv
 OPENAI_API_KEY=your-api-key
-SCRIBE_SUMMARIZE_MODEL=gpt-6.1-sol:medium
+SCRIBE_SUMMARIZE_MODEL=gpt-6.2-astra:xhigh
 SCRIBE_REPORT_TABS=1,3,5,10
 ```
 
@@ -265,7 +265,7 @@ summaries and report metadata. GPT-6 Luna Fast screens the saved YouTube discuss
 then GPT-6 Luna with medium reasoning writes the discussion digests and retellings.
 A bare model uses `medium`; supported effort values are `low`, `medium`, `high`,
 `xhigh`, and `max`, subject to model support. `none` disables reports while
-reconciliation still uses `gpt-6.1-sol:medium`.
+reconciliation still uses `gpt-6.2-astra:xhigh`.
 
 Summaries follow the conversation's predominant language.
 See [configuration details](docs/USAGE.md#api-key-and-configuration) and
@@ -309,7 +309,7 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | `--monitor-dir [DIR]` | Off | Watch growing OBS MKVs and wait for 30 seconds of stability plus OBS-style finalization checks. Omit DIR for `~/Movies` on macOS or `~/Videos` on Linux/Windows. Outputs default to this folder. Alternative to `-f` and `--input-dir`. |
 | `--transcription-model gpt-transcribe-online\|whisperx\|mlx\|gpt-transcribe+whisperx\|all` | `whisperx` | API only, WhisperX Turbo, MLX Turbo, GPT + WhisperX with reconciliation, or all three recognizers; every ordinary mode then runs GPT text reconciliation. |
 | `--diarization-model nemotron\|community-1` | `nemotron` | Independent automatic local diarizer. Community-1 download needs HF access; ignored for API-only recognition. |
-| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.1-sol:medium` | Recording summary and final GPT reconciliation model/effort. `none` disables reports; ordinary modes still reconcile. |
+| `--summarize-model MODEL[:EFFORT]\|none` | `gpt-6.2-astra:xhigh` | Recording summary and final GPT reconciliation model/effort. `none` disables reports; ordinary modes still reconcile. |
 | `--report-tabs LEVEL [LEVEL ...]` | `SCRIBE_REPORT_TABS`, or `1,3,5,10` | Summary levels 1–10 in display order, separated by spaces or commas. Every HTML report includes Transcript. |
 | `--offline` | Off | Force local recognition without summaries, API calls or downloads. For a saved YouTube video, use `-f`. |
 | `--output-dir DIR` | `./data`; with `--monitor-dir`: the watched folder | Write recording transcripts, reports, error files and YouTube downloads to DIR. |

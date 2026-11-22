@@ -57,8 +57,8 @@ class ReconciliationModeTests(unittest.TestCase):
                 final = log.read_text()
                 self.assertEqual(final.count('] Alice\n'), 2)
                 self.assertNotIn('] A\n', final)
-                self.assertIn('reconciled by gpt-6.1-sol', final)
-                self.assertEqual(app.final_transcript_badge(final), 'GPT-6.1-sol')
+                self.assertIn('reconciled by gpt-6.2-astra', final)
+                self.assertEqual(app.final_transcript_badge(final), 'GPT-6.2-astra')
                 self.assertEqual((first, repeated), (1, 1), 'Resume must not repeat final GPT calls')
                 state = app.read_json(next(args.cache_dir.glob('*/outputs/*/state.json')))
                 self.assertTrue(state['pipeline_complete'])
@@ -79,11 +79,11 @@ class ReconciliationModeTests(unittest.TestCase):
             text = app.output_paths(source, args.output_dir)[0].read_text()
             self.assertEqual(local, 0)
             self.assertEqual((first, repeated), (1, 1))
-            self.assertIn('GPT-Transcribe only; reconciled by gpt-6.1-sol', text)
+            self.assertIn('GPT-Transcribe only; reconciled by gpt-6.2-astra', text)
             self.assertNotIn('] Alice\n', text)
             self.assertNotIn('] A\n', text)
             self.assertEqual(payloads[0][1]['speaker_context']['speaker_ids'], [])
-            self.assertEqual(app.final_transcript_badge(text), 'GPT-6.1-sol')
+            self.assertEqual(app.final_transcript_badge(text), 'GPT-6.2-astra')
 
     def test_explicit_offline_still_skips_gpt_and_name_discovery(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -236,7 +236,7 @@ class ErrorHistoryTests(unittest.TestCase):
             self.assertIn('Part 2: 10:00–20:00', log.read_text())
             self.assertIn('Original 1', log.read_text()); self.assertIn('Corrected', log.read_text())
             self.assertIn('class="reconciliation-warning"', report.read_text())
-            self.assertEqual(app.final_transcript_badge(log.read_text()), 'GPT-6.1-sol')
+            self.assertEqual(app.final_transcript_badge(log.read_text()), 'GPT-6.2-astra')
             self.assertEqual([run['status'] for run in app.read_json(err)['runs']], ['partial', 'partial'])
             self.assertEqual(len(app.read_json(err)['runs'][0]['events']), 3)
             cache = args.cache_dir / app.digest_file(source)

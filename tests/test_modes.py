@@ -92,7 +92,7 @@ class ModeTests(unittest.TestCase):
             local.assert_not_called(); summary.assert_not_called()
             self.assertFalse(app.output_paths(source, args.output_dir)[0].exists())
 
-    def test_none_disables_summary_but_all_still_fuses_with_sol(self):
+    def test_none_disables_summary_but_all_still_fuses_with_astra(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, local, chunks = self.setup_case(Path(tmp), "--transcription-model", app.COMBINED_MODE, "--summarize-model", "none")
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
@@ -100,7 +100,7 @@ class ModeTests(unittest.TestCase):
                     patch.object(app, "fuse_transcripts", return_value=(local["turns"], [])) as fuse, \
                     patch.object(app, "summarize") as summary:
                 app.process_file(source, args, "key")
-            self.assertEqual(fuse.call_args.args[4:6], ("gpt-6.1-sol", "medium"))
+            self.assertEqual(fuse.call_args.args[4:6], ("gpt-6.2-astra", "xhigh"))
             summary.assert_not_called()
 
     def test_completed_pair_skips_before_cache_creation_and_model_checks(self):
@@ -140,7 +140,7 @@ class ModeTests(unittest.TestCase):
     def test_model_packaging_and_removed_options(self):
         parser = app.build_parser()
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(app.build_parser().parse_args([]).summarize_model, ("gpt-6.1-sol", "medium"))
+            self.assertEqual(app.build_parser().parse_args([]).summarize_model, ("gpt-6.2-astra", "xhigh"))
         self.assertEqual(parser.parse_args(["--summarize-model", "gpt-6-luna"]).summarize_model,
                          ("gpt-6-luna", "medium"))
         self.assertIsNone(parser.parse_args(["--summarize-model", "none"]).summarize_model)

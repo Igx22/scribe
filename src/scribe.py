@@ -49,8 +49,9 @@ RESOURCE_DIR = SOURCE_DIR / "resources"
 APP_DATA = APP_DIR / "data"
 VERSION = "2.22.0"
 CACHE_VERSION = "1.0.0"
-DEFAULT_MODEL = "gpt-6.1-sol"
-DEFAULT_EFFORT = "medium"
+DEFAULT_MODEL = "gpt-6.2-astra"
+DEFAULT_EFFORT = "xhigh"
+BARE_MODEL_EFFORT = "medium"
 DEFAULT_SUMMARY_DETAIL = 1
 DEFAULT_REPORT_TABS = "1,3,5,10"
 API_URL = "https://api.openai.com/v1/responses"
@@ -3181,7 +3182,8 @@ def reconciliation_inputs(chunks, local_turns, additional_turns, name_candidates
 
 def reconciliation_model_limits(model):
     """Documented API profiles; unknown models use conservative fallback budgets."""
-    for name in ("gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"):
+    for name in ("gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra",
+                 "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"):
         if model == name or re.fullmatch(re.escape(name) + r"-\d{4}-\d{2}-\d{2}", model):
             return 1050000, 128000
     return 128000, 16000
@@ -4511,10 +4513,10 @@ def parse_model_spec(value):
     if value.lower() == "none":
         return None
     model, separator, effort = value.partition(":")
-    effort = effort if separator else DEFAULT_EFFORT
+    effort = effort if separator else BARE_MODEL_EFFORT
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model) or effort not in (
             "low", "medium", "high", "xhigh", "max"):
-        raise argparse.ArgumentTypeError("Use none or MODEL:EFFORT, e.g. gpt-6.1-sol:medium.")
+        raise argparse.ArgumentTypeError("Use none or MODEL:EFFORT, e.g. gpt-6.2-astra:xhigh.")
     return model, effort
 
 
