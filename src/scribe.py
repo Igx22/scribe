@@ -51,6 +51,7 @@ APP_DATA = APP_DIR / "data"
 VERSION = "2.22.0"
 CACHE_VERSION = "1.0.0"
 DEFAULT_MODEL = "gpt-6.2-astra"
+DEFAULT_SUMMARY_MODEL = "gpt-6.2-sol"
 DEFAULT_EFFORT = "xhigh"
 BARE_MODEL_EFFORT = "medium"
 DEFAULT_SUMMARY_DETAIL = 1
@@ -3186,7 +3187,7 @@ def reconciliation_inputs(chunks, local_turns, additional_turns, name_candidates
 
 def reconciliation_model_limits(model):
     """Documented API profiles; unknown models use conservative fallback budgets."""
-    for name in ("gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra",
+    for name in ("gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.1-terra",
                  "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"):
         if model == name or re.fullmatch(re.escape(name) + r"-\d{4}-\d{2}-\d{2}", model):
             return 1050000, 128000
@@ -4212,7 +4213,7 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
         raise AppError("Output file is a symlink; refusing to replace it.")
     settings = recognition_settings(source, args, signature)
     selection = {"transcription_model": args.transcription_model}
-    fusion_model, fusion_effort = args.summarize_model or (DEFAULT_MODEL, DEFAULT_EFFORT)
+    fusion_model, fusion_effort = reconciliation_model(args)
     if not args.offline:
         selection["fusion"] = {"model": fusion_model, "effort": fusion_effort,
             "prompt": hashlib.sha256((FUSION_PROMPT + SINGLE_SOURCE_PROMPT + FULL_CONTEXT_PROMPT).encode()).hexdigest(),
@@ -4380,8 +4381,9 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
             diagnostic("YouTube Smartest comments", exc)
     extracted = {}
     if youtube is None:
-        processing_stage("report header", model=model, effort=effort)
-        extracted = extract_report_metadata(transcript, key, model, effort, cache, args.force)
+        header_model, header_effort = reconciliation_model(args)
+        processing_stage("report header", model=header_model, effort=header_effort)
+        extracted = extract_report_metadata(transcript, key, header_model, header_effort, cache, args.force)
     run = CURRENT_RUN.get()
     content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
@@ -4516,8 +4518,20 @@ def parse_model_spec(value):
     effort = effort if separator else BARE_MODEL_EFFORT
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model) or effort not in (
             "low", "medium", "high", "xhigh", "max"):
-        raise argparse.ArgumentTypeError("Use none or MODEL:EFFORT, e.g. gpt-6.2-astra:xhigh.")
+        raise argparse.ArgumentTypeError("Use none or MODEL:EFFORT, e.g. gpt-6.2-sol:xhigh.")
     return model, effort
+
+
+class TextModelOverride(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        namespace.text_model_overridden = True
+
+
+def reconciliation_model(args):
+    if getattr(args, "text_model_overridden", True) and args.summarize_model is not None:
+        return args.summarize_model
+    return DEFAULT_MODEL, DEFAULT_EFFORT
 
 
 def build_parser():
@@ -4555,10 +4569,13 @@ def build_parser():
     # Keep backend/cache settings stable; isolated callers may override the namespace.
     p.set_defaults(language="auto", vocabulary="", models_dir=APP_DATA / "models",
                    cache_dir=APP_DATA / ".cache")
-    p.add_argument("--summarize-model", type=parse_model_spec, metavar="MODEL[:EFFORT]|none",
-                   default=os.getenv("SCRIBE_SUMMARIZE_MODEL", f"{DEFAULT_MODEL}:{DEFAULT_EFFORT}"),
-                   help="Recording summary and final GPT reconciliation model/effort. YouTube discussion digests and "
-                        "retellings use Luna medium. none disables reports; reconciliation then uses Sol medium unless --offline")
+    configured_model = os.getenv("SCRIBE_SUMMARIZE_MODEL")
+    p.set_defaults(text_model_overridden=configured_model is not None)
+    p.add_argument("--summarize-model", type=parse_model_spec, action=TextModelOverride, metavar="MODEL[:EFFORT]|none",
+                   default=configured_model if configured_model is not None else f"{DEFAULT_SUMMARY_MODEL}:{DEFAULT_EFFORT}",
+                   help="Recording summary model/effort. An explicit model also overrides final reconciliation and "
+                        "local-file header inference. Those stages default to Astra xhigh. "
+                        "none disables reports; final reconciliation still runs unless --offline")
     p.add_argument("--report-tabs", type=parse_report_tabs, action=ReportTabsAction,
                    nargs="+", metavar="LEVEL[,LEVEL]",
                    default=os.getenv("SCRIBE_REPORT_TABS", DEFAULT_REPORT_TABS),

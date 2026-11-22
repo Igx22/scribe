@@ -140,7 +140,15 @@ class ModeTests(unittest.TestCase):
     def test_model_packaging_and_removed_options(self):
         parser = app.build_parser()
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(app.build_parser().parse_args([]).summarize_model, ("gpt-6.2-astra", "xhigh"))
+            defaults = app.build_parser().parse_args([])
+            self.assertEqual(defaults.summarize_model, ("gpt-6.2-sol", "xhigh"))
+            self.assertEqual(app.reconciliation_model(defaults), ("gpt-6.2-astra", "xhigh"))
+        with patch.dict(os.environ, {"SCRIBE_SUMMARIZE_MODEL": "gpt-6.2-astra:high"}):
+            configured = app.build_parser()
+            self.assertEqual(app.reconciliation_model(configured.parse_args([])), ("gpt-6.2-astra", "high"))
+            explicit = configured.parse_args(["--summarize-model", "gpt-6.2-sol:xhigh"])
+            self.assertEqual(explicit.summarize_model, ("gpt-6.2-sol", "xhigh"))
+            self.assertEqual(app.reconciliation_model(explicit), ("gpt-6.2-sol", "xhigh"))
         self.assertEqual(parser.parse_args(["--summarize-model", "gpt-6-luna"]).summarize_model,
                          ("gpt-6-luna", "medium"))
         self.assertIsNone(parser.parse_args(["--summarize-model", "none"]).summarize_model)

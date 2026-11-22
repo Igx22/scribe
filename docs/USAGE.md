@@ -688,7 +688,7 @@ assigned anchors and unassigned speech; voice IDs and timestamps stay fixed.
 
 The planner counts UTF-8 bytes as a conservative input-token upper bound and
 estimates answer size with expansion and reasoning reserves. It needs no extra
-API calls or tokenizer downloads. GPT-6.2 Astra, GPT-6.1 Sol/Terra, and
+API calls or tokenizer downloads. GPT-6.2 Astra/Sol, GPT-6.1 Sol/Terra, and
 GPT-6 Sol/Astra/Luna profiles use a 1,050,000-token context and 128,000-token output limit; unknown
 model names use conservative 128,000/16,000 budgets. Estimates can select more
 parts than an exact tokenizer would. The console prints the chosen part count
@@ -703,7 +703,8 @@ internal final JSON without repeating reconciliation. Historical JSON migration
 retains the original request format.
 
 **Local recognition does not mean a fully offline run.** Ordinary runs use
-`--summarize-model gpt-6.2-astra:xhigh` for final text reconciliation and reports.
+`gpt-6.2-astra:xhigh` for final reconciliation. Recording summaries use
+`gpt-6.2-sol:xhigh` by default.
 `none` disables reports but leaves final reconciliation on `gpt-6.2-astra:xhigh`.
 Use `--offline` to disable every cloud request. A fallback log plus a successful
 report still counts as a completed pair on the next run; it is not silently
@@ -746,17 +747,18 @@ the internal final and existing log export without discovering names.
 Choose the text model and reasoning effort:
 
 ```bash
-./scribe.sh --summarize-model gpt-6.2-astra:xhigh
+./scribe.sh --summarize-model gpt-6.2-sol:xhigh
 ./scribe.sh --summarize-model gpt-6-luna:medium
 ./scribe.sh --summarize-model none
 ```
 
 Format: `MODEL[:EFFORT]` or `none`. A bare model ID uses `medium`. Supported effort
 values are `low`, `medium`, `high`, `xhigh`, and `max`; the chosen API model must
-support the requested effort. The default is `gpt-6.2-astra:xhigh`.
+support the requested effort. The built-in summary default is `gpt-6.2-sol:xhigh`.
 
-This selection controls recording summaries, local-file report metadata and final text
-reconciliation in every ordinary mode. YouTube comment sections use Luna with
+An explicit selection controls recording summaries, local-file report metadata
+and final text reconciliation. Reconciliation and local-file metadata default
+to `gpt-6.2-astra:xhigh`. YouTube comment sections use Luna with
 medium reasoning. `none` disables reports only: reconciliation still uses
 `gpt-6.2-astra:xhigh`. Use `--offline` to avoid all text-model and cloud-audio calls.
 
@@ -838,13 +840,13 @@ variables take priority over `.env`; the file is parsed as data and never execut
 
 ```text
 OPENAI_API_KEY=your-api-key
-SCRIBE_SUMMARIZE_MODEL=gpt-6.2-astra:xhigh
+# SCRIBE_SUMMARIZE_MODEL=gpt-6.2-sol:xhigh
 SCRIBE_REPORT_TABS=1,3,5,10
 ```
 
-`SCRIBE_SUMMARIZE_MODEL` supplies the default for `--summarize-model`.
-To adopt the built-in default in an existing installation, remove this setting
-from your local `.env` or set it to `gpt-6.2-astra:xhigh`.
+`SCRIBE_SUMMARIZE_MODEL` supplies an override for `--summarize-model`.
+Comment out an existing local setting and unset the environment variable to use
+the built-in model for each stage.
 `SCRIBE_REPORT_TABS` supplies the default numeric levels for `--report-tabs`.
 It accepts commas or spaces, for example `SCRIBE_REPORT_TABS="1, 5, 10"`.
 `.env.example` and the built-in fallback both use `1,3,5,10`.

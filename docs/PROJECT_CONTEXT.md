@@ -341,10 +341,11 @@ applicable data policies.
 Each summary level reads the same final log independently; detail controls retained
 information, separately from reasoning effort. Page guidance is not a padding quota.
 
-SCR-110 sets `gpt-6.2-astra:xhigh` as the default for recording summaries,
-report metadata, and final reconciliation. Explicit settings still take
-precedence. Astra uses the documented 1,050,000-token context and 128,000-token
-output limit for reconciliation planning. See the [model reference](https://developers.openai.com/api/docs/models/gpt-6.2-astra).
+SCR-135 sets `gpt-6.2-sol:xhigh` as the default for recording summaries.
+Final reconciliation and local-file report metadata use
+`gpt-6.2-astra:xhigh` by default. Explicit selections override these settings.
+Both models use the documented 1,050,000-token context and 128,000-token
+output limit for reconciliation planning.
 
 Reports are standalone HTML with inline CSS/JavaScript and escaped model text and
 filenames. Every HTML report embeds the complete internal transcript and
@@ -446,7 +447,7 @@ experiments and preserve ordinary outputs; the mocked test command is below.
 ## Examples
 
 ```bash
-# Default: WhisperX Turbo + Nemotron voices, Astra reconciliation and summaries
+# Default: WhisperX Turbo + Nemotron voices, Astra reconciliation, Sol summaries
 ./scribe.sh
 
 # API transcription and summary, without local voice models

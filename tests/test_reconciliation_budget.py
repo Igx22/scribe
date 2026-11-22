@@ -141,6 +141,7 @@ class ReconciliationBudgetTests(unittest.TestCase):
 
     def test_profiles_and_non_ascii_budget_use_local_conservative_estimates(self):
         self.assertEqual(app.reconciliation_model_limits('gpt-6.2-astra'), (1050000, 128000))
+        self.assertEqual(app.reconciliation_model_limits('gpt-6.2-sol'), (1050000, 128000))
         self.assertEqual(app.reconciliation_model_limits('gpt-6.1-sol'), (1050000, 128000))
         self.assertEqual(app.reconciliation_model_limits('gpt-6.1-sol-2026-11-12'), (1050000, 128000))
         self.assertEqual(app.reconciliation_model_limits('custom-model'), (128000, 16000))

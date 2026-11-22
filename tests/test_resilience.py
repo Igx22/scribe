@@ -152,7 +152,7 @@ class ErrorHistoryTests(unittest.TestCase):
             entry = app.read_json(err)['runs'][0]
             self.assertEqual(entry['status'], 'failed')
             self.assertEqual(entry['events'][0]['stage'], 'summary level 1')
-            self.assertEqual(entry['events'][0]['model'], app.DEFAULT_MODEL)
+            self.assertEqual(entry['events'][0]['model'], args.summarize_model[0])
             with patch.object(app, 'summarize', return_value='Summary'), \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'private-api-key')

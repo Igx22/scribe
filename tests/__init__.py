@@ -49,7 +49,7 @@ def seed_final(source, args, text="Reviewed conversation."):
     request = {"settings": scribe.recognition_settings(source, args, signature),
                "selection": {"transcription_model": args.transcription_model}}
     if not args.offline:
-        model, effort = args.summarize_model or (scribe.DEFAULT_MODEL, scribe.DEFAULT_EFFORT)
+        model, effort = scribe.reconciliation_model(args)
         request["selection"]["fusion"] = {"model": model, "effort": effort, "version": 4,
             "prompt": hashlib.sha256((scribe.FUSION_PROMPT + scribe.SINGLE_SOURCE_PROMPT + scribe.FULL_CONTEXT_PROMPT).encode()).hexdigest(),
             "planning": scribe.reconciliation_policy(model)}

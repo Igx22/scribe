@@ -548,6 +548,8 @@ class LegacySummaryCacheTests(unittest.TestCase):
     def test_pending_summary_and_validated_header_migrate_without_text_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, old, expected = self.fixture(Path(tmp))
+            args.summarize_model = (app.DEFAULT_MODEL, app.DEFAULT_EFFORT)
+            args.text_model_overridden = True
             output = app.output_state_path(old, app.output_paths(source, args.output_dir)[0]).parent
             app.save_json(output / 'summary-pending.json', {'settings': {
                 'model': app.DEFAULT_MODEL, 'effort': app.DEFAULT_EFFORT,
