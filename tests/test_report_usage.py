@@ -31,8 +31,26 @@ class ReportUsageTests(unittest.TestCase):
         self.assertEqual(groups["Comment filtering"].cost, Decimal("0.0012"))
         self.assertEqual(groups["Cloud transcription"].cost, Decimal("0.009"))
         footer = report_usage.render_usage(run)
-        for text in ("3 requests", "301,000", "2,000", "≈ 2.230", "120 s reported", "Cost breakdown"):
+        for text in ("3 requests", "301,000", "2,000", "≈ 2.230", "120 s reported", "Cost breakdown",
+                     "Model / reasoning", "gpt-transcribe<small>Reasoning not applicable",
+                     "gpt-6.2-astra-2026-11-18<small>Reasoning not recorded"):
             self.assertIn(text, footer)
+
+    def test_model_effort_pairs_stay_with_their_stage(self):
+        first = {"stage": "summary level 1", "model": "gpt-6.2-sol", "effort": "xhigh"}
+        run = {"text_usage": [
+            first, {**first, "stage": "summary level 3"}, {**first, "effort": "medium"},
+            {**first, "model": "custom<model>", "effort": "custom<effort>"},
+            {"stage": "YouTube comment filter", "model": "gpt-6-luna", "effort": "none"},
+        ]}
+        footer = report_usage.render_usage(run)
+        summaries = footer.split('Video summaries <small>· 4</small></th>')[1].split('</tr>')[0]
+        self.assertEqual(summaries.count("gpt-6.2-sol<small>Reasoning: xhigh"), 1)
+        self.assertIn("gpt-6.2-sol<small>Reasoning: medium", summaries)
+        self.assertIn("custom&lt;model&gt;<small>Reasoning: custom&lt;effort&gt;", summaries)
+        filtering = footer.split('Comment filtering <small>· 1</small></th>')[1].split('</tr>')[0]
+        self.assertIn("gpt-6-luna<small>Reasoning: none", filtering)
+        self.assertNotIn("gpt-6-luna", summaries)
 
     def test_missing_prices_and_usage_keep_the_estimate_partial(self):
         run = {"text_usage": [
@@ -63,19 +81,28 @@ class ReportUsageTests(unittest.TestCase):
             _, summary = app.output_paths(source, args.output_dir)
 
             def summarize(transcript, key, model, effort, *, detail):
-                app.record_text_usage({"model": model, "service_tier": "default",
+                app.record_text_usage({"model": model + "-2026-11-18", "reasoning": {"effort": "high"},
+                                       "service_tier": "default",
                                        "usage": {"input_tokens": 2_000, "output_tokens": 500}}, model, effort)
                 return "Recorded summary"
 
+            def header_request(key, model, effort, *args, **kwargs):
+                app.record_text_usage({"service_tier": "default",
+                                       "usage": {"input_tokens": 1_000, "output_tokens": 100}}, model, effort)
+                return json.dumps({"topic": "", "topic_evidence": [], "participant_roles": []})
+
             with patch.object(app, "summarize", side_effect=summarize) as call, \
-                    patch.object(app, "extract_report_metadata", return_value={"topic": "Meeting", "roles": {}}):
+                    patch.object(app, "api_request", side_effect=header_request) as header_call:
                 app.process_file(source, args, "test-key")
                 html = summary.read_text(encoding="utf-8")
-                self.assertIn("≈ 0.036", html)
+                self.assertIn("≈ 0.039", html)
                 self.assertIn("<details><summary>Cost breakdown</summary>", html)
+                self.assertIn("gpt-6.2-astra-2026-11-18<small>Reasoning: high", html)
+                self.assertIn("gpt-6.2-sol<small>Reasoning: medium", html)
                 self.assertFalse(summary.with_suffix(".err").exists())
                 app.process_file(source, args, "test-key")
                 call.assert_called_once()
+                header_call.assert_called_once()
                 html = summary.read_text(encoding="utf-8")
                 self.assertIn("Recorded summary", html)
                 self.assertIn("No new API usage recorded", html)

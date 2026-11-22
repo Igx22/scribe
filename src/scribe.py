@@ -1743,6 +1743,8 @@ def transcript_text(source, duration, turns, provenance=None, supplements=None):
 
 def record_text_usage(result, model, effort, service_tier=None):
     if (run := CURRENT_RUN.get()) is not None:
+        if isinstance(reasoning := result.get("reasoning"), dict):
+            effort = reasoning.get("effort") or effort
         run.run.setdefault("text_usage", []).append({
             "stage": run.stage, "model": result.get("model") or model, "effort": effort,
             "response_id": result.get("id"), "usage": result.get("usage"),

@@ -187,7 +187,8 @@ when `--monitor-dir` is used. Monitoring is enabled by `--monitor-dir`.
 
 A log plus a summary counts as complete and is skipped, even if settings change.
 New HTML reports show the run's API token counts and estimated cost in the
-footer. **Cost breakdown** lists the reported usage by stage.
+footer. **Cost breakdown** lists each stage's model, reasoning effort, tokens
+and estimated cost.
 A lone log resumes only with matching cached source/settings and ownership.
 Processing results live in `data/.cache/<full-source-sha256>/` as flat JSON stage
 artifacts. Identical recording bytes reuse them after a rename or output move;

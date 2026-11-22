@@ -1,7 +1,7 @@
 """Turn the current report run's API usage into a local price estimate."""
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from html import escape
 import json
@@ -24,6 +24,7 @@ class StageUsage:
     output_cost: Decimal = Decimal(0)
     audio_seconds: Decimal = Decimal(0)
     audio_cost: Decimal = Decimal(0)
+    models: set[tuple[str, str]] = field(default_factory=set)
 
     @property
     def cost(self):
@@ -79,8 +80,10 @@ def summarize_usage(run, pricing):
     for row in run.get("audio_usage", []):
         group = groups["Cloud transcription"]
         group.requests += 1
+        model = str(row.get("model") or "gpt-transcribe")
+        group.models.add((model, "Reasoning not applicable"))
         seconds = object_fields(row.get("usage")).get("seconds")
-        rate = pricing.get("audio_usd_per_minute", {}).get(str(row.get("model") or "gpt-transcribe"))
+        rate = pricing.get("audio_usd_per_minute", {}).get(model)
         if type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0:
             duration = Decimal(str(seconds))
             group.audio_seconds += duration
@@ -90,6 +93,9 @@ def summarize_usage(run, pricing):
     for row in run.get("text_usage", []):
         group = groups[stage_name(str(row.get("stage") or ""))]
         group.requests += 1
+        effort = row.get("effort")
+        reasoning = f"Reasoning: {effort}" if effort else "Reasoning not recorded"
+        group.models.add((str(row.get("model") or "Unknown model"), reasoning))
         usage = object_fields(row.get("usage"))
         counts = token_count(usage.get("input_tokens")), token_count(usage.get("output_tokens"))
         group.input_tokens += counts[0] or 0
@@ -131,6 +137,8 @@ def render_usage(run):
     output_label = f' <small>· ${output_cost:.3f}</small>' if priced > audio.priced else ""
     rows = []
     for stage, row in groups.items():
+        models = "".join(f'<div>{escape(model)}<small>{escape(reasoning)}</small></div>'
+                         for model, reasoning in sorted(row.models))
         row_total = f"${row.cost:.4f}" if row.priced else "Unavailable"
         if 0 < row.priced < row.requests:
             row_total += " (partial)"
@@ -141,7 +149,7 @@ def render_usage(run):
                               for tokens, cost in ((row.input_tokens, row.input_cost),
                                                    (row.output_tokens, row.output_cost)))
         rows.append(f'<tr><th scope="row">{escape(stage)} <small>· {row.requests}</small></th>'
-                    f'{metrics}<td>{row_total}</td></tr>')
+                    f'<td class="api-usage-model">{models}</td>{metrics}<td>{row_total}</td></tr>')
     limited = (" Usage or pricing is unavailable for some requests. Totals include reported tokens and priced requests."
                if priced < requests else "")
     date = f' Rates checked {escape(pricing["checked"])}.' if pricing.get("checked") else ""
@@ -153,7 +161,8 @@ def render_usage(run):
         f'<span class="api-usage-total">{total}</span></div>'
         '<details><summary>Cost breakdown</summary><div class="api-usage-table" tabindex="0" '
         'role="region" aria-label="Usage by stage"><table>'
-        '<thead><tr><th scope="col">Stage</th><th scope="col">Input tokens</th>'
+        '<thead><tr><th scope="col">Stage</th><th scope="col" class="api-usage-model">Model / reasoning</th>'
+        '<th scope="col">Input tokens</th>'
         '<th scope="col">Output tokens</th><th scope="col">Estimated cost</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
         '<p>Estimates use recorded API responses from this run. Reused Scribe checkpoints carry no new cost.'

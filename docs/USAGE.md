@@ -790,7 +790,11 @@ to all its levels; transcript badges retain their separate provenance.
 
 The report footer shows API input and output tokens and estimated USD cost for
 the run that exported the HTML. Expand **Cost breakdown** for usage and cost by
-stage. The estimate includes recorded reconciliation, summary, report metadata,
+stage. The **Model / reasoning** column lists each distinct model and reasoning
+effort used in that stage. Text requests use the API response values when
+available and fall back to the request settings. Cloud transcription shows
+its model with reasoning marked as inapplicable.
+The estimate includes recorded reconciliation, summary, report metadata,
 YouTube comment and cloud transcription responses. GPT-Transcribe is priced by
 the returned audio duration. Text pricing accounts for the model, service tier,
 context length, and prompt cache reads and writes. Output counts include reasoning.

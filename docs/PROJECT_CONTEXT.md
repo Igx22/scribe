@@ -358,8 +358,9 @@ unknown provenance omits the badge. Existing HTML needs explicit regeneration
 for renderer changes. Browser storage failures must not break navigation/theme
 controls; file-origin theme persistence across paths is browser-dependent.
 
-The **Cost breakdown** footer (SCR-133) renders current-run usage from the same
-response counters as diagnostics. API cache reads and writes have their own rates.
+The **Cost breakdown** footer (SCR-133, SCR-139) renders current-run usage from the
+same response counters as diagnostics. Each stage lists the distinct model and
+reasoning settings recorded for its requests. API cache reads and writes have their own rates.
 Cached Scribe artifacts carry no current-run usage. Estimates use the dated local
 pricing table and preserve missing usage or pricing as incomplete information.
 
