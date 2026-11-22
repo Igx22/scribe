@@ -437,7 +437,7 @@ data/.cache/<source-sha256>/
   reconciliation.part-0001.<stage-key>.json
   reconciliation.final-transcript.<stage-key>.json
   materialization.final-transcript.<stage-key>.json
-  summary.level-1.<stage-key>.json
+  summary.combined.<stage-key>.json
   summary.header.<stage-key>.json
 ```
 
@@ -474,9 +474,11 @@ edited-log behavior. Preserve manual edits separately. Ordinary processing still
 protects edited/unknown outputs; deliberately use ordinary `--force` to reprocess
 and back up replaced exports. Symlink outputs are protected even with force.
 
-Summary levels and header parts retain independent reusable checkpoints after
-publication, so changing tabs/order/template does not discard compatible model
-work. Summary-only `--force` refreshes summary/header calls and preserves the
+Summary levels and header parts retain reusable checkpoints after publication,
+so changing tabs, order or the HTML template can reuse compatible model results.
+A request for uncached summary levels validates and saves the whole response
+together. Older compatible per-level summaries are still reusable.
+Summary-only `--force` refreshes summary/header calls and preserves the
 selected internal final. Ordinary `--force` deliberately bypasses recognition,
 reconciliation and summary reuse. Offline mode remains local, produces no HTML
 and does not reconcile text. Partial/fallback JSON remains available for summaries;
@@ -809,8 +811,13 @@ information-dense discussions, assuming roughly 400-450 words per page.
 See the [table in the README](../README.md#summary-detail).
 
 These lengths are guides, not minimum quotas: short conversations stay short even
-at level 10, without padding or invented background. Each level is generated
-independently from the same final log, so additional levels increase text API work.
+at level 10, without padding or invented background. A single request sends the
+full final transcript and asks for all uncached levels as separate fields.
+Every field must be present, nonempty and within its word ceiling. The response
+budget respects the selected model's output limit. Recordings that exceed the
+model's context fail with the API error and retain the saved transcript.
+Selecting fewer levels can reduce the response budget. Use `--show-prompt` to
+preview the combined instructions for the selected levels.
 Use `--summary-only` to regenerate an existing HTML report without repeating audio
 processing or reconciliation; the internal final and existing log export are preserved.
 

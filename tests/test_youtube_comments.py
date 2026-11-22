@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import scribe as app
-from tests import runtime_paths, seed_final
+from tests import runtime_paths, seed_final, summary_answers
 
 
 VIDEO = "FLoC0dhY4u4"
@@ -554,7 +554,7 @@ class CommentPipelineTests(unittest.TestCase):
                     patch.object(app.media_input, "obtain_youtube", return_value=(source, {"id": VIDEO})), \
                     patch.object(app.media_input, "fetch_youtube_comments",
                                  side_effect=fetch_comments) as fetch, \
-                    patch.object(app, "summarize", side_effect=lambda *a, detail: f"Video detail {detail}") as video, \
+                    patch.object(app, "summarize", side_effect=summary_answers(lambda detail: f"Video detail {detail}")) as video, \
                     patch.object(app, "youtube_best_comments", side_effect=[app.AppError("Best digest failure."),
                                  [{"author": "@Author", "title": "Experience", "text": "Relevant firsthand details."}]]), \
                     patch.object(app, "extract_audio") as audio, patch.object(app, "api_request", side_effect=answer), \
@@ -581,6 +581,6 @@ class CommentPipelineTests(unittest.TestCase):
                 self.assertIn("GPT-6-luna-snapshot · medium reasoning", second)
                 self.assertEqual([call.kwargs["top"] for call in fetch.call_args_list], [False, True])
                 audio.assert_not_called()
-                self.assertEqual(video.call_count, 2)
+                video.assert_called_once()
             self.assertEqual(["1/10" in p for p in calls], [True, False, False])
             self.assertEqual(log.read_text(), "Hand-edited export.")

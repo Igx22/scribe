@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import test_all_mode
+from tests import test_all_mode, summary_answers
 from tests.test_source_reports import PanelText
 
 
@@ -273,7 +273,7 @@ class ContentCacheTests(unittest.TestCase):
                 for stage in stages[:5]:
                     stage.assert_not_called()
                 summary = stages[5]
-                self.assertEqual(summary.call_count, 4)
+                summary.assert_called_once()
                 self.assertTrue(all(call.args[0] == original for call in summary.call_args_list))
                 current_log, report = app.output_paths(source, args.output_dir)
                 self.assertEqual(PanelText(report.read_text()).text['panel-transcript'], original)
@@ -295,7 +295,7 @@ class ContentCacheTests(unittest.TestCase):
             args.output_dir = original_output; args.summary_only = True; args.force = True
             stages = self.run_pipeline(source, args)
             for stage in stages[:5]: stage.assert_not_called()
-            self.assertEqual(stages[5].call_count, 4)
+            stages[5].assert_called_once()
             self.assertEqual(app.read_json(cache / 'manifest.json')['selected_finals'][identity], original_ref)
             saved = app.final_reference(cache, original_ref, required=True)
             self.assertEqual(saved['settings']['request']['selection']['fusion']['model'], app.DEFAULT_MODEL)
@@ -447,7 +447,7 @@ class LegacyCacheTests(unittest.TestCase):
             originals = {p: p.read_bytes() for p in old.rglob('*.json')}
             with patch.object(app, 'extract_audio') as extract, patch.object(app, 'api_request') as api, \
                  patch.object(app, 'fuse_transcripts') as fusion, patch.object(app, 'local_recognition') as local, \
-                 patch.object(app, 'summarize', return_value='Summary'), \
+                 patch.object(app, 'summarize', side_effect=summary_answers('Summary')), \
                  patch.object(app, 'extract_report_metadata', return_value={'topic': '', 'roles': {}}):
                 app.process_file(source, args, 'key')
             extract.assert_not_called(); api.assert_not_called(); fusion.assert_not_called(); local.assert_not_called()

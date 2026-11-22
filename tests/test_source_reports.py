@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import summary_answers
 from tests.test_summary_html import Elements
 
 
@@ -66,7 +67,7 @@ class SourceReportTests(unittest.TestCase):
                           return_value=self.chunks()) as cloud, \
              patch.object(app, 'fuse_transcripts', side_effect=app.AppError('Invalid anchors') if fusion_failure else None,
                           return_value=(fused, [])) as fusion, \
-             patch.object(app, 'summarize', side_effect=lambda *a, detail: f'Summary {detail}') as summary, \
+             patch.object(app, 'summarize', side_effect=summary_answers(lambda detail: f'Summary {detail}')) as summary, \
              patch.object(app, 'extract_report_metadata', return_value={'topic': 'Test conversation', 'roles': {}}):
             app.process_file(source, args, 'fixture-key')
         return cloud.call_count, fusion.call_count, summary.call_count
@@ -74,7 +75,7 @@ class SourceReportTests(unittest.TestCase):
     def test_combined_report_embeds_both_original_sources_and_fixed_voice_intervals(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args = self.pipeline(Path(tmp))
-            self.assertEqual(self.run_pipeline(source, args), (1, 1, 4))
+            self.assertEqual(self.run_pipeline(source, args), (1, 1, 1))
             log, report = app.output_paths(source, args.output_dir)
             content = report.read_text()
             panels = PanelText(content).text
@@ -134,7 +135,7 @@ class SourceReportTests(unittest.TestCase):
                  patch.object(app, 'local_recognition', side_effect=AssertionError('No inference')), \
                  patch.object(app, 'transcribe_gpt', side_effect=AssertionError('No audio API')), \
                  patch.object(app, 'fuse_transcripts', side_effect=AssertionError('No fusion')), \
-                 patch.object(app, 'summarize', return_value='Updated summary'), \
+                 patch.object(app, 'summarize', side_effect=summary_answers('Updated summary')), \
                  patch.object(app, 'extract_report_metadata', return_value={'topic': 'Test conversation', 'roles': {}}):
                 app.process_file(source, args, 'fixture-key')
             self.assertEqual(PanelText(report.read_text()).text, original)

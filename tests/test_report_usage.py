@@ -80,11 +80,11 @@ class ReportUsageTests(unittest.TestCase):
             seed_final(source, args)
             _, summary = app.output_paths(source, args.output_dir)
 
-            def summarize(transcript, key, model, effort, *, detail):
+            def summarize(transcript, key, model, effort, *, levels):
                 app.record_text_usage({"model": model + "-2026-11-18", "reasoning": {"effort": "high"},
                                        "service_tier": "default",
                                        "usage": {"input_tokens": 2_000, "output_tokens": 500}}, model, effort)
-                return "Recorded summary"
+                return dict.fromkeys(levels, "Recorded summary")
 
             def header_request(key, model, effort, *args, **kwargs):
                 app.record_text_usage({"service_tier": "default",

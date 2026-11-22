@@ -1,6 +1,7 @@
-"""Summary detail propagation, long-input notes, and model output budgets."""
+"""Combined summary requests, per-level validation, and model output budgets."""
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -8,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths, seed_final
+from tests import runtime_paths, seed_final, summary_answers
 
 
 class SummaryDetailTests(unittest.TestCase):
@@ -27,52 +28,37 @@ class SummaryDetailTests(unittest.TestCase):
         self.assertIn("1200-2250", preview.getvalue())
         self.assertNotIn("{summary_", preview.getvalue())
 
-    def test_high_detail_keeps_multi_page_answer_and_has_room_for_it(self):
-        calls = []
-        answer = "fact " * 1500
-        def fake(*args, **kwargs):
-            calls.append((args, kwargs))
-            return answer
-        result = app.summarize("source " * 8000, "key", "model", "medium", call=fake, detail=5)
-        self.assertEqual(len(result.split()), 1500)
-        self.assertEqual(len(calls), 1)
-        self.assertGreater(calls[0][1]["max_output_tokens"], 12000)
+    def test_combined_schema_and_budget_cover_selected_levels(self):
+        answer = {"summary_1": "Brief.", "summary_5": "fact " * 1500}
+        with patch.object(app, "api_request", return_value=json.dumps(answer)) as request:
+            result = app.summarize("source " * 8000, "key", "gpt-6.2-sol", "xhigh", levels=[1, 5])
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[1:3], ("gpt-6.2-sol", "xhigh"))
+        self.assertEqual(request.call_args.kwargs["schema"]["required"], ["summary_1", "summary_5"])
+        self.assertIn("1200-2250", request.call_args.args[3])
+        self.assertGreater(request.call_args.kwargs["max_output_tokens"], 12000)
+        self.assertEqual(len(result[5].split()), 1500)
 
     def test_short_answer_is_not_expanded_to_meet_page_guide(self):
-        calls = []
-        def fake(*args, **kwargs):
-            calls.append(args)
-            return "No decision was reached."
-        result = app.summarize("Brief source.", "key", "model", "medium", call=fake, detail=10)
-        self.assertEqual(result, "No decision was reached.")
-        self.assertEqual(len(calls), 1)
+        with patch.object(app, "api_request", return_value='{"summary_10":"No decision was reached."}') as request:
+            result = app.summarize("Brief source.", "key", "gpt-6.2-sol", "xhigh", levels=[10])
+        self.assertEqual(result, {10: "No decision was reached."})
+        request.assert_called_once()
 
-    def test_shortening_uses_selected_ceiling_instead_of_one_page(self):
-        calls = []
-        oversized = "fact " * 2300
-        def fake(*args, **kwargs):
-            calls.append(args)
-            return oversized if len(calls) == 1 else "fact " * 1800
-        result = app.summarize("source " * 10000, "key", "model", "medium", call=fake, detail=5)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(len(calls[1][4].split()), 2300)
-        self.assertIn("at most 2250 words", calls[1][3])
-        self.assertEqual(len(result.split()), 1800)
+    def test_invalid_levels_fail_without_a_second_request(self):
+        for answer in ("not JSON", '{"summary_1":"One."}', '{"summary_1":"One.","summary_5":" "}',
+                       json.dumps({"summary_1": "One.", "summary_5": "fact " * 2300})):
+            with self.subTest(answer=answer[:50]), patch.object(app, "api_request", return_value=answer) as request:
+                with self.assertRaisesRegex(app.AppError, "existing summaries are preserved"):
+                    app.summarize("Transcript.", "key", "gpt-6.2-sol", "xhigh", levels=[1, 5])
+                request.assert_called_once()
 
-    def test_long_input_keeps_all_parts_and_more_detail_in_notes(self):
-        calls = []
-        def fake(key, model, effort, instructions, data, **kwargs):
-            calls.append((instructions, data, kwargs))
-            return "Notes." if instructions == app.notes_prompt(10) else "Summary."
-        text = "BEGIN\n\n" + "word " * 40000 + "\n\nEND_OF_RECORDING"
-        self.assertEqual(app.summarize(text, "key", "model", "medium", call=fake, detail=10), "Summary.")
-        notes = [call for call in calls if call[0] == app.notes_prompt(10)]
-        self.assertGreater(len(notes), 1)
-        self.assertIn("BEGIN", notes[0][1])
-        self.assertIn("END_OF_RECORDING", notes[-1][1])
-        self.assertGreater(notes[0][2]["max_output_tokens"], 12000)
-        self.assertEqual(calls[-1][0], app.summary_prompt(10))
-        self.assertGreater(calls[-1][2]["max_output_tokens"], notes[0][2]["max_output_tokens"])
+    def test_output_budget_is_capped_at_model_limit(self):
+        levels = list(range(1, 11))
+        reply = json.dumps({f"summary_{level}": "Summary." for level in levels})
+        with patch.object(app, "api_request", return_value=reply) as request:
+            app.summarize("Transcript.", "key", "gpt-6.2-sol", "xhigh", levels=levels)
+        self.assertEqual(request.call_args.kwargs["max_output_tokens"], 128000)
 
 
 class SummaryConfigurationTests(unittest.TestCase):
@@ -128,12 +114,12 @@ class SummaryConfigurationTests(unittest.TestCase):
                 before = (log.read_bytes(), log.stat().st_mtime_ns)
                 with runtime_paths(cache_dir=root / "cache"), \
                         patch.object(app, "load_env", side_effect=lambda: load_env(env)), \
-                        patch.object(app, "summarize", side_effect=lambda *a, detail: f"Summary at level {detail}.") as summarize, \
+                        patch.object(app, "summarize", side_effect=summary_answers(lambda detail: f"Summary at level {detail}.")) as summarize, \
                         patch.object(app, "extract_report_metadata", return_value={"topic": "Test conversation.", "roles": {}}), \
                         patch.object(app, "extract_audio") as extract, patch.object(app, "ensure_models") as models:
                     self.assertEqual(app.main(["-f", str(source), "--summary-only", "--output-dir", str(output),
                                                *options]), 0)
-                self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], app.summary_levels(tabs))
+                self.assertEqual([call.kwargs["levels"] for call in summarize.call_args_list], [tabs] if tabs else [])
                 extract.assert_not_called(); models.assert_not_called()
                 self.assertEqual(before, (log.read_bytes(), log.stat().st_mtime_ns))
                 _, summary = app.output_paths(source, output)

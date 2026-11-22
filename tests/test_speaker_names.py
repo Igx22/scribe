@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
+from tests import summary_answers
 
 
 class SpeakerNameTests(unittest.TestCase):
@@ -215,7 +216,7 @@ class SpeakerNameTests(unittest.TestCase):
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "api_request", return_value=json.dumps(response)) as fusion, \
-                    patch.object(app, "summarize", return_value="Alice and Bob discussed the plan.") as summary:
+                    patch.object(app, "summarize", side_effect=summary_answers("Alice and Bob discussed the plan.")) as summary:
                 app.process_file(source, args, "key")
                 log, summary_path = app.output_paths(source, args.output_dir)
                 self.assertIn("] Alice\n", log.read_text())

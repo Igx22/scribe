@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths, seed_final
+from tests import runtime_paths, seed_final, summary_answers
 
 
 class Elements(HTMLParser):
@@ -132,17 +132,18 @@ class SummaryHtmlTests(unittest.TestCase):
         self.assertIn("hidden", panels[1])
         self.assertFalse(any("src" in attrs or "href" in attrs for tag, attrs in elements))
 
-    def test_summary_only_generates_each_level_from_the_same_log_and_preserves_markdown(self):
+    def test_summary_only_generates_selected_levels_together_and_preserves_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
             markdown = summary.with_suffix(".md")
             app.atomic_write(markdown, "Original summary")
             before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in (log, markdown)]
-            with patch.object(app, "summarize", side_effect=lambda *a, detail: f"Summary for {detail}.") as summarize, \
+            with patch.object(app, "summarize", side_effect=summary_answers(lambda detail: f"Summary for {detail}.")) as summarize, \
                     patch.object(app, "extract_audio") as extract, patch.object(app, "fuse_transcripts") as fusion:
                 app.process_file(source, args, "key")
-            self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], [1, 5, 10])
-            self.assertTrue(all(call.args[0] == log.read_text() for call in summarize.call_args_list))
+            summarize.assert_called_once()
+            self.assertEqual(summarize.call_args.kwargs["levels"], [1, 5, 10])
+            self.assertEqual(summarize.call_args.args[0], log.read_text())
             extract.assert_not_called(); fusion.assert_not_called()
             self.assertEqual(before, [(path.read_bytes(), path.stat().st_mtime_ns) for path in (log, markdown)])
             self.assertEqual(summary.suffix, ".html")
@@ -201,9 +202,9 @@ class SummaryHtmlTests(unittest.TestCase):
             source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
             transcript = "DETAILED TRANSCRIPT\n\n[00:00–00:02] Alice\nOriginal words & uncertainty [speaker uncertain: retained].\n"
             transcript = seed_final(source, args, transcript)
-            with patch.object(app, "summarize", return_value="Summary.") as summarize:
+            with patch.object(app, "summarize", side_effect=summary_answers("Summary.")) as summarize:
                 app.process_file(source, args, "key")
-            self.assertEqual(summarize.call_count, 3)
+            summarize.assert_called_once()
             shared = Path(tmp) / "shared" / "report.html"
             shared.parent.mkdir(); shared.write_bytes(summary.read_bytes())
             log.unlink()
@@ -213,18 +214,24 @@ class SummaryHtmlTests(unittest.TestCase):
     def test_failure_preserves_existing_html_and_retries_only_unfinished_levels(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
+            args.report_tabs = [1]
+            with patch.object(app, "summarize", side_effect=summary_answers("Brief.")):
+                app.process_file(source, args, "key")
+            args.report_tabs = [1, 5, 10]
             app.atomic_write(summary, "Previous HTML")
             before = (summary.read_bytes(), summary.stat().st_mtime_ns)
-            with patch.object(app, "summarize", side_effect=["Brief.", app.AppError("timeout")]) as summarize:
+            with patch.object(app, "summarize", side_effect=app.AppError("timeout")) as summarize:
                 with self.assertRaisesRegex(app.AppError, "timeout"):
                     app.process_file(source, args, "key")
+            self.assertEqual(summarize.call_args.kwargs["levels"], [5, 10])
             self.assertEqual(before, (summary.read_bytes(), summary.stat().st_mtime_ns))
-            with patch.object(app, "summarize", side_effect=["Expanded.", "Detailed."]) as summarize:
+            with patch.object(app, "summarize", return_value={5: "Expanded.", 10: "Detailed."}) as summarize:
                 app.process_file(source, args, "key")
-            self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], [5, 10])
+            summarize.assert_called_once()
+            self.assertEqual(summarize.call_args.kwargs["levels"], [5, 10])
             self.assertIn("Brief.", summary.read_text())
             # Successful levels remain reusable after publication.
-            with patch.object(app, "summarize", return_value="Fresh.") as summarize:
+            with patch.object(app, "summarize", side_effect=summary_answers("Fresh.")) as summarize:
                 app.process_file(source, args, "key")
             self.assertEqual(summarize.call_count, 0)
 
@@ -232,9 +239,10 @@ class SummaryHtmlTests(unittest.TestCase):
         for change in ("transcript", "model", "effort", "details", "order", "prompt", "force"):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
                 source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
-                with patch.object(app, "summarize", side_effect=["Old brief.", app.AppError("timeout")]):
-                    with self.assertRaises(app.AppError):
-                        app.process_file(source, args, "key")
+                args.report_tabs = [1]
+                with patch.object(app, "summarize", side_effect=summary_answers("Old brief.")):
+                    app.process_file(source, args, "key")
+                args.report_tabs = [1, 5, 10]
                 if change == "transcript":
                     app.atomic_write(log, "Edited conversation.")
                 elif change == "model":
@@ -247,13 +255,13 @@ class SummaryHtmlTests(unittest.TestCase):
                     args.report_tabs.reverse()
                 elif change == "force":
                     args.force = True
-                prompt = app.SUMMARIZATION_PROMPT + (" Changed." if change == "prompt" else "")
-                with patch.object(app, "SUMMARIZATION_PROMPT", prompt), \
-                        patch.object(app, "summarize", return_value="Fresh.") as summarize:
+                prompt = app.SUMMARY_CONTENT_RULES + (" Changed." if change == "prompt" else "")
+                with patch.object(app, "SUMMARY_CONTENT_RULES", prompt), \
+                        patch.object(app, "summarize", side_effect=summary_answers("Fresh.")) as summarize:
                     app.process_file(source, args, "key")
                 reusable = change in ("transcript", "details", "order")
                 expected = [level for level in app.summary_levels(args.report_tabs) if not reusable or level != 1]
-                self.assertEqual([call.kwargs["detail"] for call in summarize.call_args_list], expected)
+                self.assertEqual([call.kwargs["levels"] for call in summarize.call_args_list], [expected])
                 self.assertEqual("Old brief." in summary.read_text(), reusable)
 
     def test_completed_html_or_markdown_skips_before_cache_or_network(self):
@@ -291,11 +299,12 @@ class SummaryHtmlTests(unittest.TestCase):
                      patch.object(app, 'load_env'), patch.dict(app.os.environ, {'OPENAI_API_KEY': 'fixture-key'}), \
                      patch.object(app, 'extract_audio') as extract, \
                      patch.object(app, 'transcribe_gpt', return_value=chunks) as cloud, \
-                     patch.object(app, 'summarize', side_effect=lambda *a, detail: f'REGENERATED_SUMMARY_{detail}') as summarize:
+                     patch.object(app, 'summarize', side_effect=summary_answers(lambda detail: f'REGENERATED_SUMMARY_{detail}')) as summarize:
                     self.assertEqual(app.main(options), 0)
                 extract.assert_called_once(); cloud.assert_called_once()
                 self.assertTrue(cloud.call_args.args[-1])
-                self.assertEqual([c.kwargs['detail'] for c in summarize.call_args_list], [1, 5, 10])
+                summarize.assert_called_once()
+                self.assertEqual(summarize.call_args.kwargs["levels"], [1, 5, 10])
                 for level in (1, 5, 10):
                     self.assertIn(f'REGENERATED_SUMMARY_{level}', summary.read_text())
                 self.assertNotIn('PREVIOUS_SUMMARY', summary.read_text())
@@ -314,11 +323,11 @@ class SummaryHtmlTests(unittest.TestCase):
             before = log.read_bytes(), log.stat().st_mtime_ns
             with patch.object(app, 'extract_audio') as extract, patch.object(app, 'transcribe_gpt') as cloud, \
                  patch.object(app, 'local_recognition') as local, patch.object(app, 'fuse_transcripts') as fusion, \
-                 patch.object(app, 'summarize', return_value='REGENERATED_SUMMARY') as summarize:
+                 patch.object(app, 'summarize', side_effect=summary_answers('REGENERATED_SUMMARY')) as summarize:
                 app.process_file(source, args, 'fixture-key')
             for stage in (extract, cloud, local, fusion):
                 stage.assert_not_called()
-            self.assertEqual(summarize.call_count, 3)
+            summarize.assert_called_once()
             self.assertEqual((log.read_bytes(), log.stat().st_mtime_ns), before)
             self.assertIn('REGENERATED_SUMMARY', summary.read_text())
             self.assertNotIn('PREVIOUS_SUMMARY', summary.read_text())
@@ -340,7 +349,7 @@ class SummaryHtmlTests(unittest.TestCase):
             source, args, log, summary = self.setup_case(Path(tmp), "--summary-only")
             markdown = summary.with_suffix(".md")
             app.atomic_write(markdown, "Summary of the old conversation")
-            with patch.object(app, "summarize", return_value="Old HTML summary."):
+            with patch.object(app, "summarize", side_effect=summary_answers("Old HTML summary.")):
                 app.process_file(source, args, "key")
             old_html = summary.read_bytes()
             seed_final(source, args, "Changed internal conversation.")
@@ -354,7 +363,7 @@ class SummaryHtmlTests(unittest.TestCase):
                     app.process_file(source, args, "key")
             self.assertEqual(summary.read_bytes(), old_html)
             self.assertTrue(markdown.is_file())
-            with patch.object(app, "summarize", return_value="Summary of edited conversation."):
+            with patch.object(app, "summarize", side_effect=summary_answers("Summary of edited conversation.")):
                 app.process_file(source, args, "key")
             self.assertFalse(markdown.exists())
             self.assertTrue(any(args.cache_dir.glob("*/outputs/*/previous-*.summary.md")))

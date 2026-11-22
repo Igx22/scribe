@@ -8,6 +8,7 @@ from unittest.mock import patch
 import wave
 
 import scribe as app
+from tests import summary_answers
 
 
 class BackendTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class BackendTests(unittest.TestCase):
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", side_effect=app.AppError("credits exhausted")), \
                     patch.object(app, "fuse_transcripts", side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
-                    patch.object(app, "summarize", return_value="Local-only summary") as summarize:
+                    patch.object(app, "summarize", side_effect=summary_answers("Local-only summary")) as summarize:
                 app.process_file(source, args, "unit-test-key")
                 fuse.assert_called_once()
                 self.assertTrue(fuse.call_args.kwargs["single_source"])
@@ -55,7 +56,7 @@ class BackendTests(unittest.TestCase):
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", return_value=chunks) as gpt, \
                     patch.object(app, "fuse_transcripts", return_value=(fused, [])) as fuse, \
-                    patch.object(app, "summarize", return_value="Final summary") as summarize:
+                    patch.object(app, "summarize", side_effect=summary_answers("Final summary")) as summarize:
                 app.process_file(source, args, "unit-test-key")
                 self.assertIn("Corrected final text.", summarize.call_args.args[0])
                 self.assertNotIn("Local source text.", summarize.call_args.args[0])
@@ -83,7 +84,7 @@ class BackendTests(unittest.TestCase):
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "fuse_transcripts", return_value=(fused, [])), \
-                    patch.object(app, "summarize", return_value="Old fused summary"):
+                    patch.object(app, "summarize", side_effect=summary_answers("Old fused summary")):
                 app.process_file(source, args, "key")
                 args.transcription_model, args.transcribe_only = "mlx", True
                 args.force = True
@@ -113,7 +114,7 @@ class BackendTests(unittest.TestCase):
             with patch.object(app, "extract_audio"), patch.object(app, "local_recognition", return_value=local), \
                     patch.object(app, "transcribe_gpt", return_value=chunks), \
                     patch.object(app, "fuse_transcripts", side_effect=app.AppError("invalid anchors")), \
-                    patch.object(app, "summarize", return_value="Summary") as summarize:
+                    patch.object(app, "summarize", side_effect=summary_answers("Summary")) as summarize:
                 app.process_file(source, args, "unit-test-key")
                 self.assertIn("Local source text.", summarize.call_args.args[0])
             self.assertTrue(any(args.cache_dir.glob("*/reconciliation.final-transcript.*.json")))

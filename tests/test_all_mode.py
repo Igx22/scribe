@@ -9,6 +9,7 @@ from unittest.mock import patch
 import wave
 
 import scribe as app
+from tests import summary_answers
 from tests.test_source_reports import PanelText
 from tests.test_summary_html import Elements
 
@@ -45,7 +46,7 @@ class AllModeTests(unittest.TestCase):
              patch.object(app, 'recognize', side_effect=recognize) as asr, \
              patch.object(app, 'diarize', return_value=voices) as diarize, \
              patch.object(app, 'fuse_transcripts', side_effect=lambda chunks, turns, *a, **k: (turns, [])) as fuse, \
-             patch.object(app, 'summarize', side_effect=lambda *a, detail: f'Summary {detail}') as summarize, \
+             patch.object(app, 'summarize', side_effect=summary_answers(lambda detail: f'Summary {detail}')) as summarize, \
              patch.object(app, 'extract_report_metadata', return_value={'topic': 'Recognition comparison', 'roles': {}}):
             app.process_file(source, args, 'fixture-key')
         return extract, cloud, asr, diarize, fuse, summarize
@@ -56,7 +57,7 @@ class AllModeTests(unittest.TestCase):
             extract, cloud, asr, diarize, fuse, summarize = self.run_pipeline(source, args)
             extract.assert_called_once(); cloud.assert_called_once(); diarize.assert_called_once(); fuse.assert_called_once()
             self.assertEqual([call.args[-1] for call in asr.call_args_list], ['whisperx', 'mlx'])
-            self.assertEqual(summarize.call_count, 4)
+            summarize.assert_called_once()
             self.assertTrue(all('WHISPERX_ORIGINAL' in c.args[0] and 'MLX_ORIGINAL' not in c.args[0]
                                 and 'GPT_ORIGINAL' not in c.args[0] for c in summarize.call_args_list))
             log, report = app.output_paths(source, args.output_dir)

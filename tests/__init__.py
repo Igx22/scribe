@@ -8,6 +8,12 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
+def summary_answers(text):
+    def generate(*args, levels):
+        return {level: text(level) if callable(text) else text for level in levels}
+    return generate
+
+
 @contextmanager
 def runtime_paths(*, cache_dir=None, models_dir=None):
     """Isolate main() tests without exposing filesystem overrides in the CLI."""

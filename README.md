@@ -294,7 +294,9 @@ short recordings stay short.
 | `5` | Roughly 3–5 pages: key discussion threads, positions, reasoning, alternatives, and constraints | 1,200–2,250 |
 | `10` | Up to roughly 10 pages: a detailed, compressed account of every substantive thread | 2,400–4,500 |
 
-Each level is generated separately, so more levels mean more text API work.
+Scribe sends the final transcript once and generates all requested uncached
+summary levels in one OpenAI request. The default is GPT-6.2 Sol with extra-high
+reasoning.
 
 ```bash
 ./scribe.sh -f "meeting.mkv" --summary-only --report-tabs 1 5 10
@@ -324,7 +326,7 @@ See [report details](docs/USAGE.md#report-tabs-and-summary-detail).
 | `--transcribe-only` | Off | Create only the log; equivalent to `--summarize-model none`. Final GPT reconciliation still runs unless offline. |
 | `--summary-only` | Off | Regenerate HTML from validated internal final JSON, without audio processing/reconciliation; a log export is optional. |
 | `--verify-models` | Off | Verify SHA-256 hashes as well as sizes when preparing local models. |
-| `--show-prompt` | Off | Print the rendered final summary prompt for the selected detail, without processing or API calls. |
+| `--show-prompt` | Off | Print the combined summary prompt for the selected levels, without processing or API calls. |
 | `--version` | — | Print the version. |
 | `--setup` | Off | Prepare the isolated Python environment, media tools and selected models without recordings or paid API calls. |
 

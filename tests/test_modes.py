@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths, seed_final
+from tests import runtime_paths, seed_final, summary_answers
 
 
 class ModeTests(unittest.TestCase):
@@ -128,12 +128,12 @@ class ModeTests(unittest.TestCase):
             seed_final(source, args)
             app.atomic_write(log, "Reviewed text")
             app.atomic_write(summary_path, "Previous summary")
-            with patch.object(app, "summarize", return_value="New summary") as summary, \
+            with patch.object(app, "summarize", side_effect=summary_answers("New summary")) as summary, \
                     patch.object(app, "extract_audio") as extract:
                 app.process_file(source, args, "key")
             extract.assert_not_called()
             self.assertEqual(summary.call_args.args[2:], ("gpt-6-luna", "high"))
-            self.assertEqual(summary.call_args.kwargs["detail"], 5)
+            self.assertEqual(summary.call_args.kwargs["levels"], [5])
             self.assertEqual(log.read_text(), "Reviewed text\n")
             self.assertIn("New summary", summary_path.read_text())
 

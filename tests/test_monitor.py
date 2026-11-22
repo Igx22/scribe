@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import runtime_paths
+from tests import runtime_paths, summary_answers
 
 
 def element(element_id, payload):
@@ -323,7 +323,7 @@ class MonitorTests(unittest.TestCase):
                 patch.dict(os.environ, {"OPENAI_API_KEY": "unit-test-key"}), \
                 patch.object(app, "extract_audio"), \
                 patch.object(app, "transcribe_gpt", return_value=[{"index": 0, "start": 0, "end": 1, "text": "Words."}]) as gpt, \
-                patch.object(app, "summarize", return_value="Summary."), \
+                patch.object(app, "summarize", side_effect=summary_answers("Summary.")), \
                 patch.object(app, "extract_report_metadata", return_value={"topic": "Topic.", "roles": {}}):
             root = Path(tmp)
             source = root / "new.mkv"

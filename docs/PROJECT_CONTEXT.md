@@ -303,15 +303,13 @@ The actual instructions are constants near the top of `src/scribe.py`:
 
 - `FUSION_PROMPT` and `SINGLE_SOURCE_PROMPT`: reconcile combined or single-source
   text while preserving fixed voice/time anchors.
-- `SUMMARIZATION_PROMPT`: final summary template, including language and detail rules.
-- `PART_NOTES_PROMPT`: detail-aware factual notes template for long transcripts.
+- `summary_batch_prompt()`: shared language and content rules plus per-level limits
+  for one structured summary response.
 - `REPORT_HEADER_PROMPT`: grounded topic and role extraction for the HTML header.
 - `REPORT_TOPIC_PROMPT`: combine supported topics from every part of a long log.
 
-`summary_prompt()` fills `{summary_detail}`, `{summary_min_words}`, and
-`{summary_max_words}` in the final template. `notes_prompt()` fills
-`{summary_detail}` and `{notes_word_limit}` in the notes template. The selected
-detail is also recorded in the summary cache settings.
+The original `summary_prompt()` and `notes_prompt()` templates remain available
+to validate historical summary checkpoints.
 
 Transcript content is treated as untrusted data, never executable instructions.
 The prompts prohibit invented facts, speech, speakers, decisions, and deadlines.
@@ -322,11 +320,12 @@ The application rejects responses that omit or duplicate anchors; bounded recove
 retains source text for unresolved parts. Speaker-marker loss is repaired conservatively
 without discarding corrected words.
 
-Transcripts over 180,000 characters are processed into notes for every part, with
-further reduction layers if necessary. The end of a long recording is not simply
-truncated. Long recordings may need additional paid calls. The summary cache tracks
-both summary and notes prompts, detail, model, effort, and final log content, but a completed
-pair is still skipped unless explicitly regenerated.
+SCR-113 sends the complete final transcript once for all uncached recording
+summary levels. It validates each field before checkpointing the grouped
+response. Reordering, narrowing or expanding the selection can reuse compatible
+levels. The combined cache includes the final transcript, model, effort and
+instructions. Context overflow is reported as an API error. Completed pairs still
+skip unless explicitly regenerated.
 
 Audio is converted to mono 16 kHz PCM and divided into non-overlapping chunks of
 at most 10 minutes, below a conservative 24 MB upload limit. Successful GPT chunks
@@ -338,8 +337,9 @@ applicable data policies.
 
 ## Reports and text processing
 
-Each summary level reads the same final log independently; detail controls retained
-information, separately from reasoning effort. Page guidance is not a padding quota.
+All selected summary levels share one transcript input. Detail controls retained
+information. Reasoning effort and the number of selected levels affect response
+usage. Page guidance is not a padding quota.
 
 SCR-135 sets `gpt-6.2-sol:xhigh` as the default for recording summaries.
 Final reconciliation defaults to `gpt-6.2-astra:xhigh`. Explicit selections

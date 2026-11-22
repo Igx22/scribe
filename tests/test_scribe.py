@@ -15,7 +15,7 @@ import urllib.error
 import wave
 
 import scribe as app
-from tests import runtime_paths, seed_final
+from tests import runtime_paths, seed_final, summary_answers
 
 
 class AppTests(unittest.TestCase):
@@ -150,7 +150,7 @@ class AppTests(unittest.TestCase):
             with runtime_paths(cache_dir=root / "cache"), \
                     patch.object(app, "load_env"), patch.dict(os.environ, {"OPENAI_API_KEY": "unit-test-key"}), \
                     patch.object(app, "extract_audio"), patch.object(app, "transcribe_gpt", return_value=chunks) as gpt, \
-                    patch.object(app, "summarize", return_value="Meeting summary.") as summary, \
+                    patch.object(app, "summarize", side_effect=summary_answers("Meeting summary.")) as summary, \
                     patch.object(app, "ensure_models") as models:
                 self.assertEqual(app.main(options), 0)
             self.assertEqual(gpt.call_count, 1); self.assertEqual(summary.call_count, 2)
@@ -276,18 +276,15 @@ class AppTests(unittest.TestCase):
             request.assert_called_once()
             sleep.assert_not_called()
 
-    def test_long_recording_includes_every_part(self):
+    def test_long_recording_sends_entire_transcript_in_one_request(self):
         text = "BEGIN\n\n" + "word " * 40000 + "\n\nEND_OF_RECORDING"
         calls = []
         def fake(key, model, effort, instructions, data, **kwargs):
             calls.append((instructions, data))
-            return "notes" if instructions == app.notes_prompt(1) else "Outcome."
-        self.assertEqual(app.summarize(text, "test", "gpt-6.1-sol", "medium", call=fake), "Outcome.")
-        note_inputs = [data for prompt, data in calls if prompt == app.notes_prompt(1)]
-        self.assertIn("BEGIN", note_inputs[0])
-        self.assertIn("END_OF_RECORDING", note_inputs[-1])
-        self.assertGreater(len(note_inputs), 1)
-        self.assertEqual(calls[-1][0], app.summary_prompt(1))
+            return '{"summary_1":"Outcome.","summary_10":"Detailed outcome."}'
+        result = app.summarize(text, "test", "gpt-6.2-sol", "xhigh", call=fake, levels=[1, 10])
+        self.assertEqual(result, {1: "Outcome.", 10: "Detailed outcome."})
+        self.assertEqual(calls, [(app.summary_batch_prompt([1, 10]), text)])
 
     def test_resume_api_failure_uses_internal_final(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -303,7 +300,7 @@ class AppTests(unittest.TestCase):
                     app.process_file(source, args, "test-key")
                 extract.assert_not_called()
             self.assertTrue(log.is_file()); self.assertFalse(summary.exists())
-            with patch.object(app, "summarize", return_value="Completed summary") as summarize:
+            with patch.object(app, "summarize", side_effect=summary_answers("Completed summary")) as summarize:
                 app.process_file(source, args, "test-key")
                 app.process_file(source, args, "test-key")
                 summarize.assert_called_once()

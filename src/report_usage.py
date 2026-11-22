@@ -66,7 +66,7 @@ def text_cost(row, counts, pricing):
 
 
 def stage_name(stage):
-    if stage.startswith("summary level "):
+    if stage == "summary levels" or stage.startswith("summary level "):
         return "Video summaries"
     if stage.startswith("youtube comment-summary"):
         return "Comment summaries"

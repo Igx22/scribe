@@ -120,16 +120,16 @@ class ReportDropdownTests(unittest.TestCase):
             log, report = app.output_paths(source, args.output_dir)
             seed_final(source, args, 'Saved final log.')
 
-            def summarize(*_args, detail):
+            def summarize(*_args, levels):
                 app.CURRENT_RESPONSES.get().append({'status': 'completed', 'model': 'gpt-6-luna-snapshot',
                                                      'reasoning': {'effort': 'low'}})
-                return f'Summary {detail}.'
+                return {level: f'Summary {level}.' for level in levels}
 
             with patch.object(app, 'summarize', side_effect=summarize) as generate, \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'fixture-key')
                 app.process_file(source, args, 'fixture-key')
-                self.assertEqual(generate.call_count, 2)
+                generate.assert_called_once()
             content = report.read_text()
             elements = Elements(content).elements
             tabs = [a for _, a in elements if a.get('role') == 'tab']

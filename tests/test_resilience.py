@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import scribe as app
-from tests import seed_final
+from tests import seed_final, summary_answers
 
 
 class LanguageProbeTests(unittest.TestCase):
@@ -151,9 +151,9 @@ class ErrorHistoryTests(unittest.TestCase):
             self.assertNotIn('private-api-key', err.read_text()); self.assertNotIn('hf_secret', err.read_text())
             entry = app.read_json(err)['runs'][0]
             self.assertEqual(entry['status'], 'failed')
-            self.assertEqual(entry['events'][0]['stage'], 'summary level 1')
+            self.assertEqual(entry['events'][0]['stage'], 'summary levels')
             self.assertEqual(entry['events'][0]['model'], args.summarize_model[0])
-            with patch.object(app, 'summarize', return_value='Summary'), \
+            with patch.object(app, 'summarize', side_effect=summary_answers('Summary')), \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'private-api-key')
             history = app.read_json(err)['runs']
@@ -223,7 +223,7 @@ class ErrorHistoryTests(unittest.TestCase):
             with patch.object(app, 'reconciliation_model_limits', return_value=(1050000, 2500)), \
                     patch.object(app, 'extract_audio'), patch.object(app, 'local_recognition', return_value=local), \
                     patch.object(app, 'transcribe_gpt', return_value=chunks), patch.object(app, 'api_request', side_effect=reply), \
-                    patch.object(app, 'summarize', return_value='Summary'), \
+                    patch.object(app, 'summarize', side_effect=summary_answers('Summary')), \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'key')
                 args.summary_only = True
@@ -251,7 +251,7 @@ class ErrorHistoryTests(unittest.TestCase):
             with patch.object(app, 'extract_audio'), patch.object(app, 'local_recognition', return_value=local), \
                     patch.object(app, 'transcribe_gpt', return_value=app.transcript_chunks(turns)), \
                     patch.object(app, 'api_request', side_effect=app.AppError('Quota exhausted')), \
-                    patch.object(app, 'summarize', return_value='Summary'), \
+                    patch.object(app, 'summarize', side_effect=summary_answers('Summary')), \
                     patch.object(app, 'extract_report_metadata', return_value={'topic': 'Meeting', 'roles': {}}):
                 app.process_file(source, args, 'key')
             log, report = app.output_paths(source, args.output_dir)

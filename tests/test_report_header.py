@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import scribe as app
-from tests import seed_final
+from tests import seed_final, summary_answers
 
 
 class ReportHeaderTests(unittest.TestCase):
@@ -218,11 +218,11 @@ class ReportHeaderTests(unittest.TestCase):
             log, report = app.output_paths(source, args.output_dir)
             seed_final(source, args, self.log()); app.atomic_write(report, "Reviewed report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)
-            with patch.object(app, "summarize", return_value="New summary.") as summaries, \
+            with patch.object(app, "summarize", side_effect=summary_answers("New summary.")) as summaries, \
                     patch.object(app, "extract_report_metadata", side_effect=app.AppError("Invalid topic")):
                 with self.assertRaises(app.AppError):
                     app.process_file(source, args, "key")
-            self.assertEqual(summaries.call_count, 2)
+            summaries.assert_called_once()
             self.assertEqual(before, (report.read_bytes(), report.stat().st_mtime_ns))
             with patch.object(app, "summarize") as summaries, patch.object(app, "extract_report_metadata",
                     return_value={"topic": "Deployment planning.", "roles": {"Bob": "platform engineer"}}):
@@ -240,7 +240,7 @@ class ReportHeaderTests(unittest.TestCase):
             args.cache_dir = root / "cache"
             log, summary = app.output_paths(source, args.output_dir)
             seed_final(source, args, self.log())
-            with patch.object(app, "summarize", return_value="Plain summary.") as summarize, \
+            with patch.object(app, "summarize", side_effect=summary_answers("Plain summary.")) as summarize, \
                     patch.object(app, "extract_report_metadata", return_value={
                         "topic": "Deployment planning.", "roles": {"Bob": "platform engineer"}}) as metadata:
                 app.process_file(source, args, "key")
@@ -261,7 +261,7 @@ class ReportHeaderTests(unittest.TestCase):
             log, report = app.output_paths(source, args.output_dir)
             seed_final(source, args, self.log()); app.atomic_write(report, "Previous report")
             before = (report.read_bytes(), report.stat().st_mtime_ns)
-            with patch.object(app, "summarize", return_value="Completed summary.") as summary, \
+            with patch.object(app, "summarize", side_effect=summary_answers("Completed summary.")) as summary, \
                     patch.object(app, "extract_report_metadata", side_effect=app.AppError("header failed")):
                 with self.assertRaisesRegex(app.AppError, "header failed"):
                     app.process_file(source, args, "key")
