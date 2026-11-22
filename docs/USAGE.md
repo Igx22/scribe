@@ -782,6 +782,15 @@ and speaker segmentation remain available when included. Both menus remember
 their own selection while the report stays open. The Summary model badge applies
 to all its levels; transcript badges retain their separate provenance.
 
+The report footer shows API input and output tokens and estimated USD cost for
+the run that exported the HTML. Expand **Cost breakdown** for usage and cost by
+stage. The estimate includes recorded reconciliation, summary, report metadata,
+YouTube comment and cloud transcription responses. GPT-Transcribe is priced by
+the returned audio duration. Text pricing accounts for the model, service tier,
+context length, and prompt cache reads and writes. Output counts include reasoning.
+Reused Scribe checkpoints carry no new cost. Missing usage or prices leave the
+estimate partial or unavailable. The footer shows the date of the bundled rates.
+
 Level 1 captures the essentials, while higher levels retain more discussion,
 reasoning, alternatives and technical nuance. Detail controls coverage independently
 of the model's reasoning effort. The table gives approximate lengths for long,

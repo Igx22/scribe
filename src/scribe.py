@@ -43,6 +43,7 @@ SOURCE_DIR = Path(__file__).resolve().parent
 if str(SOURCE_DIR) not in sys.path:
     sys.path.insert(0, str(SOURCE_DIR))  # Isolated (-I) launcher imports local helpers explicitly.
 import media_input
+from report_usage import render_usage
 
 APP_DIR = SOURCE_DIR.parent
 RESOURCE_DIR = SOURCE_DIR / "resources"
@@ -1737,12 +1738,12 @@ def transcript_text(source, duration, turns, provenance=None, supplements=None):
     return "\n".join(lines).rstrip() + "\n"
 
 
-def record_text_usage(result, model, effort):
+def record_text_usage(result, model, effort, service_tier=None):
     if (run := CURRENT_RUN.get()) is not None:
         run.run.setdefault("text_usage", []).append({
-            "stage": run.stage, "model": model, "effort": effort,
+            "stage": run.stage, "model": result.get("model") or model, "effort": effort,
             "response_id": result.get("id"), "usage": result.get("usage"),
-            "status": result.get("status"), "service_tier": result.get("service_tier")})
+            "status": result.get("status"), "service_tier": result.get("service_tier") or service_tier})
 
 
 def record_report_models(models, settings, responses):
@@ -1814,7 +1815,7 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
             raise AppError("OpenAI returned an invalid response. The transcript is saved.") from None
     if not isinstance(result, dict):
         raise AppError("OpenAI returned an invalid response. The transcript is saved.")
-    record_text_usage(result, model, effort)
+    record_text_usage(result, model, effort, service_tier)
     if CURRENT_RESPONSES.get() is not None:
         CURRENT_RESPONSES.get().append(result)
     if result.get("status") != "completed":
@@ -1831,7 +1832,7 @@ def api_request(key, model, effort, instructions, text, schema=None, max_output_
     answer = "\n".join(text_parts).strip()
     if not answer:
         raise AppError("OpenAI returned an empty summary; the transcript is saved.")
-    usage = result.get("usage", {})
+    usage = result.get("usage") or {}
     say(f"  OpenAI: {usage.get('input_tokens', '?')} input / "
         f"{usage.get('output_tokens', '?')} output tokens (including reasoning).")
     return answer
@@ -2244,7 +2245,8 @@ def best_comments_html(entries, fallback, originals):
 
 def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, source_reports=(), generated_at=None,
                  summary_models=(), youtube=None, discussion=None, top_comments=None, comment_digests=None,
-                 best_comments=None, comment_filter=None, comment_filter_models=(), comment_summary_models=()):
+                 best_comments=None, comment_filter=None, comment_filter_models=(), comment_summary_models=(),
+                 run_usage=None):
     """Render model text as escaped data in a self-contained, offline report."""
     levels = list(summaries) if tabs is None else list(dict.fromkeys(summary_levels(tabs)))
     labels = {
@@ -2430,8 +2432,8 @@ def summary_html(source, summaries, metadata=None, *, transcript, tabs=None, sou
               "DATE_NOTE": " · " + html.escape(metadata["date_note"]) if metadata.get("date_note") else "",
               "CONTENTS": contents, "TABS": "\n".join(buttons), "PANELS": warning + "\n".join(panels),
               "GENERATED_ISO": generated_at.isoformat(),
-              "GENERATED_FULL": generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")}
-    return re.sub(r"@@(TITLE|SOURCE|HEADING|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS|GENERATED_ISO|GENERATED_FULL)@@",
+              "GENERATED_FULL": generated_at.strftime("%Y-%m-%d %H:%M:%S UTC"), "API_USAGE": render_usage(run_usage)}
+    return re.sub(r"@@(TITLE|SOURCE|HEADING|TOPIC|PARTICIPANTS|DURATION|DATE|DATE_NOTE|CONTENTS|TABS|PANELS|GENERATED_ISO|GENERATED_FULL|API_USAGE)@@",
                   lambda match: values[match[1]], template)
 
 
@@ -2575,7 +2577,7 @@ def filter_youtube_comments(cache, snapshot, title, key, force=False, *, models=
                 local, _, batch_settings = batch
                 ids, responses, error = result
                 for response in responses:
-                    record_text_usage(response, COMMENT_FILTER_MODEL, COMMENT_FILTER_EFFORT)
+                    record_text_usage(response, COMMENT_FILTER_MODEL, COMMENT_FILTER_EFFORT, COMMENT_FILTER_TIER)
                 if error is not None:
                     kept.update(local.values())
                     unfiltered += len(local)
@@ -2943,12 +2945,15 @@ def gpt_audio_request(wav_path, key, language, vocabulary):
         try:
             with urllib.request.urlopen(request, timeout=600, context=ssl_context()) as response:
                 result = json.load(response)
-            if not isinstance(result, dict) or not isinstance(result.get("text"), str):
+            if not isinstance(result, dict):
                 raise AppError("GPT-Transcribe returned an invalid transcription response.")
             if CURRENT_RUN.get() is not None:
                 CURRENT_RUN.get().run.setdefault("audio_usage", []).append({
                     **CURRENT_RUN.get().details, "usage": result.get("usage")})
-            say(f"  GPT-Transcribe duration usage: {result.get('usage', {}).get('seconds', '?')} seconds.")
+            if not isinstance(result.get("text"), str):
+                raise AppError("GPT-Transcribe returned an invalid transcription response.")
+            usage = result.get("usage") or {}
+            say(f"  GPT-Transcribe duration usage: {usage.get('seconds', '?')} seconds.")
             return result
         except urllib.error.HTTPError as exc:
             diagnostic("cloud recognition", f"HTTP {exc.code}", model="gpt-transcribe", attempt=attempt + 1)
@@ -4383,12 +4388,13 @@ def _process_cached(source, args, key, cache, signature, snapshot, prepare_model
         say("  YouTube report header inference failed; publishing the transcript and summaries with source details.")
         diagnostic("report header", exc, fallback="YouTube source details")
         extracted = {}
+    run = CURRENT_RUN.get()
     content = summary_html(source, summaries, report_header(source, transcript, extracted, youtube=youtube),
                            transcript=transcript, tabs=args.report_tabs, source_reports=source_reports,
                            summary_models=summary_models, youtube=youtube, discussion=discussion,
                            top_comments=top_comments, comment_digests=comment_digests, best_comments=best_comments,
                            comment_filter=comment_filter, comment_filter_models=filter_models,
-                           comment_summary_models=comment_models)
+                           comment_summary_models=comment_models, run_usage=run.run if run is not None else None)
     if not source_unchanged(source, snapshot, signature):
         raise AppError("Source changed during processing; cached results retained, exports are not published as current.")
     if summary_path.exists():

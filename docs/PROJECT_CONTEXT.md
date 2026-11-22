@@ -358,6 +358,11 @@ unknown provenance omits the badge. Existing HTML needs explicit regeneration
 for renderer changes. Browser storage failures must not break navigation/theme
 controls; file-origin theme persistence across paths is browser-dependent.
 
+The **Cost breakdown** footer (SCR-133) renders current-run usage from the same
+response counters as diagnostics. API cache reads and writes have their own rates.
+Cached Scribe artifacts carry no current-run usage. Estimates use the dated local
+pricing table and preserve missing usage or pricing as incomplete information.
+
 Header roles require supported evidence; conflicts or missing facts stay unknown.
 Names come from final-log turn labels. Duration and recording date come from log
 metadata or a valid, unambiguous ISO date/time embedded in the filename, never
