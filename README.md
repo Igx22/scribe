@@ -5,13 +5,24 @@ Supports English, Russian, and mixed conversations. Uses the first audio track o
 
 ## Example report
 
-[HTML report](docs/examples/youtube-report.html) · [Full-size screenshot](docs/examples/youtube-report.png)
+Download the [example HTML report](docs/examples/youtube-report.html) and open it in a browser to explore the video summary and transcript.
 
-Download the HTML and open it in a browser to switch between summaries and transcripts.
+**Local file (MKV supported)** · [Video summary](docs/examples/youtube-report.png)
 
-<a href="docs/examples/youtube-report.png">
-  <img src="docs/examples/youtube-report.png" alt="Full-page Firefox screenshot of a Scribe report" width="480">
-</a>
+<p>
+  <a href="docs/examples/youtube-report.png"><img src="docs/examples/youtube-report-preview.webp" width="400" align="top" alt="Full video summary for Security by obscurity is dead"></a>
+</p>
+
+**YouTube conference recording** · [Summary key points (1/10)](docs/examples/youtube-summary-key-points.png) · [Comment key points (1/10)](docs/examples/youtube-comments-key-points.png) · [Smartest comments](docs/examples/youtube-smartest-comments.png)
+
+<p>
+  <a href="docs/examples/youtube-summary-key-points.png"><img src="docs/examples/youtube-summary-key-points-preview.webp" width="400" align="top" alt="Summary · Key points (1/10) for AI Expert WARNS: You're Not Ready For 2027"></a>
+</p>
+
+<p>
+  <a href="docs/examples/youtube-comments-key-points.png"><img src="docs/examples/youtube-comments-key-points-preview.webp" width="400" align="top" alt="Comments · Key points (1/10) for AI Expert WARNS: You're Not Ready For 2027"></a>
+  <a href="docs/examples/youtube-smartest-comments.png"><img src="docs/examples/youtube-smartest-comments-preview.webp" width="400" align="top" alt="Smartest comments on the same video, showing the first two entries and their original-comment buttons"></a>
+</p>
 
 ## Requirements
 
